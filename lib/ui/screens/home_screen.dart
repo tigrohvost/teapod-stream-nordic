@@ -271,6 +271,7 @@ class _PowerCore extends StatefulWidget {
 
 class _PowerCoreState extends State<_PowerCore>
     with SingleTickerProviderStateMixin {
+  static const _opossumAsset = 'assets/brave_opossum.png';
   late final AnimationController _spin;
 
   @override
@@ -293,7 +294,6 @@ class _PowerCoreState extends State<_PowerCore>
     final t = widget.t;
     final conn = widget.isConnected;
     final busy = widget.isBusy;
-    final actionLabel = conn ? 'отключить' : (busy ? 'ожидание' : 'подключить');
 
     const coreSize = 220.0;
     const outerSize = coreSize + 32.0;
@@ -355,23 +355,49 @@ class _PowerCoreState extends State<_PowerCore>
               height: innerSize,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: conn ? t.accent : t.bgElev,
                 border: Border.all(color: conn ? t.accent : t.line, width: 1),
               ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _PowerIcon(color: conn ? t.bg : t.text, size: 40),
-                  const SizedBox(height: 6),
-                  Text(
-                    actionLabel.toUpperCase(),
-                    style: AppTheme.mono(
-                      size: 9,
-                      color: conn ? t.bg : t.textDim,
-                      letterSpacing: 2,
-                    ),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: ClipOval(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      AnimatedOpacity(
+                        duration: const Duration(milliseconds: 250),
+                        opacity: 1,
+                        child: ColorFiltered(
+                          colorFilter: ColorFilter.mode(
+                            conn
+                                ? Colors.white.withAlpha(0x24)
+                                : Colors.white.withAlpha(0x12),
+                            BlendMode.plus,
+                          ),
+                          child: Image.asset(_opossumAsset, fit: BoxFit.cover),
+                        ),
+                      ),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 250),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: conn ? t.accent.withAlpha(0xAA) : t.lineSoft,
+                            width: conn ? 2 : 1,
+                          ),
+                          boxShadow: conn
+                              ? [
+                                  BoxShadow(
+                                    color: t.accent.withAlpha(0x33),
+                                    blurRadius: 18,
+                                    spreadRadius: 2,
+                                  ),
+                                ]
+                              : null,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ],
@@ -403,47 +429,6 @@ class _SpinArcPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_SpinArcPainter old) => old.color != color;
-}
-
-// ── Power icon ────────────────────────────────────────────────────
-
-class _PowerIcon extends StatelessWidget {
-  final Color color;
-  final double size;
-  const _PowerIcon({required this.color, required this.size});
-
-  @override
-  Widget build(BuildContext context) =>
-      CustomPaint(size: Size(size, size), painter: _PowerPainter(color));
-}
-
-class _PowerPainter extends CustomPainter {
-  final Color color;
-  const _PowerPainter(this.color);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.6
-      ..strokeCap = StrokeCap.round;
-
-    final s = size.width / 24.0;
-    canvas.scale(s, s);
-
-    canvas.drawLine(const Offset(12, 2), const Offset(12, 9), paint);
-    canvas.drawArc(
-      Rect.fromCircle(center: const Offset(12, 13), radius: 8),
-      -math.pi / 3,
-      math.pi * 5 / 3,
-      false,
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_PowerPainter old) => old.color != color;
 }
 
 // ── Corner ticks ──────────────────────────────────────────────────
