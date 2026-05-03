@@ -15,9 +15,11 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final vpnState    = ref.watch(vpnProvider);
+    final vpnState = ref.watch(vpnProvider);
     final configAsync = ref.watch(configProvider);
-    final version     = ref.watch(appVersionProvider).maybeWhen(data: (v) => v, orElse: () => 'v?');
+    final version = ref
+        .watch(appVersionProvider)
+        .maybeWhen(data: (v) => v, orElse: () => 'v?');
     final t = Theme.of(context).extension<TeapodTokens>()!;
 
     final activeConfig = configAsync.maybeWhen(
@@ -25,10 +27,10 @@ class HomeScreen extends ConsumerWidget {
       orElse: () => null,
     );
     final canToggle = activeConfig != null;
-    final pingMs    = activeConfig?.latencyMs;
+    final pingMs = activeConfig?.latencyMs;
 
-    final isConn  = vpnState.isConnected;
-    final isBusy  = vpnState.isBusy;
+    final isConn = vpnState.isConnected;
+    final isBusy = vpnState.isBusy;
     final stateCode = isConn ? '01' : (isBusy ? '02' : '00');
 
     final protoLabel = activeConfig != null
@@ -54,14 +56,16 @@ class HomeScreen extends ConsumerWidget {
               onToggle: () => ref.read(vpnProvider.notifier).toggle(),
             ),
             Expanded(
-              child: _MetricsGrid(
-                t: t,
-                stats: vpnState.stats,
-                protoLabel: protoLabel,
-                serverHint: serverHint,
-                isConnected: isConn,
-                pingMs: pingMs,
-                history: history,
+              child: SingleChildScrollView(
+                child: _MetricsGrid(
+                  t: t,
+                  stats: vpnState.stats,
+                  protoLabel: protoLabel,
+                  serverHint: serverHint,
+                  isConnected: isConn,
+                  pingMs: pingMs,
+                  history: history,
+                ),
               ),
             ),
           ],
@@ -77,7 +81,11 @@ class _HeaderStrip extends StatelessWidget {
   final TeapodTokens t;
   final String stateCode;
   final String version;
-  const _HeaderStrip({required this.t, required this.stateCode, required this.version});
+  const _HeaderStrip({
+    required this.t,
+    required this.stateCode,
+    required this.version,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -89,10 +97,22 @@ class _HeaderStrip extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text('teapod.stream // $version',
-              style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-          Text('sys.state [$stateCode]',
-              style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+          Text(
+            'teapod.stream // $version',
+            style: AppTheme.mono(
+              size: 10,
+              color: t.textMuted,
+              letterSpacing: 1,
+            ),
+          ),
+          Text(
+            'sys.state [$stateCode]',
+            style: AppTheme.mono(
+              size: 10,
+              color: t.textMuted,
+              letterSpacing: 1,
+            ),
+          ),
         ],
       ),
     );
@@ -138,7 +158,11 @@ class _HeroPanel extends StatelessWidget {
               children: [
                 Text(
                   'ТУННЕЛЬ · $protoLabel',
-                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1.5),
+                  style: AppTheme.mono(
+                    size: 10,
+                    color: t.textMuted,
+                    letterSpacing: 1.5,
+                  ),
                 ),
                 const SizedBox(height: 20),
                 _PowerCore(
@@ -149,11 +173,7 @@ class _HeroPanel extends StatelessWidget {
                   onTap: onToggle,
                 ),
                 const SizedBox(height: 16),
-                _StateInfo(
-                  t: t,
-                  vpnState: vpnState,
-                  pingMs: pingMs,
-                ),
+                _StateInfo(t: t, vpnState: vpnState, pingMs: pingMs),
               ],
             ),
           ),
@@ -170,28 +190,32 @@ class _StateInfo extends ConsumerWidget {
   final VpnState2 vpnState;
   final int? pingMs;
 
-  const _StateInfo({
-    required this.t,
-    required this.vpnState,
-    this.pingMs,
-  });
+  const _StateInfo({required this.t, required this.vpnState, this.pingMs});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isConn          = vpnState.isConnected;
-    final isConnecting    = vpnState.isConnecting;
+    final isConn = vpnState.isConnected;
+    final isConnecting = vpnState.isConnecting;
     final isDisconnecting = vpnState.isDisconnecting;
-    final ipAsync         = ref.watch(ipInfoProvider);
+    final ipAsync = ref.watch(ipInfoProvider);
 
     final stateWord = isConn
         ? 'ONLINE'
-        : (isConnecting ? 'HANDSHAKE' : (isDisconnecting ? 'SHUTDOWN' : 'OFFLINE'));
+        : (isConnecting
+              ? 'HANDSHAKE'
+              : (isDisconnecting ? 'SHUTDOWN' : 'OFFLINE'));
     final stateColor = isConn ? t.accent : t.textDim;
 
     String subtitle;
     if (isConn) {
-      final ipStr = ipAsync.maybeWhen(data: (d) => d?.ip, orElse: () => null) ?? '—';
-      final cc    = ipAsync.maybeWhen(data: (d) => d?.countryCode.toLowerCase(), orElse: () => null) ?? '—';
+      final ipStr =
+          ipAsync.maybeWhen(data: (d) => d?.ip, orElse: () => null) ?? '—';
+      final cc =
+          ipAsync.maybeWhen(
+            data: (d) => d?.countryCode.toLowerCase(),
+            orElse: () => null,
+          ) ??
+          '—';
       subtitle = pingMs != null ? '${pingMs}ms · $cc · $ipStr' : '$cc · $ipStr';
     } else if (isConnecting) {
       subtitle = 'negotiating session…';
@@ -207,12 +231,18 @@ class _StateInfo extends ConsumerWidget {
         Text(
           stateWord,
           style: AppTheme.sans(
-            size: 28, weight: FontWeight.w500,
-            color: stateColor, letterSpacing: -1, height: 1),
+            size: 28,
+            weight: FontWeight.w500,
+            color: stateColor,
+            letterSpacing: -1,
+            height: 1,
+          ),
         ),
         const SizedBox(height: 6),
-        Text(subtitle,
-            style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5)),
+        Text(
+          subtitle,
+          style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5),
+        ),
       ],
     );
   }
@@ -239,7 +269,8 @@ class _PowerCore extends StatefulWidget {
   State<_PowerCore> createState() => _PowerCoreState();
 }
 
-class _PowerCoreState extends State<_PowerCore> with SingleTickerProviderStateMixin {
+class _PowerCoreState extends State<_PowerCore>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _spin;
 
   @override
@@ -259,12 +290,12 @@ class _PowerCoreState extends State<_PowerCore> with SingleTickerProviderStateMi
 
   @override
   Widget build(BuildContext context) {
-    final t    = widget.t;
+    final t = widget.t;
     final conn = widget.isConnected;
     final busy = widget.isBusy;
     final actionLabel = conn ? 'отключить' : (busy ? 'ожидание' : 'подключить');
 
-    const coreSize  = 220.0;
+    const coreSize = 220.0;
     const outerSize = coreSize + 32.0;
     const innerSize = coreSize - 44.0;
 
@@ -307,7 +338,13 @@ class _PowerCoreState extends State<_PowerCore> with SingleTickerProviderStateMi
                 shape: BoxShape.circle,
                 border: Border.all(color: conn ? t.accent : t.line, width: 1),
                 boxShadow: conn
-                    ? [BoxShadow(color: t.accentSoft, blurRadius: 60, spreadRadius: 4)]
+                    ? [
+                        BoxShadow(
+                          color: t.accentSoft,
+                          blurRadius: 60,
+                          spreadRadius: 4,
+                        ),
+                      ]
                     : null,
               ),
             ),
@@ -421,10 +458,26 @@ class _CornerTicks extends StatelessWidget {
       child: IgnorePointer(
         child: Stack(
           children: [
-            Positioned(top: 6, left: 6,   child: _Tick(color: t.textMuted, corner: _TickCorner.tl)),
-            Positioned(top: 6, right: 6,  child: _Tick(color: t.textMuted, corner: _TickCorner.tr)),
-            Positioned(bottom: 6, left: 6,  child: _Tick(color: t.textMuted, corner: _TickCorner.bl)),
-            Positioned(bottom: 6, right: 6, child: _Tick(color: t.textMuted, corner: _TickCorner.br)),
+            Positioned(
+              top: 6,
+              left: 6,
+              child: _Tick(color: t.textMuted, corner: _TickCorner.tl),
+            ),
+            Positioned(
+              top: 6,
+              right: 6,
+              child: _Tick(color: t.textMuted, corner: _TickCorner.tr),
+            ),
+            Positioned(
+              bottom: 6,
+              left: 6,
+              child: _Tick(color: t.textMuted, corner: _TickCorner.bl),
+            ),
+            Positioned(
+              bottom: 6,
+              right: 6,
+              child: _Tick(color: t.textMuted, corner: _TickCorner.br),
+            ),
           ],
         ),
       ),
@@ -441,8 +494,11 @@ class _Tick extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(width: 8, height: 8,
-        child: CustomPaint(painter: _TickPainter(color, corner)));
+    return SizedBox(
+      width: 8,
+      height: 8,
+      child: CustomPaint(painter: _TickPainter(color, corner)),
+    );
   }
 }
 
@@ -453,7 +509,10 @@ class _TickPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = color..strokeWidth = 1..style = PaintingStyle.stroke;
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
     final w = size.width;
     final h = size.height;
     switch (corner) {
@@ -476,10 +535,11 @@ class _TickPainter extends CustomPainter {
   bool shouldRepaint(_TickPainter old) => old.color != color;
 }
 
-
 // ── Metrics grid ──────────────────────────────────────────────────
 
 class _MetricsGrid extends StatelessWidget {
+  static const _metricRowHeight = 88.0;
+
   final TeapodTokens t;
   final VpnStats stats;
   final String protoLabel;
@@ -514,7 +574,7 @@ class _MetricsGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final upSpeed   = isConnected ? stats.uploadSpeedBps   : 0;
+    final upSpeed = isConnected ? stats.uploadSpeedBps : 0;
     final downSpeed = isConnected ? stats.downloadSpeedBps : 0;
 
     final sparkSamples = history
@@ -525,8 +585,10 @@ class _MetricsGrid extends StatelessWidget {
     final pingStr = pingMs != null ? '$pingMs' : '—';
 
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Expanded(
+        SizedBox(
+          height: _metricRowHeight,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -551,7 +613,8 @@ class _MetricsGrid extends StatelessWidget {
             ],
           ),
         ),
-        Expanded(
+        SizedBox(
+          height: _metricRowHeight,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -613,45 +676,57 @@ class _MetricCell extends StatelessWidget {
       clipBehavior: Clip.hardEdge,
       decoration: BoxDecoration(
         border: Border(
-          top:   BorderSide(color: t.line, width: 1),
-          right: borderRight ? BorderSide(color: t.line, width: 1) : BorderSide.none,
+          top: BorderSide(color: t.line, width: 1),
+          right: borderRight
+              ? BorderSide(color: t.line, width: 1)
+              : BorderSide.none,
         ),
       ),
       child: Column(
-        crossAxisAlignment:
-            alignRight ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment: alignRight
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Text(
             label.toUpperCase(),
-            style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1),
+            style: AppTheme.mono(
+              size: 10,
+              color: t.textMuted,
+              letterSpacing: 1,
+            ),
           ),
           const SizedBox(height: 3),
           Row(
-            mainAxisAlignment:
-                alignRight ? MainAxisAlignment.end : MainAxisAlignment.start,
+            mainAxisAlignment: alignRight
+                ? MainAxisAlignment.end
+                : MainAxisAlignment.start,
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: [
               Text(
                 value,
                 style: AppTheme.mono(
-                  size: 20, weight: FontWeight.w500,
-                  color: t.text, letterSpacing: -0.5),
+                  size: 20,
+                  weight: FontWeight.w500,
+                  color: t.text,
+                  letterSpacing: -0.5,
+                ),
               ),
               if (unit != null) ...[
                 const SizedBox(width: 4),
-                Text(unit!,
-                    style: AppTheme.mono(size: 9, color: t.textDim)),
+                Text(unit!, style: AppTheme.mono(size: 9, color: t.textDim)),
               ],
             ],
           ),
           if (hint != null) ...[
             const SizedBox(height: 2),
-            Text(hint!,
-                maxLines: 1,
-                style: AppTheme.mono(size: 9, color: t.textMuted),
-                overflow: TextOverflow.ellipsis),
+            Text(
+              hint!,
+              maxLines: 1,
+              style: AppTheme.mono(size: 9, color: t.textMuted),
+              overflow: TextOverflow.ellipsis,
+            ),
           ],
         ],
       ),
@@ -676,10 +751,10 @@ class _SparklineRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final upTotal   = VpnStats.formatBytes(stats.uploadBytes);
+    final upTotal = VpnStats.formatBytes(stats.uploadBytes);
     final downTotal = VpnStats.formatBytes(stats.downloadBytes);
-    final duration  = VpnStats.formatDuration(stats.connectedDuration);
-    final peakStr   = peakMbps >= 0.01
+    final duration = VpnStats.formatDuration(stats.connectedDuration);
+    final peakStr = peakMbps >= 0.01
         ? '${peakMbps.toStringAsFixed(1)}M'
         : '0.0M';
 
@@ -695,10 +770,18 @@ class _SparklineRow extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('ТРАФИК — LIVE',
-                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-              Text('пик $peakStr',
-                  style: AppTheme.mono(size: 10, color: t.textDim)),
+              Text(
+                'ТРАФИК — LIVE',
+                style: AppTheme.mono(
+                  size: 10,
+                  color: t.textMuted,
+                  letterSpacing: 1,
+                ),
+              ),
+              Text(
+                'пик $peakStr',
+                style: AppTheme.mono(size: 10, color: t.textDim),
+              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -710,19 +793,37 @@ class _SparklineRow extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('↑ $upTotal',
-                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+              Text(
+                '↑ $upTotal',
+                style: AppTheme.mono(
+                  size: 10,
+                  color: t.textMuted,
+                  letterSpacing: 1,
+                ),
+              ),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _ClockIcon(color: t.textMuted, size: 10),
                   const SizedBox(width: 5),
-                  Text(duration,
-                      style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+                  Text(
+                    duration,
+                    style: AppTheme.mono(
+                      size: 10,
+                      color: t.textMuted,
+                      letterSpacing: 1,
+                    ),
+                  ),
                 ],
               ),
-              Text('↓ $downTotal',
-                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+              Text(
+                '↓ $downTotal',
+                style: AppTheme.mono(
+                  size: 10,
+                  color: t.textMuted,
+                  letterSpacing: 1,
+                ),
+              ),
             ],
           ),
         ],
@@ -770,11 +871,17 @@ class _ClockPainter extends CustomPainter {
 String _protoLabel(dynamic proto) {
   final s = proto.toString().split('.').last.toLowerCase();
   switch (s) {
-    case 'vless':       return 'VLESS';
-    case 'vmess':       return 'VMESS';
-    case 'trojan':      return 'TROJAN';
-    case 'shadowsocks': return 'SS';
-    case 'hysteria2':   return 'HY2';
-    default:            return s.toUpperCase();
+    case 'vless':
+      return 'VLESS';
+    case 'vmess':
+      return 'VMESS';
+    case 'trojan':
+      return 'TROJAN';
+    case 'shadowsocks':
+      return 'SS';
+    case 'hysteria2':
+      return 'HY2';
+    default:
+      return s.toUpperCase();
   }
 }

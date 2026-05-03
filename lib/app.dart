@@ -22,9 +22,7 @@ class TeapodApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const ProviderScope(
-      child: _TeapodMaterialApp(),
-    );
+    return const ProviderScope(child: _TeapodMaterialApp());
   }
 }
 
@@ -34,20 +32,22 @@ class _TeapodMaterialApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
-    final accent    = ref.watch(accentProvider);
-    final fontScale = ref.watch(settingsProvider).maybeWhen(
-      data: (s) => s.fontScale == FontScale.large ? 1.2 : 1.0,
-      orElse: () => 1.0,
-    );
+    final accent = ref.watch(accentProvider);
+    final fontScale = ref
+        .watch(settingsProvider)
+        .maybeWhen(
+          data: (s) => s.fontScale == FontScale.large ? 1.2 : 1.0,
+          orElse: () => 1.0,
+        );
     return MaterialApp(
       title: 'TeapodStream',
-      theme:     AppTheme.build(Brightness.light, accent),
-      darkTheme:  AppTheme.build(Brightness.dark, accent),
+      theme: AppTheme.build(Brightness.light, accent),
+      darkTheme: AppTheme.build(Brightness.dark, accent),
       themeMode: themeMode,
       builder: (ctx, child) => MediaQuery(
-        data: MediaQuery.of(ctx).copyWith(
-          textScaler: TextScaler.linear(fontScale),
-        ),
+        data: MediaQuery.of(
+          ctx,
+        ).copyWith(textScaler: TextScaler.linear(fontScale)),
         child: child!,
       ),
       home: const _AppShell(),
@@ -70,6 +70,7 @@ class _AppShellState extends ConsumerState<_AppShell>
   int _currentIndex = 0;
   bool _autoConnectAttempted = false;
   StreamSubscription? _deeplinkSubscription;
+  Timer? _updateCheckTimer;
 
   static const _eventChannel = EventChannel('com.teapodstream/vpn/events');
 
@@ -92,13 +93,14 @@ class _AppShellState extends ConsumerState<_AppShell>
       _scheduleUpdateCheck();
     });
 
-    _deeplinkSubscription = _eventChannel
-        .receiveBroadcastStream()
-        .listen(_handleEvent);
+    _deeplinkSubscription = _eventChannel.receiveBroadcastStream().listen(
+      _handleEvent,
+    );
   }
 
   @override
   void dispose() {
+    _updateCheckTimer?.cancel();
     _deeplinkSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -111,13 +113,15 @@ class _AppShellState extends ConsumerState<_AppShell>
     }
   }
 
-  Future<void> _scheduleUpdateCheck() async {
-    await Future.delayed(const Duration(seconds: 5));
-    if (!mounted) return;
-    final updateState = ref.read(updateProvider);
-    if (updateState is UpdateIdle) {
-      ref.read(updateProvider.notifier).checkForUpdate();
-    }
+  void _scheduleUpdateCheck() {
+    _updateCheckTimer?.cancel();
+    _updateCheckTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      final updateState = ref.read(updateProvider);
+      if (updateState is UpdateIdle) {
+        ref.read(updateProvider.notifier).checkForUpdate();
+      }
+    });
   }
 
   Future<void> _tryAutoConnect() async {
@@ -143,24 +147,26 @@ class _AppShellState extends ConsumerState<_AppShell>
   @override
   Widget build(BuildContext context) {
     final updateState = ref.watch(updateProvider);
-    final hasUpdate = updateState is UpdateAvailable ||
+    final hasUpdate =
+        updateState is UpdateAvailable ||
         updateState is UpdateDownloading ||
         updateState is UpdateDownloaded;
 
     // Sync nav bar color with active theme
     final t = Theme.of(context).extension<TeapodTokens>()!;
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness:
-          Theme.of(context).brightness == Brightness.dark
-              ? Brightness.light
-              : Brightness.dark,
-      systemNavigationBarColor: t.bg,
-      systemNavigationBarIconBrightness:
-          Theme.of(context).brightness == Brightness.dark
-              ? Brightness.light
-              : Brightness.dark,
-    ));
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Theme.of(context).brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+        systemNavigationBarColor: t.bg,
+        systemNavigationBarIconBrightness:
+            Theme.of(context).brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+      ),
+    );
 
     return Scaffold(
       body: IndexedStack(index: _currentIndex, children: _pages),
@@ -191,10 +197,10 @@ class _ConsoleTabBar extends ConsumerWidget {
     final t = Theme.of(context).extension<TeapodTokens>()!;
 
     final items = [
-      _TabItem(icon: _TabIcon.shield,   label: 'VPN'),
-      _TabItem(icon: _TabIcon.key,      label: 'Конфиги'),
-      _TabItem(icon: _TabIcon.list,     label: 'Логи'),
-      _TabItem(icon: _TabIcon.cog,      label: 'Настройки', badge: hasUpdateBadge),
+      _TabItem(icon: _TabIcon.shield, label: 'VPN'),
+      _TabItem(icon: _TabIcon.key, label: 'Конфиги'),
+      _TabItem(icon: _TabIcon.list, label: 'Логи'),
+      _TabItem(icon: _TabIcon.cog, label: 'Настройки', badge: hasUpdateBadge),
     ];
 
     return Container(
@@ -208,8 +214,8 @@ class _ConsoleTabBar extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
           child: Row(
             children: items.asMap().entries.map((e) {
-              final idx    = e.key;
-              final item   = e.value;
+              final idx = e.key;
+              final item = e.value;
               final active = idx == currentIndex;
               return Expanded(
                 child: GestureDetector(
@@ -329,8 +335,13 @@ class _TabIconPainter extends CustomPainter {
       case _TabIcon.list:
         for (final y in [6.0, 12.0, 18.0]) {
           canvas.drawLine(Offset(8, y), Offset(20, y), paint);
-          canvas.drawCircle(Offset(4, y), 0.5,
-              Paint()..color = color..style = PaintingStyle.fill);
+          canvas.drawCircle(
+            Offset(4, y),
+            0.5,
+            Paint()
+              ..color = color
+              ..style = PaintingStyle.fill,
+          );
         }
         break;
       case _TabIcon.cog:
@@ -350,5 +361,6 @@ class _TabIconPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_TabIconPainter old) => old.color != color || old.icon != icon;
+  bool shouldRepaint(_TabIconPainter old) =>
+      old.color != color || old.icon != icon;
 }

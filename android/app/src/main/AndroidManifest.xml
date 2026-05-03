@@ -4,7 +4,6 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Required on Android 13+ to show foreground service notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -82,16 +81,6 @@
                 android:name="android.service.quicksettings.ACTIVE_TILE"
                 android:value="true" />
         </service>
-
-        <!-- Automation: Tasker/Macrodroid via com.teapodstream.CONNECT / .DISCONNECT broadcasts -->
-        <receiver
-            android:name=".VpnCommandReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.teapodstream.CONNECT" />
-                <action android:name="com.teapodstream.DISCONNECT" />
-            </intent-filter>
-        </receiver>
 
         <meta-data
             android:name="flutterEmbedding"

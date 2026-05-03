@@ -6,9 +6,14 @@ import '../../core/models/routing_settings.dart';
 import '../../core/constants/xray_defaults.dart';
 
 class XrayConfigBuilder {
-  static Map<String, dynamic> build(VpnConfig config, VpnEngineOptions options) {
+  static Map<String, dynamic> build(
+    VpnConfig config,
+    VpnEngineOptions options,
+  ) {
     final dnsBlock = _buildDnsBlock(options);
     final routing = options.routing;
+    final routeOnly = _shouldUseRouteOnly(routing);
+    final domainStrategy = _domainStrategyFor(routing);
 
     return {
       'log': {'loglevel': options.logLevel.name},
@@ -23,24 +28,24 @@ class XrayConfigBuilder {
             'auth': options.socksUser.isNotEmpty ? 'password' : 'noauth',
             if (options.socksUser.isNotEmpty)
               'accounts': [
-                {'user': options.socksUser, 'pass': options.socksPassword}
+                {'user': options.socksUser, 'pass': options.socksPassword},
               ],
             'udp': options.enableUdp,
           },
           'sniffing': {
             'enabled': true,
             'destOverride': ['http', 'tls', 'quic'],
-            'routeOnly': true,
+            'routeOnly': routeOnly,
           },
         },
       ],
       'outbounds': [
         _buildOutbound(config),
         {'tag': 'direct', 'protocol': 'freedom'},
-        {'tag': 'dns-out', 'protocol': 'dns'}
+        {'tag': 'dns-out', 'protocol': 'dns'},
       ],
       'routing': {
-        'domainStrategy': 'IPIfNonMatch',
+        'domainStrategy': domainStrategy,
         'rules': [
           if (options.dnsMode == DnsMode.proxy) ...[
             // Proxy mode: intercept DNS queries from the user and handle them via xray's DNS module.
@@ -69,7 +74,7 @@ class XrayConfigBuilder {
             'type': 'field',
             'inboundTag': ['socks-in'],
             'outboundTag': 'proxy',
-          }
+          },
         ],
       },
       'policy': {
@@ -79,12 +84,9 @@ class XrayConfigBuilder {
             'connIdle': XrayDefaults.connIdleTimeout,
             'uplinkOnly': XrayDefaults.uplinkOnlyTimeout,
             'downlinkOnly': XrayDefaults.downlinkOnlyTimeout,
-          }
+          },
         },
-        'system': {
-          'statsInboundUplink': false,
-          'statsInboundDownlink': false,
-        }
+        'system': {'statsInboundUplink': false, 'statsInboundDownlink': false},
       },
     };
   }
@@ -96,15 +98,21 @@ class XrayConfigBuilder {
 
     // Private IPs always bypass regardless of direction
     if (routing.bypassLocal) {
-      rules.add({'type': 'field', 'ip': ['geoip:private'], 'outboundTag': 'direct'});
+      rules.add({
+        'type': 'field',
+        'ip': ['geoip:private'],
+        'outboundTag': 'direct',
+      });
     }
 
-if (!routing.isActive) return rules;
+    if (!routing.geoEnabled &&
+        !routing.domainEnabled &&
+        !routing.geositeEnabled)
+      return rules;
 
-    if (!routing.geoEnabled && !routing.domainEnabled && !routing.geositeEnabled) return rules;
-
-    final selectedOut =
-        routing.direction == RoutingDirection.bypass ? 'direct' : 'proxy';
+    final selectedOut = routing.direction == RoutingDirection.bypass
+        ? 'direct'
+        : 'proxy';
 
     if (routing.domainEnabled && routing.domainZones.isNotEmpty) {
       rules.add({
@@ -131,6 +139,14 @@ if (!routing.isActive) return rules;
     }
 
     return rules;
+  }
+
+  static bool _shouldUseRouteOnly(RoutingSettings routing) =>
+      routing.isActive || routing.adBlockEnabled;
+
+  static String _domainStrategyFor(RoutingSettings routing) {
+    final needsIpResolution = routing.bypassLocal || routing.geoEnabled;
+    return needsIpResolution ? 'IPIfNonMatch' : 'AsIs';
   }
 
   static Map<String, dynamic> _buildDnsBlock(VpnEngineOptions options) {
@@ -166,7 +182,10 @@ if (!routing.isActive) return rules;
         servers.add({'address': server.address});
         break;
       case DnsType.dot:
-        servers.add({'address': 'tls://${server.address}', 'port': server.port});
+        servers.add({
+          'address': 'tls://${server.address}',
+          'port': server.port,
+        });
         break;
     }
 
@@ -188,11 +207,7 @@ if (!routing.isActive) return rules;
       }
     }
 
-    return {
-      'hosts': hosts,
-      'servers': servers,
-      'queryStrategy': 'UseIPv4',
-    };
+    return {'hosts': hosts, 'servers': servers, 'queryStrategy': 'UseIPv4'};
   }
 
   static Map<String, dynamic> _buildOutbound(VpnConfig config) {
@@ -221,10 +236,14 @@ if (!routing.isActive) return rules;
               'address': config.address,
               'port': config.port,
               'users': [
-                {'id': config.uuid, 'encryption': config.encryption ?? 'none', 'flow': config.flow ?? ''}
-              ]
-            }
-          ]
+                {
+                  'id': config.uuid,
+                  'encryption': config.encryption ?? 'none',
+                  'flow': config.flow ?? '',
+                },
+              ],
+            },
+          ],
         };
       case VpnProtocol.vmess:
         return {
@@ -233,10 +252,10 @@ if (!routing.isActive) return rules;
               'address': config.address,
               'port': config.port,
               'users': [
-                {'id': config.uuid, 'security': 'auto'}
-              ]
-            }
-          ]
+                {'id': config.uuid, 'security': 'auto'},
+              ],
+            },
+          ],
         };
       case VpnProtocol.trojan:
         return {
@@ -245,8 +264,8 @@ if (!routing.isActive) return rules;
               'address': config.address,
               'port': config.port,
               'password': config.password ?? '',
-            }
-          ]
+            },
+          ],
         };
       case VpnProtocol.shadowsocks:
         return {
@@ -256,15 +275,11 @@ if (!routing.isActive) return rules;
               'port': config.port,
               'method': config.method ?? 'chacha20-ietf-poly1305',
               'password': config.password ?? '',
-            }
-          ]
+            },
+          ],
         };
       case VpnProtocol.hysteria2:
-        return {
-          'version': 2,
-          'address': config.address,
-          'port': config.port,
-        };
+        return {'version': 2, 'address': config.address, 'port': config.port};
     }
   }
 
@@ -276,7 +291,10 @@ if (!routing.isActive) return rules;
     if (pin == null || pin.isEmpty) return null;
     try {
       if (pin.contains(':')) {
-        final bytes = pin.split(':').map((e) => int.parse(e, radix: 16)).toList();
+        final bytes = pin
+            .split(':')
+            .map((e) => int.parse(e, radix: 16))
+            .toList();
         return [base64Encode(bytes)];
       }
       if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(pin)) {
@@ -301,20 +319,19 @@ if (!routing.isActive) return rules;
           'serverName': config.sni ?? '',
           'allowInsecure': config.allowInsecure,
           if (config.pinSHA256 != null && config.pinSHA256!.isNotEmpty)
-            'pinnedPeerCertificateChainSha256': _formatPinSHA256(config.pinSHA256),
+            'pinnedPeerCertificateChainSha256': _formatPinSHA256(
+              config.pinSHA256,
+            ),
         },
-        'hysteriaSettings': {
-          'version': 2,
-          'auth': config.password ?? '',
-        },
+        'hysteriaSettings': {'version': 2, 'auth': config.password ?? ''},
         if (config.obfsPassword != null && config.obfsPassword!.isNotEmpty)
           'finalmask': {
             'udp': [
               {
                 'type': 'salamander',
                 'settings': {'password': config.obfsPassword},
-              }
-            ]
+              },
+            ],
           },
       };
     }
@@ -328,7 +345,8 @@ if (!routing.isActive) return rules;
           'publicKey': config.publicKey ?? '',
           'shortId': config.shortId ?? '',
           'spiderX': config.spiderX ?? '',
-          if (config.postQuantumKey != null && config.postQuantumKey!.isNotEmpty)
+          if (config.postQuantumKey != null &&
+              config.postQuantumKey!.isNotEmpty)
             'mldsa65Verify': config.postQuantumKey,
         },
       if (config.security == VpnSecurity.tls)
@@ -341,12 +359,10 @@ if (!routing.isActive) return rules;
       if (config.transport == VpnTransport.ws)
         'wsSettings': {
           'path': config.wsPath ?? '/',
-          'headers': {'Host': config.wsHost ?? ''}
+          'headers': {'Host': config.wsHost ?? ''},
         },
       if (config.transport == VpnTransport.grpc)
-        'grpcSettings': {
-          'serviceName': config.grpcServiceName ?? '',
-        },
+        'grpcSettings': {'serviceName': config.grpcServiceName ?? ''},
       if (config.transport == VpnTransport.xhttp)
         'xhttpSettings': {
           'path': config.wsPath ?? '/',
