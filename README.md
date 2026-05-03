@@ -2,312 +2,238 @@
 
 > Оригинальный проект: [Wendor/teapod-stream](https://github.com/Wendor/teapod-stream)
 
-Современный форк Android VPN-клиента на Flutter с движком Xray, TUN-режимом, split tunneling, поддержкой подписок и визуально переработанным интерфейсом в палитре Nord.
+[![Fork: teapod-stream](https://img.shields.io/badge/upstream-Wendor%2Fteapod--stream-88C0D0?style=for-the-badge&labelColor=2E3440)](https://github.com/Wendor/teapod-stream)
+[![Flutter 3.11+](https://img.shields.io/badge/Flutter-3.11%2B-81A1C1?style=for-the-badge&labelColor=2E3440&logo=flutter)](https://flutter.dev/)
+[![Android 10+](https://img.shields.io/badge/Android-10%2B-A3BE8C?style=for-the-badge&labelColor=2E3440&logo=android)](https://developer.android.com/)
+[![Xray Core](https://img.shields.io/badge/Xray-core-B48EAD?style=for-the-badge&labelColor=2E3440)](https://github.com/XTLS/Xray-core)
+[![License: MIT](https://img.shields.io/badge/License-MIT-EBCB8B?style=for-the-badge&labelColor=2E3440)](./LICENSE)
 
-![Nordic preview](screen1.png)
+Современный Android VPN-клиент на Flutter с ядром Xray, поддержкой TUN-режима, split tunneling, подписок, QR-импорта и визуальным оформлением в палитре Nord.
 
-## Что это за репозиторий
+<p align="center">
+  <img src="screen1.png" alt="Teapod Stream Nordic — главный экран" width="280" />
+  <img src="screen2.png" alt="Teapod Stream Nordic — экран состояния" width="280" />
+</p>
 
-`teapod-stream-nordic` — это форк оригинального `teapod-stream`, в котором сохранена основная архитектура и функциональность клиента, но доработаны:
+## Зачем этот форк
 
-- визуальная тема в стиле Nord;
-- главный экран и кнопка управления VPN;
-- часть UX-деталей;
-- некоторые аспекты безопасности, устойчивости и читаемости кода.
+`teapod-stream-nordic` сохраняет архитектуру и совместимость оригинального клиента, но делает повседневное использование приятнее:
 
-Если вам нужен первоисточник, активная upstream-история и оригинальные релизы, начинайте с репозитория автора: [Wendor/teapod-stream](https://github.com/Wendor/teapod-stream).
+- обновляет интерфейс в стиле Nord без тяжёлой визуальной перегрузки;
+- улучшает главный экран и сценарий включения VPN;
+- оставляет совместимость с Xray-конфигами и подписками upstream-проекта;
+- сохраняет понятную структуру проекта для дальнейшей доработки;
+- добавляет более аккуратную документацию для обычных пользователей и разработчиков.
 
----
+Если вам нужен первоисточник, история архитектурных решений и базовые релизы, начинайте с upstream-репозитория: [Wendor/teapod-stream](https://github.com/Wendor/teapod-stream).
 
-## Возможности
+## Что умеет приложение
 
-- протоколы: **VLESS**, **VMess**, **Trojan**, **Shadowsocks**, **Hysteria2**;
-- транспорты: **TCP**, **WebSocket**, **gRPC**, **HTTP/2**, **QUIC**, **xHTTP**, **HTTPUpgrade**, **SplitHTTP**;
-- режим полного VPN через `VpnService` + TUN;
-- режим **"только прокси"** без поднятия TUN;
-- split tunneling по списку приложений;
-- маршрутизация по странам, доменам и `geosite`;
-- подписки по URL, включая base64 и plain-text форматы;
-- импорт через deeplink и QR;
-- отображение скорости, трафика, состояния и IP;
-- встроенная проверка обновлений;
-- современная Nord-стилизация интерфейса.
+| Возможность | Для пользователя | Статус |
+| --- | --- | --- |
+| VLESS / VMess / Trojan / Shadowsocks / Hysteria2 | Подключение к разным типам серверов | `есть` |
+| TCP / WS / gRPC / HTTP/2 / QUIC / xHTTP | Работа с разными транспортами | `есть` |
+| Полный VPN через Android `VpnService` | Весь трафик устройства идёт через туннель | `есть` |
+| Proxy-only режим | Локальный SOCKS5 без полного VPN | `есть` |
+| Split tunneling | Выбор, какие приложения идут через туннель | `есть` |
+| Импорт по URL, QR и deeplink | Быстрое добавление конфигов и подписок | `есть` |
+| Проверка скорости, трафика и IP | Визуальный контроль состояния соединения | `есть` |
+| Встроенная Nord-тема | Более чистый и цельный внешний вид | `есть` |
 
----
+## Быстрый старт для обычного пользователя
+
+1. Установите APK на Android-устройство.
+2. Импортируйте конфиг или подписку по ссылке, QR-коду или deeplink.
+3. Выберите профиль в списке серверов.
+4. Нажмите главную кнопку с опоссумом.
+5. Подтвердите системный запрос Android на создание VPN-подключения.
+6. Дождитесь статуса подключения и проверьте скорость, IP и маршрут трафика.
+
+## Скриншоты
+
+| Главный экран | Экран состояния |
+| --- | --- |
+| ![Главный экран](screen1.png) | ![Экран состояния](screen2.png) |
 
 ## Как это работает
 
-Ниже — практическая схема работы приложения без маркетинговых упрощений.
+Снаружи приложение выглядит как аккуратный VPN-клиент, но внутри оно разделено на несколько независимых слоёв. Это упрощает поддержку и делает поведение более предсказуемым.
 
-### 1. Что делает приложение при подключении
+### Пользовательский сценарий
 
-Когда пользователь нажимает кнопку подключения:
+Когда вы нажимаете кнопку подключения, приложение делает следующее:
 
-1. Flutter UI формирует Xray-конфиг на основе выбранного профиля.
-2. Конфиг передаётся в Android-часть через `MethodChannel`.
-3. Android запускает `XrayVpnService`.
-4. Сервис:
-   - поднимает локальный SOCKS5-inbound для `xray-core`;
-   - при необходимости создаёт TUN-интерфейс через `android.net.VpnService`;
-   - подключает TUN к мосту `teapod-tun2socks`;
-   - запускает `xray-core` из `teapod-core.aar`.
+1. берёт выбранный профиль и собирает Xray-конфиг;
+2. передаёт его из Flutter UI в Android-часть через `MethodChannel`;
+3. запускает `XrayVpnService`;
+4. поднимает локальный SOCKS5-интерфейс для `xray-core`;
+5. при полном VPN-режиме создаёт TUN через `android.net.VpnService`;
+6. соединяет TUN с мостом `teapod-tun2socks`;
+7. отправляет трафик в `xray-core`, который уже работает с удалённым сервером.
 
-### 2. Поток трафика в TUN-режиме
+### Поток трафика в полном VPN-режиме
 
 ```text
-[Android apps]
-      ↓
-[TUN interface / VpnService]
-      ↓
+[Приложения Android]
+         ↓
+[TUN / VpnService]
+         ↓
 [teapod-tun2socks]
-      ↓
+         ↓
 [SOCKS5 127.0.0.1:<port>]
-      ↓
+         ↓
 [xray-core]
-      ↓
-[VPN / proxy server]
+         ↓
+[Удалённый VPN / proxy сервер]
 ```
 
-То есть приложение не «туннелит интернет само по себе» на уровне UI. UI только управляет сервисом, хранит настройки и показывает состояние. Основная транспортная работа выполняется нативными компонентами.
+### Если включён режим proxy-only
 
-### 3. Режим «только прокси»
-
-Если включён proxy-only режим, TUN не создаётся. Тогда схема такая:
+В этом сценарии TUN не поднимается. Приложение работает как локальный прокси:
 
 ```text
-[Клиентское приложение, настроенное на SOCKS5]
-      ↓
+[Клиентское приложение]
+         ↓
 [SOCKS5 127.0.0.1:<port>]
-      ↓
+         ↓
 [xray-core]
-      ↓
+         ↓
 [Удалённый сервер]
 ```
 
-Это полезно, когда нужен локальный прокси без полного VPN-режима.
+### Как работают split tunneling, DNS и маршрутизация
 
-### 4. Split tunneling
-
-Split tunneling работает на стороне Android и `teapod-tun2socks`:
-
-- приложение получает список установленных пакетов;
-- пользователь задаёт, что включать или исключать;
-- при работе через TUN мост определяет UID владельца соединения;
-- дальше трафик либо пропускается в туннель, либо игнорируется согласно выбранному режиму.
-
-### 5. DNS и маршрутизация
-
-Приложение умеет строить Xray-конфиг так, чтобы DNS-запросы:
-
-- шли через VPN;
-- или обходили туннель;
-- или разрешались через выбранные DNS-провайдеры.
-
-Для правил маршрутизации используются:
-
-- `geoip.dat`;
-- `geosite.dat`;
-- пользовательские домены;
-- пресеты вроде ad-block/geosite-маршрутизации.
-
-### 6. Подписки и импорт
-
-Подписки загружаются по URL, затем:
-
-- содержимое декодируется как base64 или читается как plain text;
-- каждая строка разбирается как URI-конфиг;
-- валидные конфиги сохраняются локально;
-- метаданные подписки используются для названия, срока действия и статуса.
-
-Deeplink-импорт поддерживает профильные и пакетные схемы вида `teapod://import/...`.
-
----
+- split tunneling использует Android UID-потоки и правила включения/исключения приложений;
+- DNS можно направлять через туннель или обходной маршрут в зависимости от настроек;
+- для маршрутизации применяются `geoip.dat`, `geosite.dat`, пользовательские домены и пресеты правил;
+- подписки загружаются по URL, затем декодируются как base64 или plain text и разбираются построчно как URI-конфиги.
 
 ## Архитектура проекта
 
-### UI и логика состояния
+### Основные слои
 
-Основная клиентская часть написана на Flutter.
-
-Ключевые слои:
-
-- `lib/ui/*` — экраны, виджеты, тема;
+- `lib/ui/*` — экраны, виджеты, тема и пользовательские сценарии;
 - `lib/providers/*` — состояние приложения на Riverpod;
-- `lib/core/services/*` — storage, подписки, deeplink, обновления;
-- `lib/protocols/xray/*` — парсинг и сборка Xray-конфига.
-
-### Android-часть
-
-Нативная часть расположена в `android/app/src/main/kotlin/...` и отвечает за:
-
-- запуск `VpnService`;
-- работу foreground service;
-- связь Flutter ↔ Android через `MethodChannel` и `EventChannel`;
-- подготовку бинарных ресурсов;
-- инсталляцию APK-обновлений;
-- работу quick settings tile.
+- `lib/core/services/*` — storage, подписки, deeplink, обновления и служебная логика;
+- `lib/protocols/xray/*` — сборка и парсинг Xray-конфигов;
+- `android/app/src/main/kotlin/*` — Android-сервисы, foreground service, каналы связи и системная интеграция.
 
 ### Нативный сетевой стек
 
-Трафиковая часть собрана из внешних компонентов:
+- `xray-core` — маршрутизация, транспорты и протоколы;
+- `teapod-tun2socks` — мост между TUN и локальным SOCKS5;
+- `teapod-core` — Android AAR, объединяющий нативные VPN-компоненты.
 
-- `xray-core` — маршрутизация и протоколы;
-- `teapod-tun2socks` — мост между TUN и SOCKS5;
-- `teapod-core` — Android AAR, объединяющий `xray-core` и `teapod-tun2socks`.
+## Чем форк отличается от оригинала
 
----
-
-## Чем этот форк отличается от оригинала
-
-На момент текущего состояния репозитория форк включает такие заметные изменения:
-
-- Nord-цветовая схема и обновлённые акценты интерфейса;
-- кастомная главная кнопка с круглым изображением опоссума;
-- корректировки читаемости и поведения главного экрана;
-- локальные улучшения по устойчивости UI;
-- часть снижения рискованных поверхностей по сравнению с прежним состоянием форка.
-
-Если хотите увидеть фундаментальные архитектурные решения, сравнивайте этот репозиторий с upstream: [Wendor/teapod-stream](https://github.com/Wendor/teapod-stream).
-
----
+- Nord-цветовая схема и более цельные визуальные акценты;
+- кастомная круглая кнопка с изображением опоссума на главном экране;
+- локальные улучшения читаемости UI и отдельных пользовательских сценариев;
+- переработанная документация, ориентированная не только на разработчика, но и на конечного пользователя.
 
 ## Сборка
 
 ### Требования
 
 - Flutter SDK `3.11+`
+- Dart SDK `^3.11.4`
 - Java `21+`
 - Android SDK
 - Android NDK `28.2.13676358`
 - CMake `3.22.1`
+- Android `minSdk 29+`
 
-### Быстрый сценарий
+### Быстрые команды
 
 ```bash
-# 1. Скачать бинарные зависимости
+# Скачать бинарные зависимости
 ./build.sh binaries
 
-# 2. Debug APK
+# Собрать debug APK
 ./build.sh debug
 
-# 3. Release APK (split per ABI)
+# Собрать release APK (split per ABI)
 ./build.sh release
 ```
 
-### Выходные артефакты
+### Где искать APK
 
-После release-сборки APK находятся в:
+После release-сборки артефакты находятся в каталоге:
 
 ```text
 build/app/outputs/flutter-apk/
 ```
 
-Обычно формируются варианты для:
+Обычно формируются APK для:
 
 - `arm64-v8a`
 - `armeabi-v7a`
 - `x86_64`
 
-> Важно: текущая release-сборка в проекте по умолчанию может использовать debug signing config. Для реального публичного релиза нужно подключить собственный release keystore.
+> Важно: для публичного релиза стоит использовать собственный release keystore, даже если локальная сборка проходит с текущей конфигурацией проекта.
 
----
-
-## Что используется внутри
-
-Ниже — список ключевого ПО, библиотек и компонентов, на которых держится проект.
+## Используемое ПО и библиотеки
 
 ### Базовая платформа
 
-- [Flutter](https://flutter.dev/) — UI и кроссплатформенный каркас приложения
+- [Flutter](https://flutter.dev/) — UI и кроссплатформенная оболочка
 - [Dart](https://dart.dev/) — основной язык клиентской части
 - Android `VpnService` — системный API для VPN/TUN
-- Kotlin — Android-слой
-- Gradle — Android-сборка
-- CMake — нативная сборка Android-модуля
-- Java 21 — toolchain для сборки
+- [Kotlin](https://kotlinlang.org/) — Android-слой
+- [Gradle](https://gradle.org/) — сборка Android-части
+- [CMake](https://cmake.org/) — сборка нативных компонентов
+- [Java 21](https://openjdk.org/) — toolchain проекта
 
 ### Сетевые и VPN-компоненты
 
-- [Xray-core](https://github.com/XTLS/Xray-core) — ядро прокси-маршрутизации
-- [teapod-core](https://github.com/Wendor/teapod-core) — AAR-обёртка для Android
-- [teapod-tun2socks](https://github.com/Wendor/teapod-tun2socks) — TUN → SOCKS5 bridge
+- [Xray-core](https://github.com/XTLS/Xray-core) — маршрутизация, транспорты, прокси-протоколы
+- [teapod-core](https://github.com/Wendor/teapod-core) — Android AAR-обёртка для Xray/TUN-компонентов
+- [teapod-tun2socks](https://github.com/Wendor/teapod-tun2socks) — мост TUN → SOCKS5
 - [v2ray-rules-dat / Loyalsoldier](https://github.com/Loyalsoldier/v2ray-rules-dat) — `geoip.dat` и `geosite.dat`
 
-### Flutter / Dart библиотеки
+### Flutter и Dart пакеты
 
-#### Состояние и приложение
-
-- [`flutter_riverpod`](https://pub.dev/packages/flutter_riverpod) — state management
-- [`shared_preferences`](https://pub.dev/packages/shared_preferences) — хранение простых настроек
+- [`flutter_riverpod`](https://pub.dev/packages/flutter_riverpod) — управление состоянием
+- [`shared_preferences`](https://pub.dev/packages/shared_preferences) — простые локальные настройки
 - [`flutter_secure_storage`](https://pub.dev/packages/flutter_secure_storage) — защищённое хранение чувствительных данных
-
-#### Сеть и подписки
-
-- [`http`](https://pub.dev/packages/http) — HTTP-запросы
+- [`share_plus`](https://pub.dev/packages/share_plus) — системный обмен данными
+- [`mobile_scanner`](https://pub.dev/packages/mobile_scanner) — QR-сканирование
+- [`http`](https://pub.dev/packages/http) — сетевые запросы
+- [`uuid`](https://pub.dev/packages/uuid) — генерация идентификаторов
+- [`intl`](https://pub.dev/packages/intl) — локализация и форматирование
+- [`fl_chart`](https://pub.dev/packages/fl_chart) — графики скорости и трафика
+- [`google_fonts`](https://pub.dev/packages/google_fonts) — шрифты интерфейса
+- [`permission_handler`](https://pub.dev/packages/permission_handler) — системные разрешения
+- [`package_info_plus`](https://pub.dev/packages/package_info_plus) — версия и метаданные сборки
+- [`url_launcher_android`](https://pub.dev/packages/url_launcher_android) — Android-реализация открытия ссылок
+- [`url_launcher`](https://pub.dev/packages/url_launcher) — запуск внешних URL
+- [`path_provider`](https://pub.dev/packages/path_provider) — системные директории
 - [`socks5_proxy`](https://pub.dev/packages/socks5_proxy) — работа через локальный SOCKS5
 
-#### UX и системная интеграция
-
-- [`mobile_scanner`](https://pub.dev/packages/mobile_scanner) — QR-сканирование
-- [`share_plus`](https://pub.dev/packages/share_plus) — системный share sheet
-- [`permission_handler`](https://pub.dev/packages/permission_handler) — запросы разрешений
-- [`url_launcher`](https://pub.dev/packages/url_launcher) — открытие внешних ссылок
-- [`url_launcher_android`](https://pub.dev/packages/url_launcher_android) — Android-реализация launcher API
-- [`package_info_plus`](https://pub.dev/packages/package_info_plus) — версия приложения и build metadata
-- [`path_provider`](https://pub.dev/packages/path_provider) — системные директории
-
-#### UI и утилиты
-
-- [`google_fonts`](https://pub.dev/packages/google_fonts) — шрифты интерфейса
-- [`fl_chart`](https://pub.dev/packages/fl_chart) — графики
-- [`intl`](https://pub.dev/packages/intl) — форматирование
-- [`uuid`](https://pub.dev/packages/uuid) — генерация идентификаторов
-
-#### Инструменты разработки
+### Dev-инструменты
 
 - [`flutter_test`](https://api.flutter.dev/flutter/flutter_test/flutter_test-library.html) — тесты
-- [`flutter_lints`](https://pub.dev/packages/flutter_lints) — lint rules
-- [`flutter_launcher_icons`](https://pub.dev/packages/flutter_launcher_icons) — генерация launcher icon assets
+- [`flutter_lints`](https://pub.dev/packages/flutter_lints) — правила качества кода
+- [`flutter_launcher_icons`](https://pub.dev/packages/flutter_launcher_icons) — генерация иконок приложения
 
----
+## Благодарности
 
-## Благодарности и кредиты
+Этот форк существует благодаря работе upstream-авторов и экосистемы open source.
 
-Этот репозиторий существует благодаря работе множества авторов и open-source проектов.
+Отдельное спасибо:
 
-В первую очередь:
+- автору и участникам [Wendor/teapod-stream](https://github.com/Wendor/teapod-stream);
+- авторам [Xray-core](https://github.com/XTLS/Xray-core);
+- авторам [teapod-core](https://github.com/Wendor/teapod-core);
+- авторам [teapod-tun2socks](https://github.com/Wendor/teapod-tun2socks);
+- авторам [v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat);
+- команде [Flutter](https://flutter.dev/);
+- авторам всех подключённых пакетов из `pub.dev`.
 
-- автору оригинального клиента — [Wendor/teapod-stream](https://github.com/Wendor/teapod-stream)
-- авторам [Xray-core](https://github.com/XTLS/Xray-core)
-- авторам [teapod-core](https://github.com/Wendor/teapod-core)
-- авторам [teapod-tun2socks](https://github.com/Wendor/teapod-tun2socks)
-- авторам [v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat)
-- команде [Flutter](https://flutter.dev/)
-- авторам всех перечисленных пакетов из `pub.dev`
+Если вы развиваете этот форк публично, корректно указывать ссылку и на этот репозиторий, и на исходный upstream-проект.
 
-Если вы используете этот форк публично, корректно указывать ссылку как на этот репозиторий, так и на upstream-источник.
+## Лицензия
 
----
+Этот репозиторий распространяется по лицензии [MIT](./LICENSE).
 
-## Важные замечания
-
-- Это форк клиентского VPN-приложения, а не самостоятельный сетевой протокол.
-- Корректная работа зависит от совместимого серверного конфига.
-- Перед распространением собственных APK стоит проверить:
-  - release signing;
-  - политику обновлений;
-  - актуальность `teapod-core`;
-  - набор разрешений в AndroidManifest.
-
----
-
-## Лицензии
-
-Смотрите лицензии исходных компонентов в их соответствующих репозиториях:
-
-- [Xray-core / MIT](https://github.com/XTLS/Xray-core)
-- [teapod-core](https://github.com/Wendor/teapod-core)
-- [teapod-tun2socks / MIT](https://github.com/Wendor/teapod-tun2socks)
-- лицензии Flutter/Dart-пакетов — на страницах соответствующих пакетов `pub.dev`
-
-Если нужен юридически строгий список лицензий для дистрибуции, лучше сформировать отдельный `THIRD_PARTY_NOTICES.md` на основе lockfile и всех upstream-компонентов.
+Лицензии сторонних компонентов смотрите в их исходных репозиториях и на страницах соответствующих пакетов. Если нужен юридически строгий пакет уведомлений для дистрибуции, имеет смысл дополнительно подготовить `THIRD_PARTY_NOTICES.md`.
