@@ -4,27 +4,30 @@ import 'package:teapodstream/core/models/vpn_config.dart';
 import 'package:teapodstream/core/models/routing_settings.dart';
 import 'package:teapodstream/core/interfaces/vpn_engine.dart';
 
-VpnConfig _vlessConfig({String address = '1.2.3.4', int port = 443}) => VpnConfig(
-  id: 'id',
-  name: 'test',
-  protocol: VpnProtocol.vless,
-  address: address,
-  port: port,
-  uuid: 'test-uuid',
-  security: VpnSecurity.tls,
-  transport: VpnTransport.tcp,
-  createdAt: DateTime.now(),
-);
+VpnConfig _vlessConfig({String address = '1.2.3.4', int port = 443}) =>
+    VpnConfig(
+      id: 'id',
+      name: 'test',
+      protocol: VpnProtocol.vless,
+      address: address,
+      port: port,
+      uuid: 'test-uuid',
+      security: VpnSecurity.tls,
+      transport: VpnTransport.tcp,
+      createdAt: DateTime.now(),
+    );
 
 VpnEngineOptions _defaultOptions({
   int socksPort = 10808,
   RoutingSettings? routing,
+  bool sniffingEnabled = true,
 }) => VpnEngineOptions(
   socksPort: socksPort,
   httpPort: 0,
   socksUser: '',
   socksPassword: '',
   routing: routing ?? const RoutingSettings(),
+  sniffingEnabled: sniffingEnabled,
 );
 
 void main() {
@@ -40,7 +43,10 @@ void main() {
     });
 
     test('inbound socks uses correct port', () {
-      final json = XrayConfigBuilder.build(_vlessConfig(), _defaultOptions(socksPort: 12345));
+      final json = XrayConfigBuilder.build(
+        _vlessConfig(),
+        _defaultOptions(socksPort: 12345),
+      );
       final inbound = (json['inbounds'] as List).first as Map<String, dynamic>;
       expect(inbound['port'], 12345);
       expect(inbound['protocol'], 'socks');
@@ -59,18 +65,21 @@ void main() {
       expect(tags, containsAll(['proxy', 'direct', 'dns-out']));
     });
 
-    test('routing domainStrategy is AsIs', () {
+    test('routing domainStrategy is IPIfNonMatch', () {
       final json = XrayConfigBuilder.build(_vlessConfig(), _defaultOptions());
       final routing = json['routing'] as Map<String, dynamic>;
-      expect(routing['domainStrategy'], 'AsIs');
+      expect(routing['domainStrategy'], 'IPIfNonMatch');
     });
 
     group('sniffing routeOnly', () {
-      test('is false when routing is global (default)', () {
+      // routeOnly is always true when sniffing is enabled — prevents xray from replacing
+      // the connection destination with re-resolved domain (DNS leak / tun2socks breakage).
+      test('is true by default (sniffing enabled)', () {
         final json = XrayConfigBuilder.build(_vlessConfig(), _defaultOptions());
-        final inbound = (json['inbounds'] as List).first as Map<String, dynamic>;
+        final inbound =
+            (json['inbounds'] as List).first as Map<String, dynamic>;
         final sniffing = inbound['sniffing'] as Map<String, dynamic>;
-        expect(sniffing['routeOnly'], isFalse);
+        expect(sniffing['routeOnly'], isTrue);
       });
 
       test('is true when geo routing is active', () {
@@ -79,18 +88,26 @@ void main() {
           geoEnabled: true,
           geoCodes: ['RU'],
         );
-        final json = XrayConfigBuilder.build(_vlessConfig(), _defaultOptions(routing: routing));
-        final inbound = (json['inbounds'] as List).first as Map<String, dynamic>;
+        final json = XrayConfigBuilder.build(
+          _vlessConfig(),
+          _defaultOptions(routing: routing),
+        );
+        final inbound =
+            (json['inbounds'] as List).first as Map<String, dynamic>;
         final sniffing = inbound['sniffing'] as Map<String, dynamic>;
         expect(sniffing['routeOnly'], isTrue);
       });
 
-      test('is true when adblock is enabled', () {
-        final routing = const RoutingSettings(adBlockEnabled: true);
-        final json = XrayConfigBuilder.build(_vlessConfig(), _defaultOptions(routing: routing));
-        final inbound = (json['inbounds'] as List).first as Map<String, dynamic>;
+      test('is absent when sniffing is disabled', () {
+        final json = XrayConfigBuilder.build(
+          _vlessConfig(),
+          _defaultOptions(sniffingEnabled: false),
+        );
+        final inbound =
+            (json['inbounds'] as List).first as Map<String, dynamic>;
         final sniffing = inbound['sniffing'] as Map<String, dynamic>;
-        expect(sniffing['routeOnly'], isTrue);
+        expect(sniffing['enabled'], isFalse);
+        expect(sniffing.containsKey('routeOnly'), isFalse);
       });
     });
 
@@ -100,10 +117,17 @@ void main() {
         final routing = json['routing'] as Map<String, dynamic>;
         final rules = routing['rules'] as List;
         // No rules with geo IPs when routing is global (only DNS + catch-all rules)
-        final geoRules = rules.where((r) =>
-          (r as Map).containsKey('ip') &&
-          ((r['ip'] as List).any((ip) => (ip as String).startsWith('geoip:') && ip != 'geoip:private'))
-        ).toList();
+        final geoRules = rules
+            .where(
+              (r) =>
+                  (r as Map).containsKey('ip') &&
+                  ((r['ip'] as List).any(
+                    (ip) =>
+                        (ip as String).startsWith('geoip:') &&
+                        ip != 'geoip:private',
+                  )),
+            )
+            .toList();
         expect(geoRules, isEmpty);
       });
 
@@ -114,7 +138,10 @@ void main() {
           geoEnabled: true,
           geoCodes: ['RU'],
         );
-        final json = XrayConfigBuilder.build(_vlessConfig(), _defaultOptions(routing: routing));
+        final json = XrayConfigBuilder.build(
+          _vlessConfig(),
+          _defaultOptions(routing: routing),
+        );
         final rules = (json['routing'] as Map)['rules'] as List;
         final ips = rules
             .where((r) => (r as Map).containsKey('ip'))
@@ -129,7 +156,8 @@ void main() {
       test('uses vnext format with uuid', () {
         final json = XrayConfigBuilder.build(_vlessConfig(), _defaultOptions());
         final outbounds = json['outbounds'] as List;
-        final proxy = outbounds.firstWhere((o) => (o as Map)['tag'] == 'proxy') as Map;
+        final proxy =
+            outbounds.firstWhere((o) => (o as Map)['tag'] == 'proxy') as Map;
         final vnext = (proxy['settings'] as Map)['vnext'] as List;
         expect(vnext.first['address'], '1.2.3.4');
         expect((vnext.first['users'] as List).first['id'], 'test-uuid');
@@ -139,15 +167,22 @@ void main() {
     group('Shadowsocks outbound', () {
       test('uses servers format with method and password', () {
         final config = VpnConfig(
-          id: 'id', name: 'ss', protocol: VpnProtocol.shadowsocks,
-          address: '1.2.3.4', port: 8388, uuid: '',
-          security: VpnSecurity.none, transport: VpnTransport.tcp,
-          method: 'chacha20-ietf-poly1305', password: 'secret',
+          id: 'id',
+          name: 'ss',
+          protocol: VpnProtocol.shadowsocks,
+          address: '1.2.3.4',
+          port: 8388,
+          uuid: '',
+          security: VpnSecurity.none,
+          transport: VpnTransport.tcp,
+          method: 'chacha20-ietf-poly1305',
+          password: 'secret',
           createdAt: DateTime.now(),
         );
         final json = XrayConfigBuilder.build(config, _defaultOptions());
         final outbounds = json['outbounds'] as List;
-        final proxy = outbounds.firstWhere((o) => (o as Map)['tag'] == 'proxy') as Map;
+        final proxy =
+            outbounds.firstWhere((o) => (o as Map)['tag'] == 'proxy') as Map;
         final servers = (proxy['settings'] as Map)['servers'] as List;
         expect(servers.first['method'], 'chacha20-ietf-poly1305');
         expect(servers.first['password'], 'secret');

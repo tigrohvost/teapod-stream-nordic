@@ -14,6 +14,7 @@ import 'providers/vpn_provider.dart';
 import 'core/services/settings_service.dart';
 import 'providers/settings_provider.dart';
 import 'providers/update_provider.dart';
+import 'providers/geo_provider.dart';
 import 'providers/theme_provider.dart';
 import 'core/services/deeplink_handler.dart';
 
@@ -87,6 +88,8 @@ class _AppShellState extends ConsumerState<_AppShell>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(vpnProvider.notifier).syncNativeState();
+      ref.read(vpnProvider.notifier).pingStaleConfigs();
+      ref.read(geoProvider.notifier).check();
       if (_autoConnectAttempted) return;
       _autoConnectAttempted = true;
       _tryAutoConnect();
@@ -146,6 +149,21 @@ class _AppShellState extends ConsumerState<_AppShell>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<ConfigState>>(configProvider, (prev, next) {
+      final prevIds = prev?.maybeWhen(
+        data: (d) => d.configs.map((c) => c.id).toSet(),
+        orElse: () => null,
+      );
+      final nextIds = next.maybeWhen(
+        data: (d) => d.configs.map((c) => c.id).toSet(),
+        orElse: () => null,
+      );
+      if (prevIds == null || nextIds == null) return;
+      if (nextIds.difference(prevIds).isNotEmpty) {
+        ref.read(vpnProvider.notifier).pingStaleConfigs();
+      }
+    });
+
     final updateState = ref.watch(updateProvider);
     final hasUpdate =
         updateState is UpdateAvailable ||

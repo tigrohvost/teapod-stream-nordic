@@ -17,7 +17,8 @@ class UntrustedCertificateException implements Exception {
   });
 
   @override
-  String toString() => 'UntrustedCertificateException: $host — $subject (issued by $issuer)';
+  String toString() =>
+      'UntrustedCertificateException: $host — $subject (issued by $issuer)';
 }
 
 class SubscriptionFetchResult {
@@ -94,14 +95,14 @@ class SubscriptionService {
 
     httpClient.badCertificateCallback =
         (X509Certificate cert, String host, int port) {
-      if (allowSelfSigned) return true;
-      certError = UntrustedCertificateException(
-        host: host,
-        subject: cert.subject,
-        issuer: cert.issuer,
-      );
-      return false;
-    };
+          if (allowSelfSigned) return true;
+          certError = UntrustedCertificateException(
+            host: host,
+            subject: cert.subject,
+            issuer: cert.issuer,
+          );
+          return false;
+        };
 
     String body;
     HttpHeaders responseHeaders;
@@ -116,8 +117,9 @@ class SubscriptionService {
         request.headers.set('X-Ver-Os', hwid.osVersion.toString());
       }
 
-      final response =
-          await request.close().timeout(const Duration(seconds: 15));
+      final response = await request.close().timeout(
+        const Duration(seconds: 15),
+      );
 
       if (response.statusCode != 200) {
         throw Exception('Failed to fetch subscription: ${response.statusCode}');
@@ -136,6 +138,72 @@ class SubscriptionService {
 
     body = body.trim();
     List<String> lines;
+    final configs = <VpnConfig>[];
+
+    // Detect pre-built xray JSON config array (managed subscription format).
+    if (body.startsWith('[') || body.startsWith('{')) {
+      try {
+        final jsonData = jsonDecode(body);
+        final items = jsonData is List ? jsonData : [jsonData];
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          final remarks = item['remarks'] as String? ?? 'Server';
+          final rawJson = jsonEncode(item);
+          String address = '';
+          int port = 0;
+          final outbounds = item['outbounds'] as List<dynamic>? ?? [];
+          for (final outbound in outbounds) {
+            if (outbound is! Map<String, dynamic>) continue;
+            final tag = outbound['tag'] as String? ?? '';
+            if (tag == 'direct' || tag == 'block' || tag.isEmpty) continue;
+            final settings = outbound['settings'] as Map<String, dynamic>?;
+            final vnext = settings?['vnext'] as List<dynamic>?;
+            if (vnext != null && vnext.isNotEmpty) {
+              final srv = vnext.first as Map<String, dynamic>;
+              address = srv['address'] as String? ?? '';
+              port = srv['port'] as int? ?? 0;
+              break;
+            }
+            final servers = settings?['servers'] as List<dynamic>?;
+            if (servers != null && servers.isNotEmpty) {
+              final srv = servers.first as Map<String, dynamic>;
+              address = srv['address'] as String? ?? '';
+              port = srv['port'] as int? ?? 0;
+              break;
+            }
+          }
+          configs.add(
+            VpnConfig(
+              id: 'xray_${DateTime.now().millisecondsSinceEpoch}_${configs.length}',
+              name: remarks,
+              protocol: VpnProtocol.vless,
+              address: address.isEmpty ? 'managed' : address,
+              port: port > 0 ? port : 443,
+              uuid: '',
+              security: VpnSecurity.none,
+              transport: VpnTransport.tcp,
+              createdAt: DateTime.now(),
+              rawXrayConfig: rawJson,
+            ),
+          );
+        }
+        if (configs.isNotEmpty) {
+          return SubscriptionFetchResult(
+            configs: configs,
+            profileTitle: meta.profileTitle,
+            expireAt: meta.expireAt,
+            uploadBytes: meta.uploadBytes,
+            downloadBytes: meta.downloadBytes,
+            totalBytes: meta.totalBytes,
+            announce: meta.announce,
+            announceUrl: meta.announceUrl,
+            hwidStatus: meta.hwidStatus,
+          );
+        }
+      } catch (_) {
+        // Not valid JSON — fall through to standard URI parsing.
+      }
+    }
 
     // Try base64 decode first.
     // Many providers wrap base64 output at 76 chars (RFC 2045), so strip all
@@ -145,13 +213,18 @@ class SubscriptionService {
       final cleaned = body.replaceAll(RegExp(r'\s'), '');
       final padded = cleaned.padRight((cleaned.length + 3) ~/ 4 * 4, '=');
       final decoded = utf8.decode(base64Decode(padded));
-      lines = decoded.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
+      lines = decoded
+          .split(RegExp(r'\r?\n'))
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
     } catch (_) {
       // Not base64 — treat as plain-text list of URIs.
-      lines = body.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
+      lines = body
+          .split(RegExp(r'\r?\n'))
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
     }
 
-    final configs = <VpnConfig>[];
     for (final line in lines) {
       final trimmed = line.trim();
       try {
@@ -189,7 +262,9 @@ class SubscriptionService {
     final hwidNotSupported = headers.value('x-hwid-not-supported');
     final hwidMaxDevices = headers.value('x-hwid-max-devices-reached');
 
-    if (hwidActive != null || hwidNotSupported != null || hwidMaxDevices != null) {
+    if (hwidActive != null ||
+        hwidNotSupported != null ||
+        hwidMaxDevices != null) {
       hwidStatus = HwidStatus(
         isActive: hwidActive == 'true',
         notSupported: hwidNotSupported == 'true',
@@ -220,7 +295,8 @@ class SubscriptionService {
           case 'total':
             if (val > 0) totalBytes = val;
           case 'expire':
-            if (val > 0) expireAt = DateTime.fromMillisecondsSinceEpoch(val * 1000);
+            if (val > 0)
+              expireAt = DateTime.fromMillisecondsSinceEpoch(val * 1000);
         }
       }
     }

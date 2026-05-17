@@ -44,31 +44,29 @@ class HomeScreen extends ConsumerWidget {
 
     return Scaffold(
       body: SafeArea(
-        child: Column(
-          children: [
-            _HeaderStrip(t: t, stateCode: stateCode, version: version),
-            _HeroPanel(
-              t: t,
-              vpnState: vpnState,
-              protoLabel: protoLabel,
-              pingMs: pingMs,
-              canToggle: canToggle,
-              onToggle: () => ref.read(vpnProvider.notifier).toggle(),
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                child: _MetricsGrid(
-                  t: t,
-                  stats: vpnState.stats,
-                  protoLabel: protoLabel,
-                  serverHint: serverHint,
-                  isConnected: isConn,
-                  pingMs: pingMs,
-                  history: history,
-                ),
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              _HeaderStrip(t: t, stateCode: stateCode, version: version),
+              _HeroPanel(
+                t: t,
+                vpnState: vpnState,
+                protoLabel: protoLabel,
+                pingMs: pingMs,
+                canToggle: canToggle,
+                onToggle: () => ref.read(vpnProvider.notifier).toggle(),
               ),
-            ),
-          ],
+              _MetricsGrid(
+                t: t,
+                stats: vpnState.stats,
+                protoLabel: protoLabel,
+                serverHint: serverHint,
+                isConnected: isConn,
+                pingMs: pingMs,
+                history: history,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -523,8 +521,6 @@ class _TickPainter extends CustomPainter {
 // ── Metrics grid ──────────────────────────────────────────────────
 
 class _MetricsGrid extends StatelessWidget {
-  static const _metricRowHeight = 88.0;
-
   final TeapodTokens t;
   final VpnStats stats;
   final String protoLabel;
@@ -572,8 +568,7 @@ class _MetricsGrid extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SizedBox(
-          height: _metricRowHeight,
+        IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -598,8 +593,7 @@ class _MetricsGrid extends StatelessWidget {
             ],
           ),
         ),
-        SizedBox(
-          height: _metricRowHeight,
+        IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -657,7 +651,7 @@ class _MetricCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 7, 16, 7),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       clipBehavior: Clip.hardEdge,
       decoration: BoxDecoration(
         border: Border(

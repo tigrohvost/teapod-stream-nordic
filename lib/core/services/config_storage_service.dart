@@ -31,36 +31,36 @@ class Subscription {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'url': url,
-        'createdAt': createdAt.toIso8601String(),
-        'lastFetchedAt': lastFetchedAt?.toIso8601String(),
-        'expireAt': expireAt?.toIso8601String(),
-        'uploadBytes': uploadBytes,
-        'downloadBytes': downloadBytes,
-        'totalBytes': totalBytes,
-        'announce': announce,
-        'announceUrl': announceUrl,
-      };
+    'id': id,
+    'name': name,
+    'url': url,
+    'createdAt': createdAt.toIso8601String(),
+    'lastFetchedAt': lastFetchedAt?.toIso8601String(),
+    'expireAt': expireAt?.toIso8601String(),
+    'uploadBytes': uploadBytes,
+    'downloadBytes': downloadBytes,
+    'totalBytes': totalBytes,
+    'announce': announce,
+    'announceUrl': announceUrl,
+  };
 
   factory Subscription.fromJson(Map<String, dynamic> json) => Subscription(
-        id: json['id'] as String,
-        name: json['name'] as String,
-        url: json['url'] as String,
-        createdAt: DateTime.parse(json['createdAt'] as String),
-        lastFetchedAt: json['lastFetchedAt'] != null
-            ? DateTime.parse(json['lastFetchedAt'] as String)
-            : null,
-        expireAt: json['expireAt'] != null
-            ? DateTime.parse(json['expireAt'] as String)
-            : null,
-        uploadBytes: json['uploadBytes'] as int?,
-        downloadBytes: json['downloadBytes'] as int?,
-        totalBytes: json['totalBytes'] as int?,
-        announce: json['announce'] as String?,
-        announceUrl: json['announceUrl'] as String?,
-      );
+    id: json['id'] as String,
+    name: json['name'] as String,
+    url: json['url'] as String,
+    createdAt: DateTime.parse(json['createdAt'] as String),
+    lastFetchedAt: json['lastFetchedAt'] != null
+        ? DateTime.parse(json['lastFetchedAt'] as String)
+        : null,
+    expireAt: json['expireAt'] != null
+        ? DateTime.parse(json['expireAt'] as String)
+        : null,
+    uploadBytes: json['uploadBytes'] as int?,
+    downloadBytes: json['downloadBytes'] as int?,
+    totalBytes: json['totalBytes'] as int?,
+    announce: json['announce'] as String?,
+    announceUrl: json['announceUrl'] as String?,
+  );
 
   Subscription copyWith({
     String? name,
@@ -105,7 +105,8 @@ class ConfigStorageService {
 
   Future<void> saveConfigs(List<VpnConfig> configs) async {
     await _secure.writeConfigsRaw(
-        jsonEncode(configs.map((c) => c.toJson()).toList()));
+      jsonEncode(configs.map((c) => c.toJson()).toList()),
+    );
   }
 
   Future<void> addConfig(VpnConfig config) async {
@@ -153,6 +154,15 @@ class ConfigStorageService {
     await _secure.writeActiveConfigId(id);
   }
 
+  Future<String?> loadActiveSubscriptionId() async {
+    await StorageMigrationService.runIfNeeded();
+    return _secure.readActiveSubscriptionId();
+  }
+
+  Future<void> saveActiveSubscriptionId(String? id) async {
+    await _secure.writeActiveSubscriptionId(id);
+  }
+
   // ─── Subscriptions ───
 
   Future<List<Subscription>> loadSubscriptions() async {
@@ -167,7 +177,8 @@ class ConfigStorageService {
 
   Future<void> saveSubscriptions(List<Subscription> subs) async {
     await _secure.writeSubscriptionsRaw(
-        jsonEncode(subs.map((s) => s.toJson()).toList()));
+      jsonEncode(subs.map((s) => s.toJson()).toList()),
+    );
   }
 
   Future<void> addSubscription(Subscription sub) async {
@@ -203,7 +214,8 @@ class ConfigStorageService {
 
   /// Get configs that belong to a subscription
   Future<List<VpnConfig>> getConfigsForSubscription(
-      String subscriptionId) async {
+    String subscriptionId,
+  ) async {
     final configs = await loadConfigs();
     return configs.where((c) => c.subscriptionId == subscriptionId).toList();
   }

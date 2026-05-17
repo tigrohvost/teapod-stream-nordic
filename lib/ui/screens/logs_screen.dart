@@ -1,8 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../core/models/vpn_log_entry.dart';
 import '../../core/services/log_service.dart';
+import '../../providers/vpn_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/hero_panel.dart';
@@ -43,39 +46,50 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
   }
 
   void _scrollToBottom() {
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOut,
-      );
-    }
+    if (!_scrollController.hasClients) return;
+    _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
   }
 
-  Future<void> _copyToClipboard(List<VpnLogEntry> logs) async {
-    final text = logs
-        .map((e) => '[${_fmtTs(e.timestamp)}] [${_lvlTag(e.level)}] ${e.message}')
-        .join('\n');
-    await Clipboard.setData(ClipboardData(text: text));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Логи скопированы'), duration: Duration(seconds: 2)),
-      );
+  Future<void> _exportLogs() async {
+    final srcPath = await ref.read(vpnProvider.notifier).getLogFilePath();
+    if (srcPath == null) return;
+    final src = File(srcPath);
+    if (!src.existsSync() || src.lengthSync() == 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Лог пуст'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
     }
+    // Copy to cache dir — share_plus requires files in a shareable location
+    final now = DateTime.now();
+    final name =
+        'teapod_'
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}'
+        '_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}.txt';
+    final tmp = File('${(await getTemporaryDirectory()).path}/$name');
+    await src.copy(tmp.path);
+    await Share.shareXFiles([
+      XFile(tmp.path, mimeType: 'text/plain'),
+    ], subject: 'TeapodStream Log');
   }
 
   Color _lvlColor(LogLevel lvl, TeapodTokens t) => switch (lvl) {
-    LogLevel.error   => t.danger,
+    LogLevel.error => t.danger,
     LogLevel.warning => _warn,
-    LogLevel.info    => t.accent,
-    LogLevel.debug   => t.textMuted,
+    LogLevel.info => t.accent,
+    LogLevel.debug => t.textMuted,
   };
 
   String _lvlTag(LogLevel lvl) => switch (lvl) {
-    LogLevel.error   => 'ERR',
+    LogLevel.error => 'ERR',
     LogLevel.warning => 'WRN',
-    LogLevel.info    => 'INF',
-    LogLevel.debug   => 'DBG',
+    LogLevel.info => 'INF',
+    LogLevel.debug => 'DBG',
   };
 
   static String _fmtTs(DateTime ts) =>
@@ -111,14 +125,28 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
             // ── Console header strip ────────────────────────────
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.line)),
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('teapod.stream // logs',
-                      style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-                  Text('buf[$bufStr]',
-                      style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+                  Text(
+                    'teapod.stream // logs',
+                    style: AppTheme.mono(
+                      size: 10,
+                      color: t.textMuted,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  Text(
+                    'buf[$bufStr]',
+                    style: AppTheme.mono(
+                      size: 10,
+                      color: t.textMuted,
+                      letterSpacing: 1,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -130,8 +158,14 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
               title: 'LOGS',
               subtitle: Row(
                 children: [
-                  Text('last $lastTs · stream live',
-                      style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5)),
+                  Text(
+                    'last $lastTs · stream live',
+                    style: AppTheme.mono(
+                      size: 11,
+                      color: t.textDim,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
                   const SizedBox(width: 8),
                   _PulseDot(color: t.accent),
                 ],
@@ -140,14 +174,17 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                 children: [
                   _IconBtn(
                     t: t,
-                    icon: Icons.copy_rounded,
-                    onTap: logs.isEmpty ? null : () => _copyToClipboard(filtered),
+                    icon: Icons.upload_file_rounded,
+                    onTap: _exportLogs,
                   ),
                   const SizedBox(width: 6),
                   _IconBtn(
                     t: t,
                     icon: Icons.delete_sweep_rounded,
-                    onTap: () => ref.read(logServiceProvider.notifier).clear(),
+                    onTap: () {
+                      ref.read(logServiceProvider.notifier).clear();
+                      ref.read(vpnProvider.notifier).clearNativeLogs();
+                    },
                   ),
                 ],
               ),
@@ -156,14 +193,72 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
             // ── Filter tabs ──────────────────────────────────────
             IntrinsicHeight(
               child: Container(
-                decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: t.line)),
+                ),
                 child: Row(
                   children: [
-                    _FilterTab(t: t, label: 'ALL', count: logs.length,    active: _filters.isEmpty,                     color: t.text,      last: false, onTap: () => setState(() => _filters.clear())),
-                    _FilterTab(t: t, label: 'ERR', count: errCount,       active: _filters.contains(LogLevel.error),    color: t.danger,    last: false, onTap: () => setState(() => _filters.contains(LogLevel.error) ? _filters.remove(LogLevel.error) : _filters.add(LogLevel.error))),
-                    _FilterTab(t: t, label: 'WRN', count: wrnCount,       active: _filters.contains(LogLevel.warning),  color: _warn,       last: false, onTap: () => setState(() => _filters.contains(LogLevel.warning) ? _filters.remove(LogLevel.warning) : _filters.add(LogLevel.warning))),
-                    _FilterTab(t: t, label: 'INF', count: infCount,       active: _filters.contains(LogLevel.info),     color: t.accent,    last: false, onTap: () => setState(() => _filters.contains(LogLevel.info) ? _filters.remove(LogLevel.info) : _filters.add(LogLevel.info))),
-                    _FilterTab(t: t, label: 'DBG', count: dbgCount,       active: _filters.contains(LogLevel.debug),    color: t.textMuted, last: true,  onTap: () => setState(() => _filters.contains(LogLevel.debug) ? _filters.remove(LogLevel.debug) : _filters.add(LogLevel.debug))),
+                    _FilterTab(
+                      t: t,
+                      label: 'ALL',
+                      count: logs.length,
+                      active: _filters.isEmpty,
+                      color: t.text,
+                      last: false,
+                      onTap: () => setState(() => _filters.clear()),
+                    ),
+                    _FilterTab(
+                      t: t,
+                      label: 'ERR',
+                      count: errCount,
+                      active: _filters.contains(LogLevel.error),
+                      color: t.danger,
+                      last: false,
+                      onTap: () => setState(
+                        () => _filters.contains(LogLevel.error)
+                            ? _filters.remove(LogLevel.error)
+                            : _filters.add(LogLevel.error),
+                      ),
+                    ),
+                    _FilterTab(
+                      t: t,
+                      label: 'WRN',
+                      count: wrnCount,
+                      active: _filters.contains(LogLevel.warning),
+                      color: _warn,
+                      last: false,
+                      onTap: () => setState(
+                        () => _filters.contains(LogLevel.warning)
+                            ? _filters.remove(LogLevel.warning)
+                            : _filters.add(LogLevel.warning),
+                      ),
+                    ),
+                    _FilterTab(
+                      t: t,
+                      label: 'INF',
+                      count: infCount,
+                      active: _filters.contains(LogLevel.info),
+                      color: t.accent,
+                      last: false,
+                      onTap: () => setState(
+                        () => _filters.contains(LogLevel.info)
+                            ? _filters.remove(LogLevel.info)
+                            : _filters.add(LogLevel.info),
+                      ),
+                    ),
+                    _FilterTab(
+                      t: t,
+                      label: 'DBG',
+                      count: dbgCount,
+                      active: _filters.contains(LogLevel.debug),
+                      color: t.textMuted,
+                      last: true,
+                      onTap: () => setState(
+                        () => _filters.contains(LogLevel.debug)
+                            ? _filters.remove(LogLevel.debug)
+                            : _filters.add(LogLevel.debug),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -173,50 +268,62 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
             Expanded(
               child: filtered.isEmpty
                   ? Center(
-                      child: Text('[ stream empty ]',
-                          style: AppTheme.mono(size: 12, color: t.textMuted, letterSpacing: 1)),
+                      child: Text(
+                        '[ stream empty ]',
+                        style: AppTheme.mono(
+                          size: 12,
+                          color: t.textMuted,
+                          letterSpacing: 1,
+                        ),
+                      ),
                     )
                   : ListView.builder(
                       controller: _scrollController,
-                      itemCount: filtered.length + 1,
+                      itemCount: filtered.length,
                       itemBuilder: (ctx, i) {
-                        if (i == filtered.length) {
-                          return Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-                            child: Text('▌ stream active · ${filtered.length} entries',
-                                style: AppTheme.mono(size: 10, color: t.textMuted)),
-                          );
-                        }
                         final e = filtered[i];
                         final lvlColor = _lvlColor(e.level, t);
                         return Container(
                           padding: const EdgeInsets.fromLTRB(10, 6, 20, 6),
                           decoration: BoxDecoration(
-                              border: Border(bottom: BorderSide(color: t.lineSoft))),
+                            border: Border(
+                              bottom: BorderSide(color: t.lineSoft),
+                            ),
+                          ),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               SizedBox(
                                 width: 70,
-                                child: Text(_fmtTs(e.timestamp),
-                                    style: AppTheme.mono(size: 10, color: t.textMuted),
-                                    maxLines: 1),
+                                child: Text(
+                                  _fmtTs(e.timestamp),
+                                  style: AppTheme.mono(
+                                    size: 10,
+                                    color: t.textMuted,
+                                  ),
+                                  maxLines: 1,
+                                ),
                               ),
                               const SizedBox(width: 8),
                               SizedBox(
                                 width: 28,
-                                child: Text(_lvlTag(e.level),
-                                    style: AppTheme.mono(
-                                        size: 10,
-                                        weight: FontWeight.w700,
-                                        color: lvlColor,
-                                        letterSpacing: 0.5)),
+                                child: Text(
+                                  _lvlTag(e.level),
+                                  style: AppTheme.mono(
+                                    size: 10,
+                                    weight: FontWeight.w700,
+                                    color: lvlColor,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
                               ),
                               const SizedBox(width: 8),
                               Expanded(
-                                child: Text(e.message,
-                                    style: AppTheme.mono(size: 10, color: t.text),
-                                    softWrap: true),
+                                child: Text(
+                                  e.message,
+                                  style: AppTheme.mono(size: 10, color: t.text),
+                                  softWrap: true,
+                                ),
                               ),
                             ],
                           ),
@@ -232,18 +339,34 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                 _scrollToBottom();
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                decoration: BoxDecoration(border: Border(top: BorderSide(color: t.line))),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: t.line)),
+                ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(_autoScroll ? '● auto-scroll' : '○ paused — tap to resume',
-                        style: AppTheme.mono(
-                            size: 10,
-                            color: _autoScroll ? t.accent : t.textMuted,
-                            letterSpacing: 1)),
-                    Text('${filtered.length} / ${logs.length}',
-                        style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+                    Text(
+                      _autoScroll
+                          ? '● auto-scroll'
+                          : '○ paused — tap to resume',
+                      style: AppTheme.mono(
+                        size: 10,
+                        color: _autoScroll ? t.accent : t.textMuted,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    Text(
+                      '${filtered.length} / ${logs.length}',
+                      style: AppTheme.mono(
+                        size: 10,
+                        color: t.textMuted,
+                        letterSpacing: 1,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -295,15 +418,23 @@ class _FilterTab extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(label,
-                  style: AppTheme.mono(
-                      size: 10,
-                      weight: active ? FontWeight.w700 : FontWeight.normal,
-                      color: active ? color : t.textDim,
-                      letterSpacing: 1)),
+              Text(
+                label,
+                style: AppTheme.mono(
+                  size: 10,
+                  weight: active ? FontWeight.w700 : FontWeight.normal,
+                  color: active ? color : t.textDim,
+                  letterSpacing: 1,
+                ),
+              ),
               const SizedBox(height: 2),
-              Text('$count',
-                  style: AppTheme.mono(size: 9, color: active ? color : t.textMuted)),
+              Text(
+                '$count',
+                style: AppTheme.mono(
+                  size: 9,
+                  color: active ? color : t.textMuted,
+                ),
+              ),
             ],
           ),
         ),
@@ -328,10 +459,12 @@ class _IconBtn extends StatelessWidget {
       child: Container(
         width: 32,
         height: 32,
-        decoration: BoxDecoration(
-          border: Border.all(color: t.line),
+        decoration: BoxDecoration(border: Border.all(color: t.line)),
+        child: Icon(
+          icon,
+          size: 14,
+          color: onTap != null ? t.textDim : t.textMuted.withAlpha(0x66),
         ),
-        child: Icon(icon, size: 14, color: onTap != null ? t.textDim : t.textMuted.withAlpha(0x66)),
       ),
     );
   }
@@ -347,14 +480,17 @@ class _PulseDot extends StatefulWidget {
   State<_PulseDot> createState() => _PulseDotState();
 }
 
-class _PulseDotState extends State<_PulseDot> with SingleTickerProviderStateMixin {
+class _PulseDotState extends State<_PulseDot>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))
-      ..repeat(reverse: true);
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat(reverse: true);
   }
 
   @override
@@ -375,4 +511,3 @@ class _PulseDotState extends State<_PulseDot> with SingleTickerProviderStateMixi
     );
   }
 }
-

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/interfaces/vpn_engine.dart';
 import '../../core/models/vpn_config.dart';
+import '../../core/models/vpn_log_entry.dart';
 import 'xray_config_builder.dart';
 
 /// XrayEngine is a thin MethodChannel client — it sends commands to the native
@@ -16,7 +17,17 @@ class XrayEngine implements VpnEngine {
 
   @override
   Future<void> connect(VpnConfig config, VpnEngineOptions options) async {
-    final xrayConfig = XrayConfigBuilder.buildJson(config, options);
+    final String xrayConfig;
+
+    if (config.rawXrayConfig != null) {
+      xrayConfig = XrayConfigBuilder.mergeWithRaw(
+        config.rawXrayConfig!,
+        options,
+      );
+    } else {
+      xrayConfig = XrayConfigBuilder.buildJson(config, options);
+    }
+
     await _channel.invokeMethod('connect', {
       'xrayConfig': xrayConfig,
       'socksPort': options.socksPort,
@@ -29,6 +40,7 @@ class XrayEngine implements VpnEngine {
       'showNotification': options.showNotification,
       'killSwitch': options.killSwitch,
       'allowIcmp': options.allowIcmp,
+      'mtu': options.mtu,
       if (config.ssPrefix != null) 'ssPrefix': config.ssPrefix,
     });
   }
@@ -40,6 +52,7 @@ class XrayEngine implements VpnEngine {
 
   @override
   Future<int?> pingConfig(VpnConfig config) async {
+    if (config.address.isEmpty || config.address == 'managed') return null;
     try {
       final result = await _channel.invokeMethod<int>('ping', {
         'address': config.address,
@@ -79,11 +92,20 @@ class XrayEngine implements VpnEngine {
   }
 
   /// Get current VPN state with SOCKS credentials (for sync on app start).
-  Future<({VpnState state, int socksPort, String socksUser, String socksPassword})>
-      getVpnState() async {
+  Future<
+    ({
+      VpnState state,
+      int socksPort,
+      String socksUser,
+      String socksPassword,
+      int connectedAtMs,
+    })
+  >
+  getVpnState() async {
     try {
-      final result =
-          await _channel.invokeMethod<Map<Object?, Object?>>('getState');
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>(
+        'getState',
+      );
       if (result != null) {
         final stateStr = result['state'] as String? ?? 'disconnected';
         return (
@@ -91,18 +113,75 @@ class XrayEngine implements VpnEngine {
           socksPort: result['socksPort'] as int? ?? 0,
           socksUser: result['socksUser'] as String? ?? '',
           socksPassword: result['socksPassword'] as String? ?? '',
+          connectedAtMs: (result['connectedAtMs'] as num?)?.toInt() ?? 0,
         );
       }
     } catch (_) {}
-    return (state: VpnState.disconnected, socksPort: 0, socksUser: '', socksPassword: '');
+    return (
+      state: VpnState.disconnected,
+      socksPort: 0,
+      socksUser: '',
+      socksPassword: '',
+      connectedAtMs: 0,
+    );
+  }
+
+  /// Returns the absolute path to the native log file (filesDir/vpn_log.txt).
+  Future<String?> getLogFilePath() async {
+    try {
+      return await _channel.invokeMethod<String>('getLogFilePath');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Read persisted log file from native filesDir.
+  Future<List<VpnLogEntry>> getLogs() async {
+    try {
+      final lines = await _channel.invokeMethod<List<Object?>>('getLogs');
+      if (lines == null) return [];
+      return lines
+          .whereType<String>()
+          .map((line) {
+            final idx1 = line.indexOf('|');
+            final idx2 = line.indexOf('|', idx1 + 1);
+            if (idx1 < 0 || idx2 < 0) return null;
+            final ts = int.tryParse(line.substring(0, idx1));
+            if (ts == null) return null;
+            final levelStr = line.substring(idx1 + 1, idx2);
+            final message = line.substring(idx2 + 1);
+            final level = LogLevel.values.firstWhere(
+              (e) => e.name == levelStr,
+              orElse: () => LogLevel.info,
+            );
+            return VpnLogEntry(
+              timestamp: DateTime.fromMillisecondsSinceEpoch(ts),
+              level: level,
+              message: message,
+              source: 'xray',
+            );
+          })
+          .whereType<VpnLogEntry>()
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Clear the persisted log file on native side.
+  Future<void> clearLogs() async {
+    try {
+      await _channel.invokeMethod<void>('clearLogs');
+    } catch (_) {}
   }
 
   /// Get current stats (for background polling).
   Future<({int upload, int download, int uploadSpeed, int downloadSpeed})>
-      getStats() async {
+  getStats() async {
     try {
-      final result =
-          await _channel.invokeMethod<Map<Object?, Object?>>('getStats');
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>(
+        'getStats',
+      );
       if (result != null) {
         return (
           upload: (result['upload'] as num?)?.toInt() ?? 0,
@@ -118,14 +197,18 @@ class XrayEngine implements VpnEngine {
   /// Get stats history for chart.
   Future<List<Map<String, int>>> getStatsHistory() async {
     try {
-      final result = await _channel.invokeMethod<List<Object?>>('getStatsHistory');
+      final result = await _channel.invokeMethod<List<Object?>>(
+        'getStatsHistory',
+      );
       if (result != null) {
         return result
             .whereType<Map<Object?, Object?>>()
-            .map((m) => {
-                  'uploadSpeed': (m['uploadSpeed'] as num?)?.toInt() ?? 0,
-                  'downloadSpeed': (m['downloadSpeed'] as num?)?.toInt() ?? 0,
-                })
+            .map(
+              (m) => {
+                'uploadSpeed': (m['uploadSpeed'] as num?)?.toInt() ?? 0,
+                'downloadSpeed': (m['downloadSpeed'] as num?)?.toInt() ?? 0,
+              },
+            )
             .toList();
       }
     } catch (_) {}
@@ -133,11 +216,11 @@ class XrayEngine implements VpnEngine {
   }
 
   VpnState _parseState(String s) => switch (s) {
-        'connecting' => VpnState.connecting,
-        'connected' => VpnState.connected,
-        'disconnecting' => VpnState.disconnecting,
-        'disconnected' => VpnState.disconnected,
-        'error' => VpnState.error,
-        _ => VpnState.disconnected,
-      };
+    'connecting' => VpnState.connecting,
+    'connected' => VpnState.connected,
+    'disconnecting' => VpnState.disconnecting,
+    'disconnected' => VpnState.disconnected,
+    'error' => VpnState.error,
+    _ => VpnState.disconnected,
+  };
 }

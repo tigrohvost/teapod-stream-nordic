@@ -10,6 +10,7 @@ class StorageSecureService {
   static const _profilesKey = 'profiles_v1';
   static const _configsKey = 'vpn_configs_v2';
   static const _activeConfigKey = 'active_config_id_v2';
+  static const _activeSubKey = 'active_subscription_id_v2';
   static const _subscriptionsKey = 'subscriptions_v2';
   static const _socksUserKey = 'socks_user_v2';
   static const _socksPasswordKey = 'socks_password_v2';
@@ -28,6 +29,12 @@ class StorageSecureService {
   Future<void> writeActiveConfigId(String? id) => id == null
       ? _storage.delete(key: _activeConfigKey)
       : _storage.write(key: _activeConfigKey, value: id);
+
+  Future<String?> readActiveSubscriptionId() =>
+      _storage.read(key: _activeSubKey);
+  Future<void> writeActiveSubscriptionId(String? id) => id == null
+      ? _storage.delete(key: _activeSubKey)
+      : _storage.write(key: _activeSubKey, value: id);
 
   Future<String?> readSubscriptionsRaw() =>
       _storage.read(key: _subscriptionsKey);

@@ -7,7 +7,8 @@ class _CircularBuffer {
   int _head = 0;
   int _count = 0;
 
-  _CircularBuffer(int capacity) : _buffer = List<VpnLogEntry?>.filled(capacity, null);
+  _CircularBuffer(int capacity)
+    : _buffer = List<VpnLogEntry?>.filled(capacity, null);
 
   void add(VpnLogEntry entry) {
     _buffer[_head] = entry;
@@ -15,11 +16,20 @@ class _CircularBuffer {
     if (_count < _buffer.length) _count++;
   }
 
+  void clear() {
+    _head = 0;
+    _count = 0;
+    _buffer.fillRange(0, _buffer.length, null);
+  }
+
   List<VpnLogEntry> toList() {
     if (_count < _buffer.length) {
       return _buffer.whereType<VpnLogEntry>().toList();
     }
-    return List.generate(_buffer.length, (i) => _buffer[(_head + i) % _buffer.length]!);
+    return List.generate(
+      _buffer.length,
+      (i) => _buffer[(_head + i) % _buffer.length]!,
+    );
   }
 }
 
@@ -49,11 +59,20 @@ class LogService extends Notifier<List<VpnLogEntry>> {
   void addDebug(String message, {String? source}) =>
       add(VpnLogEntry.debug(message, source: source));
 
+  void loadFromEntries(List<VpnLogEntry> entries) {
+    _buffer.clear();
+    for (final e in entries) {
+      _buffer.add(e);
+    }
+    state = _buffer.toList();
+  }
+
   void clear() {
-    _buffer = _CircularBuffer(AppConstants.maxLogEntries);
+    _buffer.clear();
     state = [];
   }
 }
 
-final logServiceProvider =
-    NotifierProvider<LogService, List<VpnLogEntry>>(LogService.new);
+final logServiceProvider = NotifierProvider<LogService, List<VpnLogEntry>>(
+  LogService.new,
+);

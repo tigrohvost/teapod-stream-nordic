@@ -33,6 +33,10 @@ class VpnEngineOptions {
   final bool showNotification;
   final bool killSwitch;
   final RoutingSettings routing;
+  final bool sniffingEnabled;
+  final int mtu;
+  final DnsQueryStrategy dnsQueryStrategy;
+  final bool blockQuic;
 
   const VpnEngineOptions({
     required this.socksPort,
@@ -45,11 +49,18 @@ class VpnEngineOptions {
     this.enableUdp = true,
     this.allowIcmp = false,
     this.dnsMode = DnsMode.proxy,
-    this.dnsServer = const DnsServerConfig(type: DnsType.udp, address: '1.1.1.1'),
+    this.dnsServer = const DnsServerConfig(
+      type: DnsType.udp,
+      address: '1.1.1.1',
+    ),
     this.vpnMode = VpnMode.allExcept,
     this.proxyOnly = false,
     this.showNotification = true,
     this.killSwitch = false,
     this.routing = const RoutingSettings(),
+    this.sniffingEnabled = true,
+    this.mtu = 1500,
+    this.dnsQueryStrategy = DnsQueryStrategy.ipv4Only,
+    this.blockQuic = false,
   });
 }

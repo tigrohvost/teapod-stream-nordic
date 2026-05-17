@@ -9,11 +9,55 @@ import 'update_service.dart' show UpdateChannel;
 
 /// Режим работы VPN
 enum VpnMode {
-  allExcept,    // Все через VPN, кроме выбранных
+  allExcept, // Все через VPN, кроме выбранных
   onlySelected, // Только выбранные через VPN, остальные мимо
 }
 
 enum FontScale { normal, large }
+
+enum DnsQueryStrategy { ipv4Only, ipv6Only, auto }
+
+class GeoPresets {
+  static const _lsGeoip =
+      'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat';
+  static const _lsGeosite =
+      'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat';
+  static const _rfGeoip =
+      'https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat';
+  static const _rfGeosite =
+      'https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat';
+  static const _v2Geoip =
+      'https://github.com/v2fly/geoip/releases/latest/download/geoip.dat';
+  static const _v2Geosite =
+      'https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat';
+
+  static const defaultGeoipUrl = _lsGeoip;
+  static const defaultGeositeUrl = _lsGeosite;
+
+  static const loyalsoldier = (
+    name: 'Loyalsoldier',
+    geoipUrl: _lsGeoip,
+    geositeUrl: _lsGeosite,
+  );
+  static const runetfreedom = (
+    name: 'runetfreedom',
+    geoipUrl: _rfGeoip,
+    geositeUrl: _rfGeosite,
+  );
+  static const v2fly = (
+    name: 'v2fly',
+    geoipUrl: _v2Geoip,
+    geositeUrl: _v2Geosite,
+  );
+  static final all = [loyalsoldier, runetfreedom, v2fly];
+
+  static String nameOf(String geoipUrl, String geositeUrl) {
+    for (final p in all) {
+      if (p.geoipUrl == geoipUrl && p.geositeUrl == geositeUrl) return p.name;
+    }
+    return 'custom';
+  }
+}
 
 class AppSettings {
   final int socksPort;
@@ -40,6 +84,14 @@ class AppSettings {
   final RoutingSettings routing;
   final UpdateChannel updateChannel;
   final FontScale fontScale;
+  final String geoipUrl;
+  final String geositeUrl;
+  final bool sniffingEnabled;
+  final int mtu;
+  final bool subAutoRefresh;
+  final int subAutoRefreshHours;
+  final DnsQueryStrategy dnsQueryStrategy;
+  final bool blockQuic;
 
   const AppSettings({
     this.socksPort = AppConstants.defaultSocksPort,
@@ -66,6 +118,14 @@ class AppSettings {
     this.routing = const RoutingSettings(),
     this.updateChannel = UpdateChannel.stable,
     this.fontScale = FontScale.normal,
+    this.geoipUrl = GeoPresets.defaultGeoipUrl,
+    this.geositeUrl = GeoPresets.defaultGeositeUrl,
+    this.sniffingEnabled = true,
+    this.mtu = 1500,
+    this.subAutoRefresh = false,
+    this.subAutoRefreshHours = 6,
+    this.dnsQueryStrategy = DnsQueryStrategy.ipv4Only,
+    this.blockQuic = false,
   });
 
   AppSettings copyWith({
@@ -93,6 +153,14 @@ class AppSettings {
     RoutingSettings? routing,
     UpdateChannel? updateChannel,
     FontScale? fontScale,
+    String? geoipUrl,
+    String? geositeUrl,
+    bool? sniffingEnabled,
+    int? mtu,
+    bool? subAutoRefresh,
+    int? subAutoRefreshHours,
+    DnsQueryStrategy? dnsQueryStrategy,
+    bool? blockQuic,
   }) {
     return AppSettings(
       socksPort: socksPort ?? this.socksPort,
@@ -100,7 +168,8 @@ class AppSettings {
       excludedPackages: excludedPackages ?? this.excludedPackages,
       includedPackages: includedPackages ?? this.includedPackages,
       vpnMode: vpnMode ?? this.vpnMode,
-      splitTunnelingEnabled: splitTunnelingEnabled ?? this.splitTunnelingEnabled,
+      splitTunnelingEnabled:
+          splitTunnelingEnabled ?? this.splitTunnelingEnabled,
       randomPort: randomPort ?? this.randomPort,
       autoConnect: autoConnect ?? this.autoConnect,
       dnsMode: dnsMode ?? this.dnsMode,
@@ -119,6 +188,14 @@ class AppSettings {
       routing: routing ?? this.routing,
       updateChannel: updateChannel ?? this.updateChannel,
       fontScale: fontScale ?? this.fontScale,
+      geoipUrl: geoipUrl ?? this.geoipUrl,
+      geositeUrl: geositeUrl ?? this.geositeUrl,
+      sniffingEnabled: sniffingEnabled ?? this.sniffingEnabled,
+      mtu: mtu ?? this.mtu,
+      subAutoRefresh: subAutoRefresh ?? this.subAutoRefresh,
+      subAutoRefreshHours: subAutoRefreshHours ?? this.subAutoRefreshHours,
+      dnsQueryStrategy: dnsQueryStrategy ?? this.dnsQueryStrategy,
+      blockQuic: blockQuic ?? this.blockQuic,
     );
   }
 
@@ -147,6 +224,14 @@ class AppSettings {
     'routing': routing.toJson(),
     'updateChannel': updateChannel.name,
     'fontScale': fontScale.name,
+    'geoipUrl': geoipUrl,
+    'geositeUrl': geositeUrl,
+    'sniffingEnabled': sniffingEnabled,
+    'mtu': mtu,
+    'subAutoRefresh': subAutoRefresh,
+    'subAutoRefreshHours': subAutoRefreshHours,
+    'dnsQueryStrategy': dnsQueryStrategy.name,
+    'blockQuic': blockQuic,
   };
 
   static AppSettings fromJson(Map<String, dynamic> json) {
@@ -154,16 +239,30 @@ class AppSettings {
     return AppSettings(
       socksPort: json['socksPort'] as int? ?? AppConstants.defaultSocksPort,
       logLevel: LogLevel.values.firstWhere(
-        (e) => e.name == json['logLevel'], orElse: () => LogLevel.info),
-      excludedPackages: (json['excludedPackages'] as List<dynamic>?)?.cast<String>().toSet() ?? {},
-      includedPackages: (json['includedPackages'] as List<dynamic>?)?.cast<String>().toSet() ?? {},
+        (e) => e.name == json['logLevel'],
+        orElse: () => LogLevel.info,
+      ),
+      excludedPackages:
+          (json['excludedPackages'] as List<dynamic>?)
+              ?.cast<String>()
+              .toSet() ??
+          {},
+      includedPackages:
+          (json['includedPackages'] as List<dynamic>?)
+              ?.cast<String>()
+              .toSet() ??
+          {},
       vpnMode: VpnMode.values.firstWhere(
-        (e) => e.name == json['vpnMode'], orElse: () => VpnMode.onlySelected),
+        (e) => e.name == json['vpnMode'],
+        orElse: () => VpnMode.onlySelected,
+      ),
       splitTunnelingEnabled: json['splitTunnelingEnabled'] as bool? ?? false,
       randomPort: json['randomPort'] as bool? ?? true,
       autoConnect: json['autoConnect'] as bool? ?? false,
       dnsMode: DnsMode.values.firstWhere(
-        (e) => e.name == json['dnsMode'], orElse: () => DnsMode.proxy),
+        (e) => e.name == json['dnsMode'],
+        orElse: () => DnsMode.proxy,
+      ),
       dnsPreset: json['dnsPreset'] as String? ?? 'cf_udp',
       customDnsAddress: json['customDnsAddress'] as String? ?? '1.1.1.1',
       customDnsType: json['customDnsType'] as String? ?? 'udp',
@@ -176,18 +275,39 @@ class AppSettings {
       showNotification: json['showNotification'] as bool? ?? true,
       killSwitchEnabled: json['killSwitchEnabled'] as bool? ?? false,
       hwidEnabled: json['hwidEnabled'] as bool? ?? false,
-      routing: routingJson != null ? RoutingSettings.fromJson(routingJson) : const RoutingSettings(),
+      routing: routingJson != null
+          ? RoutingSettings.fromJson(routingJson)
+          : const RoutingSettings(),
       updateChannel: UpdateChannel.values.firstWhere(
-        (e) => e.name == json['updateChannel'], orElse: () => UpdateChannel.stable),
+        (e) => e.name == json['updateChannel'],
+        orElse: () => UpdateChannel.stable,
+      ),
       fontScale: FontScale.values.firstWhere(
-        (e) => e.name == json['fontScale'], orElse: () => FontScale.normal),
+        (e) => e.name == json['fontScale'],
+        orElse: () => FontScale.normal,
+      ),
+      geoipUrl: json['geoipUrl'] as String? ?? GeoPresets.defaultGeoipUrl,
+      geositeUrl: json['geositeUrl'] as String? ?? GeoPresets.defaultGeositeUrl,
+      sniffingEnabled: json['sniffingEnabled'] as bool? ?? true,
+      mtu: json['mtu'] as int? ?? 1500,
+      subAutoRefresh: json['subAutoRefresh'] as bool? ?? false,
+      subAutoRefreshHours: json['subAutoRefreshHours'] as int? ?? 6,
+      dnsQueryStrategy: DnsQueryStrategy.values.firstWhere(
+        (e) => e.name == json['dnsQueryStrategy'],
+        orElse: () => DnsQueryStrategy.ipv4Only,
+      ),
+      blockQuic: json['blockQuic'] as bool? ?? false,
     );
   }
 
   DnsServerConfig get dnsServer => DnsServerConfig.fromPreset(
     dnsPreset,
     customAddress: customDnsAddress,
-    customType: customDnsType == 'doh' ? DnsType.doh : customDnsType == 'dot' ? DnsType.dot : DnsType.udp,
+    customType: customDnsType == 'doh'
+        ? DnsType.doh
+        : customDnsType == 'dot'
+        ? DnsType.dot
+        : DnsType.udp,
   );
 }
 
@@ -220,8 +340,17 @@ class SettingsService {
   static const _routingGeositeEnabledKey = 'routing_geosite_enabled';
   static const _routingGeositeCodesKey = 'routing_geosite_codes';
   static const _routingAdBlockEnabledKey = 'routing_adblock_enabled';
+  static const _routingSitesEnabledKey = 'routing_sites_enabled';
+  static const _routingSitesKey = 'routing_sites';
+  static const _routingRuServicesKey = 'routing_ru_services_enabled';
   static const _updateChannelKey = 'update_channel';
   static const _fontScaleKey = 'font_scale';
+  static const _sniffingEnabledKey = 'sniffing_enabled';
+  static const _mtuKey = 'mtu';
+  static const _subAutoRefreshKey = 'sub_auto_refresh';
+  static const _subAutoRefreshHoursKey = 'sub_auto_refresh_hours';
+  static const _dnsQueryStrategyKey = 'dns_query_strategy';
+  static const _blockQuicKey = 'block_quic';
 
   final _secure = StorageSecureService();
 
@@ -271,6 +400,15 @@ class SettingsService {
         (e) => e.name == prefs.getString(_fontScaleKey),
         orElse: () => FontScale.normal,
       ),
+      sniffingEnabled: prefs.getBool(_sniffingEnabledKey) ?? true,
+      mtu: prefs.getInt(_mtuKey) ?? 1500,
+      subAutoRefresh: prefs.getBool(_subAutoRefreshKey) ?? false,
+      subAutoRefreshHours: prefs.getInt(_subAutoRefreshHoursKey) ?? 6,
+      dnsQueryStrategy: DnsQueryStrategy.values.firstWhere(
+        (e) => e.name == prefs.getString(_dnsQueryStrategyKey),
+        orElse: () => DnsQueryStrategy.ipv4Only,
+      ),
+      blockQuic: prefs.getBool(_blockQuicKey) ?? false,
     );
   }
 
@@ -288,6 +426,9 @@ class SettingsService {
       geositeEnabled: prefs.getBool(_routingGeositeEnabledKey) ?? false,
       geositeCodes: prefs.getStringList(_routingGeositeCodesKey) ?? [],
       adBlockEnabled: prefs.getBool(_routingAdBlockEnabledKey) ?? false,
+      sitesEnabled: prefs.getBool(_routingSitesEnabledKey) ?? false,
+      sites: prefs.getStringList(_routingSitesKey) ?? [],
+      ruServicesEnabled: prefs.getBool(_routingRuServicesKey) ?? false,
     );
   }
 
@@ -296,9 +437,13 @@ class SettingsService {
     await prefs.setInt(_socksPortKey, settings.socksPort);
     await prefs.setString(_logLevelKey, settings.logLevel.name);
     await prefs.setStringList(
-        _excludedPackagesKey, settings.excludedPackages.toList());
+      _excludedPackagesKey,
+      settings.excludedPackages.toList(),
+    );
     await prefs.setStringList(
-        _includedPackagesKey, settings.includedPackages.toList());
+      _includedPackagesKey,
+      settings.includedPackages.toList(),
+    );
     await prefs.setString(_vpnModeKey, settings.vpnMode.name);
     await prefs.setBool(_splitTunnelingKey, settings.splitTunnelingEnabled);
     await prefs.setBool(_randomPortKey, settings.randomPort);
@@ -314,18 +459,51 @@ class SettingsService {
     await prefs.setBool(_showNotificationKey, settings.showNotification);
     await prefs.setBool(_killSwitchKey, settings.killSwitchEnabled);
     await prefs.setBool(_hwidEnabledKey, settings.hwidEnabled);
-    await prefs.setString(_routingDirectionKey, settings.routing.direction.name);
+    await prefs.setString(
+      _routingDirectionKey,
+      settings.routing.direction.name,
+    );
     await prefs.setBool(_routingBypassLocalKey, settings.routing.bypassLocal);
     await prefs.setBool(_routingGeoEnabledKey, settings.routing.geoEnabled);
     await prefs.setStringList(_routingGeoCodesKey, settings.routing.geoCodes);
-    await prefs.setBool(_routingDomainEnabledKey, settings.routing.domainEnabled);
-    await prefs.setStringList(_routingDomainZonesKey, settings.routing.domainZones);
-    await prefs.setBool(_routingGeositeEnabledKey, settings.routing.geositeEnabled);
-    await prefs.setStringList(_routingGeositeCodesKey, settings.routing.geositeCodes);
-    await prefs.setBool(_routingAdBlockEnabledKey, settings.routing.adBlockEnabled);
+    await prefs.setBool(
+      _routingDomainEnabledKey,
+      settings.routing.domainEnabled,
+    );
+    await prefs.setStringList(
+      _routingDomainZonesKey,
+      settings.routing.domainZones,
+    );
+    await prefs.setBool(
+      _routingGeositeEnabledKey,
+      settings.routing.geositeEnabled,
+    );
+    await prefs.setStringList(
+      _routingGeositeCodesKey,
+      settings.routing.geositeCodes,
+    );
+    await prefs.setBool(
+      _routingAdBlockEnabledKey,
+      settings.routing.adBlockEnabled,
+    );
+    await prefs.setBool(_routingSitesEnabledKey, settings.routing.sitesEnabled);
+    await prefs.setStringList(_routingSitesKey, settings.routing.sites);
+    await prefs.setBool(
+      _routingRuServicesKey,
+      settings.routing.ruServicesEnabled,
+    );
     await prefs.setString(_updateChannelKey, settings.updateChannel.name);
     await prefs.setString(_fontScaleKey, settings.fontScale.name);
+    await prefs.setBool(_sniffingEnabledKey, settings.sniffingEnabled);
+    await prefs.setInt(_mtuKey, settings.mtu);
+    await prefs.setBool(_subAutoRefreshKey, settings.subAutoRefresh);
+    await prefs.setInt(_subAutoRefreshHoursKey, settings.subAutoRefreshHours);
+    await prefs.setString(_dnsQueryStrategyKey, settings.dnsQueryStrategy.name);
+    await prefs.setBool(_blockQuicKey, settings.blockQuic);
     // SOCKS credentials go to encrypted storage
-    await _secure.writeSocksCredentials(settings.socksUser, settings.socksPassword);
+    await _secure.writeSocksCredentials(
+      settings.socksUser,
+      settings.socksPassword,
+    );
   }
 }

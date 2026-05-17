@@ -4,17 +4,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../providers/app_info_provider.dart';
 import '../../providers/update_provider.dart';
-import '../../core/services/update_service.dart' show UpdateChannel, UpdateInfo;
+import '../../core/constants/app_constants.dart';
 import '../../core/models/dns_config.dart';
+import '../../core/services/update_service.dart' show UpdateChannel, UpdateInfo;
 import '../../core/services/settings_service.dart';
 import 'routing_screen.dart';
 import 'profiles_screen.dart';
+import 'dns_settings_screen.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/vpn_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../providers/profile_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
+import '../widgets/settings_shared.dart';
 import 'split_tunnel_screen.dart';
 
 // ── Screen ────────────────────────────────────────────────────────
@@ -37,7 +40,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Future<void> _loadBinaryVersions() async {
     try {
-      const channel = MethodChannel('com.teapodstream/vpn');
+      const channel = MethodChannel(AppConstants.methodChannel);
       final result = await channel.invokeMethod<Map>('getBinaryVersions');
       if (result != null && mounted) {
         setState(() {
@@ -45,7 +48,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         });
       }
     } catch (_) {
-      if (mounted) setState(() { _xrayVersion = '—'; });
+      if (mounted)
+        setState(() {
+          _xrayVersion = '—';
+        });
     }
   }
 
@@ -53,8 +59,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget build(BuildContext context) {
     final settingsAsync = ref.watch(settingsProvider);
     final vpnState = ref.watch(vpnProvider);
-    final profileState = ref.watch(profileProvider).maybeWhen(data: (d) => d, orElse: () => null);
-    final version = ref.watch(appVersionProvider).maybeWhen(data: (v) => v, orElse: () => 'v?');
+    final profileState = ref
+        .watch(profileProvider)
+        .maybeWhen(data: (d) => d, orElse: () => null);
+    final version = ref
+        .watch(appVersionProvider)
+        .maybeWhen(data: (v) => v, orElse: () => 'v?');
     final t = Theme.of(context).extension<TeapodTokens>()!;
     final vpnLocked = vpnState.isConnected || vpnState.isConnecting;
     final profileReadonly = profileState?.isReadonly ?? false;
@@ -74,10 +84,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             Expanded(
               child: settingsAsync.when(
                 loading: () => Center(
-                    child: CircularProgressIndicator(color: t.accent, strokeWidth: 1.5)),
+                  child: CircularProgressIndicator(
+                    color: t.accent,
+                    strokeWidth: 1.5,
+                  ),
+                ),
                 error: (e, _) => Center(
-                    child: Text('Ошибка: $e',
-                        style: AppTheme.mono(size: 12, color: t.danger))),
+                  child: Text(
+                    'Ошибка: $e',
+                    style: AppTheme.mono(size: 12, color: t.danger),
+                  ),
+                ),
                 data: (settings) => _SettingsBody(
                   settings: settings,
                   isConnected: vpnLocked,
@@ -106,14 +123,28 @@ class _SetHeaderStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.line)),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text('teapod.stream // config',
-              style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-          Text('sys.state [${locked ? 'locked' : 'open'}]',
-              style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+          Text(
+            'teapod.stream // config',
+            style: AppTheme.mono(
+              size: 10,
+              color: t.textMuted,
+              letterSpacing: 1,
+            ),
+          ),
+          Text(
+            'sys.state [${locked ? 'locked' : 'open'}]',
+            style: AppTheme.mono(
+              size: 10,
+              color: t.textMuted,
+              letterSpacing: 1,
+            ),
+          ),
         ],
       ),
     );
@@ -143,10 +174,12 @@ class _SetHeroPanel extends StatelessWidget {
     final borderColor = locked ? _gold : t.line;
 
     return Container(
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.line)),
+      ),
       child: Stack(
         children: [
-          _SetCornerTicks(t: t, color: locked ? _gold : t.textMuted),
+          SetCornerTicks(t: t, color: locked ? _gold : t.textMuted),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
             child: Row(
@@ -156,21 +189,37 @@ class _SetHeroPanel extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('ПАРАМЕТРЫ · ЛОКАЛЬНЫЙ ПРОФИЛЬ',
-                          style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1.5)),
+                      Text(
+                        'ПАРАМЕТРЫ · ЛОКАЛЬНЫЙ ПРОФИЛЬ',
+                        style: AppTheme.mono(
+                          size: 10,
+                          color: t.textMuted,
+                          letterSpacing: 1.5,
+                        ),
+                      ),
                       const SizedBox(height: 8),
-                      Text(locked ? 'LOCKED' : 'CONFIG',
-                          style: AppTheme.sans(
-                              size: 30, weight: FontWeight.w500,
-                              color: wordColor, letterSpacing: -1, height: 1)),
+                      Text(
+                        locked ? 'LOCKED' : 'CONFIG',
+                        style: AppTheme.sans(
+                          size: 30,
+                          weight: FontWeight.w500,
+                          color: wordColor,
+                          letterSpacing: -1,
+                          height: 1,
+                        ),
+                      ),
                       const SizedBox(height: 6),
                       Text(
                         locked
                             ? (profileReadonly
-                                ? 'профиль заблокирован · только чтение'
-                                : 'отключите VPN чтобы изменить параметры')
+                                  ? 'профиль заблокирован · только чтение'
+                                  : 'отключите VPN чтобы изменить параметры')
                             : 'профиль: $profileName · автосохранение',
-                        style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5),
+                        style: AppTheme.mono(
+                          size: 11,
+                          color: t.textDim,
+                          letterSpacing: 0.5,
+                        ),
                       ),
                     ],
                   ),
@@ -186,10 +235,16 @@ class _SetHeroPanel extends StatelessWidget {
                   child: Stack(
                     children: [
                       if (locked) ...[
-                        Positioned(top: -1, left: -1,
-                            child: _LockCorner(color: _gold, isTop: true)),
-                        Positioned(bottom: -1, right: -1,
-                            child: _LockCorner(color: _gold, isTop: false)),
+                        Positioned(
+                          top: -1,
+                          left: -1,
+                          child: _LockCorner(color: _gold, isTop: true),
+                        ),
+                        Positioned(
+                          bottom: -1,
+                          right: -1,
+                          child: _LockCorner(color: _gold, isTop: false),
+                        ),
                       ],
                       Center(
                         child: Column(
@@ -197,9 +252,14 @@ class _SetHeroPanel extends StatelessWidget {
                           children: [
                             _LockIcon(color: lockColor, open: !locked),
                             const SizedBox(height: 2),
-                            Text(locked ? 'ro' : 'rw',
-                                style: AppTheme.mono(
-                                    size: 8, color: lockColor, letterSpacing: 1)),
+                            Text(
+                              locked ? 'ro' : 'rw',
+                              style: AppTheme.mono(
+                                size: 8,
+                                color: lockColor,
+                                letterSpacing: 1,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -234,13 +294,24 @@ class _LockCornerPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = color..strokeWidth = 2..style = PaintingStyle.stroke;
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
     if (isTop) {
       canvas.drawLine(Offset.zero, Offset(size.width, 0), p);
       canvas.drawLine(Offset.zero, Offset(0, size.height), p);
     } else {
-      canvas.drawLine(Offset(0, size.height), Offset(size.width, size.height), p);
-      canvas.drawLine(Offset(size.width, 0), Offset(size.width, size.height), p);
+      canvas.drawLine(
+        Offset(0, size.height),
+        Offset(size.width, size.height),
+        p,
+      );
+      canvas.drawLine(
+        Offset(size.width, 0),
+        Offset(size.width, size.height),
+        p,
+      );
     }
   }
 
@@ -295,60 +366,8 @@ class _LockPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_LockPainter old) => old.color != color || old.open != open;
-}
-
-class _SetCornerTicks extends StatelessWidget {
-  final TeapodTokens t;
-  final Color color;
-  const _SetCornerTicks({required this.t, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned.fill(
-      child: IgnorePointer(
-        child: Stack(
-          children: [
-            Positioned(top: 6, left: 6,   child: _SmallTick(color: color, tl: true,  tr: false)),
-            Positioned(top: 6, right: 6,  child: _SmallTick(color: color, tl: false, tr: true)),
-            Positioned(bottom: 6, left: 6,  child: _SmallTick(color: color, tl: false, tr: false, bl: true,  br: false)),
-            Positioned(bottom: 6, right: 6, child: _SmallTick(color: color, tl: false, tr: false, bl: false, br: true)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SmallTick extends StatelessWidget {
-  final Color color;
-  final bool tl, tr, bl, br;
-  const _SmallTick({required this.color, this.tl=false, this.tr=false, this.bl=false, this.br=false});
-
-  @override
-  Widget build(BuildContext context) => CustomPaint(
-    size: const Size(8, 8),
-    painter: _SmallTickPainter(color: color, tl: tl, tr: tr, bl: bl, br: br),
-  );
-}
-
-class _SmallTickPainter extends CustomPainter {
-  final Color color;
-  final bool tl, tr, bl, br;
-  const _SmallTickPainter({required this.color, required this.tl, required this.tr, required this.bl, required this.br});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = color..strokeWidth = 1..style = PaintingStyle.stroke;
-    final w = size.width; final h = size.height;
-    if (tl) { canvas.drawLine(Offset.zero, Offset(w, 0), p); canvas.drawLine(Offset.zero, Offset(0, h), p); }
-    if (tr) { canvas.drawLine(Offset(0,0), Offset(w, 0), p); canvas.drawLine(Offset(w,0), Offset(w, h), p); }
-    if (bl) { canvas.drawLine(Offset(0,h), Offset(w, h), p); canvas.drawLine(Offset(0,0), Offset(0, h), p); }
-    if (br) { canvas.drawLine(Offset(0,h), Offset(w, h), p); canvas.drawLine(Offset(w,0), Offset(w, h), p); }
-  }
-
-  @override
-  bool shouldRepaint(_SmallTickPainter old) => old.color != color;
+  bool shouldRepaint(_LockPainter old) =>
+      old.color != color || old.open != open;
 }
 
 // ── Settings body ─────────────────────────────────────────────────
@@ -378,13 +397,19 @@ class _SettingsBodyState extends State<_SettingsBody> {
   late final TextEditingController _socksPortCtrl;
   late final TextEditingController _socksUserCtrl;
   late final TextEditingController _socksPasswordCtrl;
+  late final TextEditingController _mtuCtrl;
 
   @override
   void initState() {
     super.initState();
-    _socksPortCtrl    = TextEditingController(text: widget.settings.socksPort.toString());
-    _socksUserCtrl    = TextEditingController(text: widget.settings.socksUser);
-    _socksPasswordCtrl = TextEditingController(text: widget.settings.socksPassword);
+    _socksPortCtrl = TextEditingController(
+      text: widget.settings.socksPort.toString(),
+    );
+    _socksUserCtrl = TextEditingController(text: widget.settings.socksUser);
+    _socksPasswordCtrl = TextEditingController(
+      text: widget.settings.socksPassword,
+    );
+    _mtuCtrl = TextEditingController(text: widget.settings.mtu.toString());
   }
 
   @override
@@ -392,21 +417,33 @@ class _SettingsBodyState extends State<_SettingsBody> {
     _socksPortCtrl.dispose();
     _socksUserCtrl.dispose();
     _socksPasswordCtrl.dispose();
+    _mtuCtrl.dispose();
     super.dispose();
   }
 
   void _updatePorts() {
     final socks = int.tryParse(_socksPortCtrl.text);
     if (socks != null) {
-      widget.onUpdate(widget.settings.copyWith(socksPort: socks.clamp(1024, 65535)));
+      widget.onUpdate(
+        widget.settings.copyWith(socksPort: socks.clamp(1024, 65535)),
+      );
     }
   }
 
   void _updateCredentials() {
-    widget.onUpdate(widget.settings.copyWith(
-      socksUser: _socksUserCtrl.text,
-      socksPassword: _socksPasswordCtrl.text,
-    ));
+    widget.onUpdate(
+      widget.settings.copyWith(
+        socksUser: _socksUserCtrl.text,
+        socksPassword: _socksPasswordCtrl.text,
+      ),
+    );
+  }
+
+  void _updateMtu() {
+    final mtu = int.tryParse(_mtuCtrl.text);
+    if (mtu != null) {
+      widget.onUpdate(widget.settings.copyWith(mtu: mtu.clamp(576, 9000)));
+    }
   }
 
   @override
@@ -418,252 +455,429 @@ class _SettingsBodyState extends State<_SettingsBody> {
     return Stack(
       children: [
         ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          // ── 0x10 APPEARANCE ───────────────────────────────────
-          _SetSectionHeader(t: t, addr: '0x10', label: 'appearance'),
-          _AppearanceRows(t: t),
+          padding: EdgeInsets.zero,
+          children: [
+            // ── 0x10 APPEARANCE ───────────────────────────────────
+            SetSectionHeader(t: t, addr: '0x10', label: 'appearance'),
+            _AppearanceRows(t: t),
 
-          // ── 0x15 PROFILES ─────────────────────────────────────
-          _SetSectionHeader(t: t, addr: '0x15', label: 'profiles'),
-          _ProfilesRow(t: t),
+            // ── 0x15 PROFILES ─────────────────────────────────────
+            SetSectionHeader(t: t, addr: '0x15', label: 'profiles'),
+            _ProfilesRow(t: t),
 
-          // ── 0x20 CONNECTION ───────────────────────────────────
-          _SetSectionHeader(t: t, addr: '0x20', label: 'connection'),
-          _RowToggle(
-            t: t,
-            title: 'Автоподключение',
-            hint: 'Подключаться при запуске приложения',
-            value: s.autoConnect,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(autoConnect: v)),
-          ),
-          _RowToggle(
-            t: t,
-            title: 'Уведомление',
-            hint: 'Скорость и кнопка отключения в шторке',
-            value: s.showNotification,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(showNotification: v)),
-          ),
-          _RowToggle(
-            t: t,
-            title: 'Kill Switch',
-            hint: 'Блокировать трафик при обрыве VPN',
-            value: s.killSwitchEnabled,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(killSwitchEnabled: v)),
-          ),
-          _RowToggle(
-            t: t,
-            title: 'HWID',
-            hint: 'Отправлять ID устройства для привязки подписки',
-            value: s.hwidEnabled,
-            locked: locked,
-            last: true,
-            onChange: (v) => widget.onUpdate(s.copyWith(hwidEnabled: v)),
-          ),
-
-          // ── 0x30 XRAY ─────────────────────────────────────────
-          _SetSectionHeader(t: t, addr: '0x30', label: 'xray'),
-          _RowToggle(
-            t: t,
-            title: 'Случайный порт',
-            hint: 'Случайный SOCKS порт при каждом подключении',
-            value: s.randomPort,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(randomPort: v)),
-          ),
-          if (!s.randomPort)
-            _InlineField(
+            // ── 0x20 CONNECTION ───────────────────────────────────
+            SetSectionHeader(t: t, addr: '0x20', label: 'connection'),
+            _RowToggle(
               t: t,
-              label: 'SOCKS5 порт',
-              child: SizedBox(
-                width: 90,
-                child: TextField(
-                  controller: _socksPortCtrl,
-                  enabled: !locked,
-                  textAlign: TextAlign.center,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  onChanged: (_) => _updatePorts(),
-                  onEditingComplete: () => FocusScope.of(context).unfocus(),
-                  style: AppTheme.mono(size: 13, color: t.text),
-                  decoration: InputDecoration(
-                    hintText: '10808',
-                    hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    isDense: true,
-                    enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
-                    focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
-                    disabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
+              title: 'Автоподключение',
+              hint: 'Подключаться при запуске приложения',
+              value: s.autoConnect,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(autoConnect: v)),
+            ),
+            _RowToggle(
+              t: t,
+              title: 'Уведомление',
+              hint: 'Скорость и кнопка отключения в шторке',
+              value: s.showNotification,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(showNotification: v)),
+            ),
+            _RowToggle(
+              t: t,
+              title: 'Kill Switch',
+              hint: 'Блокировать трафик при обрыве VPN',
+              value: s.killSwitchEnabled,
+              locked: locked,
+              onChange: (v) =>
+                  widget.onUpdate(s.copyWith(killSwitchEnabled: v)),
+            ),
+            _RowToggle(
+              t: t,
+              title: 'HWID',
+              hint: 'Отправлять ID устройства для привязки подписки',
+              value: s.hwidEnabled,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(hwidEnabled: v)),
+            ),
+            _RowToggle(
+              t: t,
+              title: 'Автообновление подписок',
+              hint: 'Обновлять подписки по расписанию',
+              value: s.subAutoRefresh,
+              locked: locked,
+              last: !s.subAutoRefresh,
+              onChange: (v) => widget.onUpdate(s.copyWith(subAutoRefresh: v)),
+            ),
+            if (s.subAutoRefresh)
+              _InlineField(
+                t: t,
+                label: 'Интервал',
+                child: _SegSquare(
+                  t: t,
+                  value: s.subAutoRefreshHours.toString(),
+                  opts: const [
+                    ('1', '1ч'),
+                    ('3', '3ч'),
+                    ('6', '6ч'),
+                    ('12', '12ч'),
+                    ('24', '24ч'),
+                  ],
+                  locked: locked,
+                  onChanged: (v) => widget.onUpdate(
+                    s.copyWith(subAutoRefreshHours: int.parse(v)),
                   ),
                 ),
               ),
-            ),
-          _RowToggle(
-            t: t,
-            title: 'Случайные учётные данные',
-            hint: 'Генерировать случайный логин/пароль SOCKS',
-            value: s.randomCredentials,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(randomCredentials: v)),
-          ),
-          if (!s.randomCredentials) ...[
-            _InlineField(
-              t: t,
-              label: 'Логин SOCKS',
-              child: _CredField(
-                controller: _socksUserCtrl,
-                enabled: !locked,
-                hint: 'без пароля',
-                onChanged: (_) => _updateCredentials(),
-                t: t,
-              ),
-            ),
-            _InlineField(
-              t: t,
-              label: 'Пароль SOCKS',
-              child: _CredField(
-                controller: _socksPasswordCtrl,
-                enabled: !locked,
-                hint: 'без пароля',
-                obscureText: true,
-                onChanged: (_) => _updateCredentials(),
-                t: t,
-              ),
-            ),
-          ],
-          _RowToggle(
-            t: t,
-            title: 'Только прокси',
-            hint: 'Запустить SOCKS прокси без VPN-туннеля',
-            value: s.proxyOnly,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(proxyOnly: v)),
-          ),
-          _RowToggle(
-            t: t,
-            title: 'UDP',
-            hint: 'Разрешить UDP-трафик через SOCKS',
-            value: s.enableUdp,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(enableUdp: v)),
-          ),
-          _RowToggle(
-            t: t,
-            title: 'ICMP (ping)',
-            hint: 'Разрешить ping-запросы через туннель',
-            value: s.allowIcmp,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(allowIcmp: v)),
-          ),
-          // DNS mode inline selector
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-            decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: t.lineSoft))),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Режим DNS',
-                        style: AppTheme.sans(size: 14, color: t.text)),
-                    const SizedBox(height: 3),
-                    Text(s.dnsMode == DnsMode.proxy ? 'через VPN-туннель' : 'напрямую',
-                        style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5)),
-                  ],
-                ),
-                _SegSquare(
-                  t: t,
-                  value: s.dnsMode == DnsMode.proxy ? 'proxy' : 'direct',
-                  opts: const [('proxy', 'VPN'), ('direct', 'DIRECT')],
-                  locked: locked,
-                  onChanged: (v) => widget.onUpdate(
-                      s.copyWith(dnsMode: v == 'proxy' ? DnsMode.proxy : DnsMode.direct)),
-                ),
-              ],
-            ),
-          ),
-          _RowChev(
-            t: t,
-            title: 'DNS сервер',
-            hint: _dnsLabel(s),
-            locked: locked,
-            last: true,
-            onTap: locked ? null : () => Navigator.push(
-                context, MaterialPageRoute(builder: (_) => const _DnsSettingsScreen())),
-          ),
 
-          // ── 0x40 ROUTING ──────────────────────────────────────
-          _SetSectionHeader(t: t, addr: '0x40', label: 'routing'),
-          _RowChev(
-            t: t,
-            title: 'Маршрутизация трафика',
-            hint: s.routing.summary,
-            locked: locked,
-            onTap: locked ? null : () => Navigator.push(
-                context, MaterialPageRoute(builder: (_) => const RoutingScreen())),
-          ),
-          _RowToggle(
-            t: t,
-            title: 'Сплит-туннелирование',
-            hint: s.vpnMode == VpnMode.onlySelected
-                ? 'Только выбранные приложения через VPN'
-                : 'Выбранные приложения исключены из VPN',
-            value: s.splitTunnelingEnabled,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(splitTunnelingEnabled: v)),
-          ),
-          if (s.splitTunnelingEnabled)
+            // ── 0x30 XRAY ─────────────────────────────────────────
+            SetSectionHeader(t: t, addr: '0x30', label: 'xray'),
+            _RowToggle(
+              t: t,
+              title: 'Случайный порт',
+              hint: 'Случайный SOCKS порт при каждом подключении',
+              value: s.randomPort,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(randomPort: v)),
+            ),
+            if (!s.randomPort)
+              _InlineField(
+                t: t,
+                label: 'SOCKS5 порт',
+                child: SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: _socksPortCtrl,
+                    enabled: !locked,
+                    textAlign: TextAlign.center,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    onChanged: (_) => _updatePorts(),
+                    onEditingComplete: () => FocusScope.of(context).unfocus(),
+                    style: AppTheme.mono(size: 13, color: t.text),
+                    decoration: InputDecoration(
+                      hintText: '10808',
+                      hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      isDense: true,
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: t.line),
+                        borderRadius: BorderRadius.zero,
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: t.accent),
+                        borderRadius: BorderRadius.zero,
+                      ),
+                      disabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: t.lineSoft),
+                        borderRadius: BorderRadius.zero,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            _RowToggle(
+              t: t,
+              title: 'Случайные учётные данные',
+              hint: 'Генерировать случайный логин/пароль SOCKS',
+              value: s.randomCredentials,
+              locked: locked,
+              onChange: (v) =>
+                  widget.onUpdate(s.copyWith(randomCredentials: v)),
+            ),
+            if (!s.randomCredentials) ...[
+              _InlineField(
+                t: t,
+                label: 'Логин SOCKS',
+                child: _CredField(
+                  controller: _socksUserCtrl,
+                  enabled: !locked,
+                  hint: 'без пароля',
+                  onChanged: (_) => _updateCredentials(),
+                  t: t,
+                ),
+              ),
+              _InlineField(
+                t: t,
+                label: 'Пароль SOCKS',
+                child: _CredField(
+                  controller: _socksPasswordCtrl,
+                  enabled: !locked,
+                  hint: 'без пароля',
+                  obscureText: true,
+                  onChanged: (_) => _updateCredentials(),
+                  t: t,
+                ),
+              ),
+            ],
+            _RowToggle(
+              t: t,
+              title: 'Только прокси',
+              hint: 'Запустить SOCKS прокси без VPN-туннеля',
+              value: s.proxyOnly,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(proxyOnly: v)),
+            ),
+            _RowToggle(
+              t: t,
+              title: 'UDP',
+              hint: 'Разрешить UDP-трафик через SOCKS',
+              value: s.enableUdp,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(enableUdp: v)),
+            ),
+            _RowToggle(
+              t: t,
+              title: 'ICMP (ping)',
+              hint: 'Разрешить ping-запросы через туннель',
+              value: s.allowIcmp,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(allowIcmp: v)),
+            ),
+            _RowToggle(
+              t: t,
+              title: 'Блокировать QUIC',
+              hint:
+                  'Блокирует UDP 443, чтобы браузер использовал TCP вместо HTTP/3. Устраняет зависания Google после простоя.',
+              value: s.blockQuic,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(blockQuic: v)),
+            ),
+            if (!s.proxyOnly)
+              _InlineField(
+                t: t,
+                label: 'MTU',
+                child: SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: _mtuCtrl,
+                    enabled: !locked,
+                    textAlign: TextAlign.center,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    onChanged: (_) => _updateMtu(),
+                    onEditingComplete: () => FocusScope.of(context).unfocus(),
+                    style: AppTheme.mono(size: 13, color: t.text),
+                    decoration: InputDecoration(
+                      hintText: '1500',
+                      hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      isDense: true,
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: t.line),
+                        borderRadius: BorderRadius.zero,
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: t.accent),
+                        borderRadius: BorderRadius.zero,
+                      ),
+                      disabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: t.lineSoft),
+                        borderRadius: BorderRadius.zero,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            // DNS mode inline selector
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.lineSoft)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Режим DNS',
+                        style: AppTheme.sans(size: 14, color: t.text),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        s.dnsMode == DnsMode.proxy
+                            ? 'через VPN-туннель'
+                            : 'напрямую',
+                        style: AppTheme.mono(
+                          size: 10,
+                          color: t.textMuted,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                  _SegSquare(
+                    t: t,
+                    value: s.dnsMode == DnsMode.proxy ? 'proxy' : 'direct',
+                    opts: const [('proxy', 'VPN'), ('direct', 'DIRECT')],
+                    locked: locked,
+                    onChanged: (v) => widget.onUpdate(
+                      s.copyWith(
+                        dnsMode: v == 'proxy' ? DnsMode.proxy : DnsMode.direct,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // DNS query strategy (IPv4 / IPv6 / Auto)
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.lineSoft)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'DNS стратегия',
+                        style: AppTheme.sans(size: 14, color: t.text),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'IP-версия для DNS-запросов',
+                        style: AppTheme.mono(
+                          size: 10,
+                          color: t.textMuted,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                  _SegSquare(
+                    t: t,
+                    value: s.dnsQueryStrategy.name,
+                    opts: const [
+                      ('ipv4Only', 'IPv4'),
+                      ('ipv6Only', 'IPv6'),
+                      ('auto', 'AUTO'),
+                    ],
+                    locked: locked,
+                    onChanged: (v) => widget.onUpdate(
+                      s.copyWith(
+                        dnsQueryStrategy: DnsQueryStrategy.values.firstWhere(
+                          (e) => e.name == v,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             _RowChev(
               t: t,
-              title: 'Выбрать приложения',
-              hint: s.vpnMode == VpnMode.onlySelected
-                  ? '${s.includedPackages.length} выбрано'
-                  : '${s.excludedPackages.length} исключено',
+              title: 'DNS сервер',
+              hint: _dnsLabel(s),
               locked: locked,
               last: true,
-              onTap: locked ? null : () => Navigator.push(
-                  context, MaterialPageRoute(builder: (_) => const SplitTunnelScreen())),
-            )
-          else
-            SizedBox(height: 1,
-                child: Container(color: t.line)),
+              onTap: locked
+                  ? null
+                  : () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const DnsSettingsScreen(),
+                      ),
+                    ),
+            ),
 
-          // ── 0x50 ABOUT ────────────────────────────────────────
-          _SetSectionHeader(t: t, addr: '0x50', label: 'about'),
-          _KVRow(t: t, k: 'version',    v: widget.version.isEmpty ? '...' : widget.version),
-          _KVRow(t: t, k: 'xray.core',  v: widget.xrayVersion.isEmpty ? '...' : widget.xrayVersion),
-          _KVRowTap(
-            t: t,
-            k: 'source',
-            v: 'github.com/Wendor/teapod-stream',
-            onTap: () async {
-              final uri = Uri.parse('https://github.com/Wendor/teapod-stream');
-              if (await canLaunchUrl(uri)) launchUrl(uri, mode: LaunchMode.externalApplication);
-            },
-          ),
-          // Update channel
-          _InlineField(
-            t: t,
-            label: 'Канал обновлений',
-            child: const _UpdateChannelSegment(),
-          ),
-          // Update tile (complex)
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
-            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
-            child: const _UpdateTile(),
-          ),
-          const SizedBox(height: 32),
-        ],
-      ),
+            // ── 0x40 ROUTING ──────────────────────────────────────
+            SetSectionHeader(t: t, addr: '0x40', label: 'routing'),
+            _RowChev(
+              t: t,
+              title: 'Маршрутизация трафика',
+              hint: s.routing.summary,
+              locked: locked,
+              onTap: locked
+                  ? null
+                  : () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const RoutingScreen()),
+                    ),
+            ),
+            _RowToggle(
+              t: t,
+              title: 'Сплит-туннелирование',
+              hint: s.vpnMode == VpnMode.onlySelected
+                  ? 'Только выбранные приложения через VPN'
+                  : 'Выбранные приложения исключены из VPN',
+              value: s.splitTunnelingEnabled,
+              locked: locked,
+              onChange: (v) =>
+                  widget.onUpdate(s.copyWith(splitTunnelingEnabled: v)),
+            ),
+            if (s.splitTunnelingEnabled)
+              _RowChev(
+                t: t,
+                title: 'Выбрать приложения',
+                hint: s.vpnMode == VpnMode.onlySelected
+                    ? '${s.includedPackages.length} выбрано'
+                    : '${s.excludedPackages.length} исключено',
+                locked: locked,
+                last: true,
+                onTap: locked
+                    ? null
+                    : () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const SplitTunnelScreen(),
+                        ),
+                      ),
+              )
+            else
+              SizedBox(height: 1, child: Container(color: t.line)),
+
+            // ── 0x50 ABOUT ────────────────────────────────────────
+            SetSectionHeader(t: t, addr: '0x50', label: 'about'),
+            _KVRow(
+              t: t,
+              k: 'version',
+              v: widget.version.isEmpty ? '...' : widget.version,
+            ),
+            _KVRow(
+              t: t,
+              k: 'xray.core',
+              v: widget.xrayVersion.isEmpty ? '...' : widget.xrayVersion,
+            ),
+            _KVRowTap(
+              t: t,
+              k: 'source',
+              v: 'github.com/Wendor/teapod-stream',
+              onTap: () async {
+                final uri = Uri.parse(
+                  'https://github.com/Wendor/teapod-stream',
+                );
+                if (await canLaunchUrl(uri))
+                  launchUrl(uri, mode: LaunchMode.externalApplication);
+              },
+            ),
+            // Update channel
+            _InlineField(
+              t: t,
+              label: 'Канал обновлений',
+              child: const _UpdateChannelSegment(),
+            ),
+            // Update tile (complex)
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.line)),
+              ),
+              child: const _UpdateTile(),
+            ),
+            const SizedBox(height: 32),
+          ],
+        ),
         if (locked)
           Positioned.fill(
             child: IgnorePointer(
@@ -671,40 +885,6 @@ class _SettingsBodyState extends State<_SettingsBody> {
             ),
           ),
       ],
-    );
-  }
-}
-
-// ── Section header (0xNN · label) ────────────────────────────────
-
-class _SetSectionHeader extends StatelessWidget {
-  final TeapodTokens t;
-  final String addr;
-  final String label;
-  const _SetSectionHeader({required this.t, required this.addr, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-      decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: t.lineSoft))),
-      child: Row(
-        children: [
-          Text(addr,  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-          const SizedBox(width: 8),
-          Text('·',   style: AppTheme.mono(size: 10, color: t.textMuted)),
-          const SizedBox(width: 8),
-          Text(label.toUpperCase(),
-              style: AppTheme.mono(size: 10, color: t.textDim, letterSpacing: 1)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text('—' * 16,
-                style: AppTheme.mono(size: 10, color: t.textMuted),
-                overflow: TextOverflow.clip, maxLines: 1),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -735,7 +915,8 @@ class _RowToggle extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
       decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: last ? t.line : t.lineSoft))),
+        border: Border(bottom: BorderSide(color: last ? t.line : t.lineSoft)),
+      ),
       child: Row(
         children: [
           Expanded(
@@ -745,7 +926,14 @@ class _RowToggle extends StatelessWidget {
                 Text(title, style: AppTheme.sans(size: 14, color: t.text)),
                 if (hint != null) ...[
                   const SizedBox(height: 3),
-                  Text(hint!, style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5)),
+                  Text(
+                    hint!,
+                    style: AppTheme.mono(
+                      size: 10,
+                      color: t.textMuted,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -824,7 +1012,8 @@ class _RowChev extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
         decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: last ? t.line : t.lineSoft))),
+          border: Border(bottom: BorderSide(color: last ? t.line : t.lineSoft)),
+        ),
         child: Row(
           children: [
             Expanded(
@@ -834,8 +1023,15 @@ class _RowChev extends StatelessWidget {
                   Text(title, style: AppTheme.sans(size: 14, color: t.text)),
                   if (hint != null) ...[
                     const SizedBox(height: 3),
-                    Text(hint!, style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5),
-                        overflow: TextOverflow.ellipsis),
+                    Text(
+                      hint!,
+                      style: AppTheme.mono(
+                        size: 10,
+                        color: t.textMuted,
+                        letterSpacing: 0.5,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ],
                 ],
               ),
@@ -855,13 +1051,19 @@ class _InlineField extends StatelessWidget {
   final TeapodTokens t;
   final String label;
   final Widget child;
-  const _InlineField({required this.t, required this.label, required this.child});
+  const _InlineField({
+    required this.t,
+    required this.label,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.lineSoft)),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -907,14 +1109,23 @@ class _CredField extends StatelessWidget {
         decoration: InputDecoration(
           hintText: hint,
           hintStyle: AppTheme.mono(size: 11, color: t.textMuted),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical: 6,
+          ),
           isDense: true,
           enabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
+            borderSide: BorderSide(color: t.line),
+            borderRadius: BorderRadius.zero,
+          ),
           focusedBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
+            borderSide: BorderSide(color: t.accent),
+            borderRadius: BorderRadius.zero,
+          ),
           disabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
+            borderSide: BorderSide(color: t.lineSoft),
+            borderRadius: BorderRadius.zero,
+          ),
         ),
       ),
     );
@@ -933,12 +1144,20 @@ class _KVRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.lineSoft)),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(k.toUpperCase(),
-              style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+          Text(
+            k.toUpperCase(),
+            style: AppTheme.mono(
+              size: 10,
+              color: t.textMuted,
+              letterSpacing: 1,
+            ),
+          ),
           Text(v, style: AppTheme.mono(size: 11, color: t.text)),
         ],
       ),
@@ -951,7 +1170,12 @@ class _KVRowTap extends StatelessWidget {
   final String k;
   final String v;
   final VoidCallback? onTap;
-  const _KVRowTap({required this.t, required this.k, required this.v, this.onTap});
+  const _KVRowTap({
+    required this.t,
+    required this.k,
+    required this.v,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -959,12 +1183,20 @@ class _KVRowTap extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: t.lineSoft)),
+        ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(k.toUpperCase(),
-                style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+            Text(
+              k.toUpperCase(),
+              style: AppTheme.mono(
+                size: 10,
+                color: t.textMuted,
+                letterSpacing: 1,
+              ),
+            ),
             Row(
               children: [
                 Text(v, style: AppTheme.mono(size: 11, color: t.accent)),
@@ -1018,11 +1250,14 @@ class _SegSquare extends StatelessWidget {
                       : BorderSide.none,
                 ),
               ),
-              child: Text(lab,
-                  style: AppTheme.mono(
-                      size: 11,
-                      color: active ? t.accent : t.textDim,
-                      letterSpacing: 0.5)),
+              child: Text(
+                lab,
+                style: AppTheme.mono(
+                  size: 11,
+                  color: active ? t.accent : t.textDim,
+                  letterSpacing: 0.5,
+                ),
+              ),
             ),
           );
         }).toList(),
@@ -1039,7 +1274,9 @@ class _UpdateChannelSegment extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final t = Theme.of(context).extension<TeapodTokens>()!;
-    final settings = ref.watch(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
+    final settings = ref
+        .watch(settingsProvider)
+        .maybeWhen(data: (d) => d, orElse: () => null);
     if (settings == null) return const SizedBox.shrink();
     return _SegSquare(
       t: t,
@@ -1048,7 +1285,9 @@ class _UpdateChannelSegment extends ConsumerWidget {
       locked: false,
       onChanged: (v) async {
         final ch = v == 'stable' ? UpdateChannel.stable : UpdateChannel.beta;
-        await ref.read(settingsProvider.notifier).save(settings.copyWith(updateChannel: ch));
+        await ref
+            .read(settingsProvider.notifier)
+            .save(settings.copyWith(updateChannel: ch));
         ref.read(updateProvider.notifier).checkForUpdate();
       },
     );
@@ -1064,28 +1303,42 @@ class _AppearanceRows extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
-    final accent    = ref.watch(accentProvider);
-    final settings  = ref.watch(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
+    final accent = ref.watch(accentProvider);
+    final settings = ref
+        .watch(settingsProvider)
+        .maybeWhen(data: (d) => d, orElse: () => null);
 
     return Column(
       children: [
         // Theme
         Container(
           padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: t.lineSoft)),
+          ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Тема', style: AppTheme.sans(size: 14, color: t.text)),
               _SegSquare(
                 t: t,
-                value: themeMode == ThemeMode.dark ? 'dark'
-                    : themeMode == ThemeMode.light ? 'light' : 'system',
-                opts: const [('dark', 'ТЁМНАЯ'), ('light', 'СВЕТЛАЯ'), ('system', 'СИСТЕМА')],
+                value: themeMode == ThemeMode.dark
+                    ? 'dark'
+                    : themeMode == ThemeMode.light
+                    ? 'light'
+                    : 'system',
+                opts: const [
+                  ('dark', 'ТЁМНАЯ'),
+                  ('light', 'СВЕТЛАЯ'),
+                  ('system', 'СИСТЕМА'),
+                ],
                 locked: false,
                 onChanged: (v) {
-                  final m = v == 'dark' ? ThemeMode.dark
-                      : v == 'light' ? ThemeMode.light : ThemeMode.system;
+                  final m = v == 'dark'
+                      ? ThemeMode.dark
+                      : v == 'light'
+                      ? ThemeMode.light
+                      : ThemeMode.system;
                   ref.read(themeModeProvider.notifier).set(m);
                 },
               ),
@@ -1095,20 +1348,31 @@ class _AppearanceRows extends ConsumerWidget {
         // Font scale
         Container(
           padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: t.lineSoft)),
+          ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Размер шрифта', style: AppTheme.sans(size: 14, color: t.text)),
+              Text(
+                'Размер шрифта',
+                style: AppTheme.sans(size: 14, color: t.text),
+              ),
               if (settings != null)
                 _SegSquare(
                   t: t,
-                  value: settings.fontScale == FontScale.large ? 'large' : 'normal',
+                  value: settings.fontScale == FontScale.large
+                      ? 'large'
+                      : 'normal',
                   opts: const [('normal', 'ОБЫЧНЫЙ'), ('large', 'КРУПНЫЙ')],
                   locked: false,
                   onChanged: (v) {
-                    final scale = v == 'large' ? FontScale.large : FontScale.normal;
-                    ref.read(settingsProvider.notifier).save(settings.copyWith(fontScale: scale));
+                    final scale = v == 'large'
+                        ? FontScale.large
+                        : FontScale.normal;
+                    ref
+                        .read(settingsProvider.notifier)
+                        .save(settings.copyWith(fontScale: scale));
                   },
                 ),
             ],
@@ -1117,12 +1381,20 @@ class _AppearanceRows extends ConsumerWidget {
         // Accent
         Container(
           padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: t.line)),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('АКЦЕНТНЫЙ ЦВЕТ',
-                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+              Text(
+                'АКЦЕНТНЫЙ ЦВЕТ',
+                style: AppTheme.mono(
+                  size: 10,
+                  color: t.textMuted,
+                  letterSpacing: 1,
+                ),
+              ),
               const SizedBox(height: 10),
               Wrap(
                 spacing: 8,
@@ -1142,7 +1414,13 @@ class _AppearanceRows extends ConsumerWidget {
                         ),
                       ),
                       child: selected
-                          ? Center(child: Container(width: 10, height: 10, color: t.bg))
+                          ? Center(
+                              child: Container(
+                                width: 10,
+                                height: 10,
+                                color: t.bg,
+                              ),
+                            )
                           : null,
                     ),
                   );
@@ -1151,7 +1429,11 @@ class _AppearanceRows extends ConsumerWidget {
               const SizedBox(height: 8),
               Text(
                 '#${accent.toARGB32().toRadixString(16).padLeft(8, '0').substring(2).toUpperCase()}',
-                style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 1),
+                style: AppTheme.mono(
+                  size: 11,
+                  color: t.textDim,
+                  letterSpacing: 1,
+                ),
               ),
             ],
           ),
@@ -1172,26 +1454,33 @@ class _UpdateTile extends ConsumerWidget {
     final updateState = ref.watch(updateProvider);
     return switch (updateState) {
       UpdateIdle() => _UpdateRow(
+        t: t,
+        label: 'Обновления',
+        action: _SqBtn(
           t: t,
-          label: 'Обновления',
-          action: _SqBtn(
-            t: t, label: 'ПРОВЕРИТЬ',
-            onTap: () => ref.read(updateProvider.notifier).checkForUpdate(),
-          ),
+          label: 'ПРОВЕРИТЬ',
+          onTap: () => ref.read(updateProvider.notifier).checkForUpdate(),
         ),
+      ),
       UpdateChecking() => _UpdateRow(
-          t: t,
-          label: 'Проверка...',
-          labelColor: t.textDim,
-          action: SizedBox(
-            width: 16, height: 16,
-            child: CircularProgressIndicator(strokeWidth: 1.5, color: t.accent),
-          ),
+        t: t,
+        label: 'Проверка...',
+        labelColor: t.textDim,
+        action: SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 1.5, color: t.accent),
         ),
-      UpdateUpToDate(:final info) =>
-        _UpdateVersionTile(info: info, isUpdate: false),
-      UpdateAvailable(:final info, :final resumableBytes) =>
-        _UpdateVersionTile(info: info, isUpdate: true, resumableBytes: resumableBytes),
+      ),
+      UpdateUpToDate(:final info) => _UpdateVersionTile(
+        info: info,
+        isUpdate: false,
+      ),
+      UpdateAvailable(:final info, :final resumableBytes) => _UpdateVersionTile(
+        info: info,
+        isUpdate: true,
+        resumableBytes: resumableBytes,
+      ),
       UpdateDownloading(:final info, :final downloaded, :final total) =>
         Container(
           padding: const EdgeInsets.fromLTRB(0, 10, 0, 10),
@@ -1201,15 +1490,29 @@ class _UpdateTile extends ConsumerWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Скачивается v${info.version}',
-                      style: AppTheme.sans(size: 14, color: t.text)),
+                  Text(
+                    'Скачивается v${info.version}',
+                    style: AppTheme.sans(size: 14, color: t.text),
+                  ),
                   GestureDetector(
-                    onTap: () => ref.read(updateProvider.notifier).cancelDownload(),
+                    onTap: () =>
+                        ref.read(updateProvider.notifier).cancelDownload(),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(border: Border.all(color: t.line)),
-                      child: Text('ОТМЕНА',
-                          style: AppTheme.mono(size: 10, color: t.textDim, letterSpacing: 1)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: t.line),
+                      ),
+                      child: Text(
+                        'ОТМЕНА',
+                        style: AppTheme.mono(
+                          size: 10,
+                          color: t.textDim,
+                          letterSpacing: 1,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -1232,24 +1535,27 @@ class _UpdateTile extends ConsumerWidget {
           ),
         ),
       UpdateDownloaded(:final info, :final filePath) => _UpdateRow(
+        t: t,
+        label: 'v${info.version} готова к установке',
+        action: _SqBtn(
           t: t,
-          label: 'v${info.version} готова к установке',
-          action: _SqBtn(
-            t: t, label: 'УСТАНОВИТЬ', filled: true,
-            onTap: () => ref.read(updateProvider.notifier).installApk(filePath),
-          ),
+          label: 'УСТАНОВИТЬ',
+          filled: true,
+          onTap: () => ref.read(updateProvider.notifier).installApk(filePath),
         ),
+      ),
       UpdateError(:final message, :final retryInfo) => _UpdateRow(
+        t: t,
+        label: message,
+        labelColor: t.danger,
+        action: _SqBtn(
           t: t,
-          label: message,
-          labelColor: t.danger,
-          action: _SqBtn(
-            t: t, label: 'ПОВТОР',
-            onTap: retryInfo != null
-                ? () => ref.read(updateProvider.notifier).startDownload(retryInfo)
-                : () => ref.read(updateProvider.notifier).checkForUpdate(),
-          ),
+          label: 'ПОВТОР',
+          onTap: retryInfo != null
+              ? () => ref.read(updateProvider.notifier).startDownload(retryInfo)
+              : () => ref.read(updateProvider.notifier).checkForUpdate(),
         ),
+      ),
     };
   }
 }
@@ -1259,7 +1565,12 @@ class _UpdateRow extends StatelessWidget {
   final String label;
   final Color? labelColor;
   final Widget action;
-  const _UpdateRow({required this.t, required this.label, required this.action, this.labelColor});
+  const _UpdateRow({
+    required this.t,
+    required this.label,
+    required this.action,
+    this.labelColor,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1269,8 +1580,10 @@ class _UpdateRow extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Expanded(
-            child: Text(label,
-                style: AppTheme.sans(size: 14, color: labelColor ?? t.text)),
+            child: Text(
+              label,
+              style: AppTheme.sans(size: 14, color: labelColor ?? t.text),
+            ),
           ),
           const SizedBox(width: 12),
           action,
@@ -1285,7 +1598,12 @@ class _SqBtn extends StatelessWidget {
   final String label;
   final bool filled;
   final VoidCallback? onTap;
-  const _SqBtn({required this.t, required this.label, this.filled = false, this.onTap});
+  const _SqBtn({
+    required this.t,
+    required this.label,
+    this.filled = false,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1294,12 +1612,17 @@ class _SqBtn extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         color: filled ? t.accent : null,
-        decoration: filled ? null : BoxDecoration(border: Border.all(color: t.line)),
-        child: Text(label,
-            style: AppTheme.mono(
-                size: 10,
-                color: filled ? t.bg : t.accent,
-                letterSpacing: 1)),
+        decoration: filled
+            ? null
+            : BoxDecoration(border: Border.all(color: t.line)),
+        child: Text(
+          label,
+          style: AppTheme.mono(
+            size: 10,
+            color: filled ? t.bg : t.accent,
+            letterSpacing: 1,
+          ),
+        ),
       ),
     );
   }
@@ -1329,14 +1652,17 @@ class _UpdateVersionTile extends ConsumerWidget {
       child: Text(
         'v${info.version}',
         style: AppTheme.mono(
-            size: 10,
-            color: isUpdate ? t.accent : t.textMuted,
-            letterSpacing: 0.5),
+          size: 10,
+          color: isUpdate ? t.accent : t.textMuted,
+          letterSpacing: 0.5,
+        ),
       ),
     );
 
     final label = isUpdate ? 'доступно обновление' : 'актуальная версия';
-    final btnLabel = isUpdate ? (resumableBytes > 0 ? 'ПРОДОЛЖИТЬ' : 'СКАЧАТЬ') : 'ПЕРЕУСТАНОВИТЬ';
+    final btnLabel = isUpdate
+        ? (resumableBytes > 0 ? 'ПРОДОЛЖИТЬ' : 'СКАЧАТЬ')
+        : 'ПЕРЕУСТАНОВИТЬ';
     final onTap = isUpdate
         ? () => ref.read(updateProvider.notifier).startDownload(info)
         : () => ref.read(updateProvider.notifier).reinstall(info);
@@ -1351,8 +1677,13 @@ class _UpdateVersionTile extends ConsumerWidget {
               badge,
               const SizedBox(width: 10),
               Expanded(
-                child: Text(label,
-                    style: AppTheme.sans(size: 14, color: isUpdate ? t.text : t.textDim)),
+                child: Text(
+                  label,
+                  style: AppTheme.sans(
+                    size: 14,
+                    color: isUpdate ? t.text : t.textDim,
+                  ),
+                ),
               ),
               const SizedBox(width: 12),
               _SqBtn(t: t, label: btnLabel, filled: isUpdate, onTap: onTap),
@@ -1368,7 +1699,6 @@ class _UpdateVersionTile extends ConsumerWidget {
         ],
       ),
     );
-
   }
 }
 
@@ -1380,7 +1710,9 @@ class _ProfilesRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profileState = ref.watch(profileProvider).maybeWhen(data: (d) => d, orElse: () => null);
+    final profileState = ref
+        .watch(profileProvider)
+        .maybeWhen(data: (d) => d, orElse: () => null);
     final profile = profileState?.activeProfile;
     final hint = profile == null
         ? 'загрузка...'
@@ -1388,23 +1720,34 @@ class _ProfilesRow extends ConsumerWidget {
 
     return GestureDetector(
       onTap: () => Navigator.push(
-          context, MaterialPageRoute(builder: (_) => const ProfilesScreen())),
+        context,
+        MaterialPageRoute(builder: (_) => const ProfilesScreen()),
+      ),
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
         decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: t.line))),
+          border: Border(bottom: BorderSide(color: t.line)),
+        ),
         child: Row(
           children: [
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Профили', style: AppTheme.sans(size: 14, color: t.text)),
+                  Text(
+                    'Профили',
+                    style: AppTheme.sans(size: 14, color: t.text),
+                  ),
                   const SizedBox(height: 3),
-                  Text(hint,
-                      style: AppTheme.mono(
-                          size: 10, color: t.textMuted, letterSpacing: 0.5),
-                      overflow: TextOverflow.ellipsis),
+                  Text(
+                    hint,
+                    style: AppTheme.mono(
+                      size: 10,
+                      color: t.textMuted,
+                      letterSpacing: 0.5,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
               ),
             ),
@@ -1422,301 +1765,8 @@ class _ProfilesRow extends ConsumerWidget {
 String _dnsLabel(AppSettings settings) {
   if (settings.dnsPreset == 'custom') return settings.customDnsAddress;
   return DnsServerConfig.presets.firstWhere(
-    (p) => p['value'] == settings.dnsPreset,
-    orElse: () => {'label': settings.dnsPreset},
-  )['label'] ?? settings.dnsPreset;
-}
-
-class _DnsSettingsScreen extends ConsumerStatefulWidget {
-  const _DnsSettingsScreen();
-
-  @override
-  ConsumerState<_DnsSettingsScreen> createState() => _DnsSettingsScreenState();
-}
-
-class _DnsSettingsScreenState extends ConsumerState<_DnsSettingsScreen> {
-  late String _selectedPreset;
-  late DnsType _customType;
-  late TextEditingController _customCtrl;
-
-  @override
-  void initState() {
-    super.initState();
-    final s = ref.read(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null) ?? const AppSettings();
-    _selectedPreset = s.dnsPreset;
-    _customType = s.customDnsType == 'doh' ? DnsType.doh : s.customDnsType == 'dot' ? DnsType.dot : DnsType.udp;
-    _customCtrl = TextEditingController(text: s.customDnsAddress);
-  }
-
-  @override
-  void dispose() {
-    _customCtrl.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final s = ref.read(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
-    if (s != null) {
-      ref.read(settingsProvider.notifier).save(s.copyWith(
-        dnsPreset: _selectedPreset,
-        customDnsAddress: _customCtrl.text.trim().isEmpty ? '1.1.1.1' : _customCtrl.text.trim(),
-        customDnsType: _customType.name,
-      ));
-    }
-    Navigator.pop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).extension<TeapodTokens>()!;
-    final isCustom = _selectedPreset == 'custom';
-    final currentLabel = DnsServerConfig.presets
-        .firstWhere((p) => p['value'] == _selectedPreset,
-            orElse: () => {'label': _selectedPreset})['label'] as String? ??
-        _selectedPreset;
-
-    return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ── Header strip ──────────────────────────────────
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('teapod.stream // dns',
-                      style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-                  Text(currentLabel.toLowerCase(),
-                      style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-                ],
-              ),
-            ),
-            // ── Breadcrumb + save ─────────────────────────────
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
-              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context),
-                    child: Row(
-                      children: [
-                        Text('‹', style: AppTheme.mono(size: 12, color: t.textMuted)),
-                        const SizedBox(width: 8),
-                        Text('config',
-                            style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-                        const SizedBox(width: 6),
-                        Text('/', style: AppTheme.mono(size: 10, color: t.textMuted)),
-                        const SizedBox(width: 6),
-                        Text('dns',
-                            style: AppTheme.mono(size: 10, color: t.text, letterSpacing: 1)),
-                      ],
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: _save,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                      color: t.accent,
-                      child: Text('СОХРАНИТЬ',
-                          style: AppTheme.mono(size: 10, color: t.bg, letterSpacing: 1)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // ── Hero ──────────────────────────────────────────
-            Container(
-              width: double.infinity,
-              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
-              child: Stack(
-                children: [
-                  _SetCornerTicks(t: t, color: t.textMuted),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('НАСТРОЙКИ · DNS РЕЗОЛВЕР',
-                            style: AppTheme.mono(
-                                size: 10, color: t.textMuted, letterSpacing: 1.5)),
-                        const SizedBox(height: 8),
-                        Text('DNS',
-                            style: AppTheme.sans(
-                                size: 30, weight: FontWeight.w500,
-                                color: t.text, letterSpacing: -1, height: 1)),
-                        const SizedBox(height: 6),
-                        Text(currentLabel,
-                            style: AppTheme.mono(
-                                size: 11, color: t.textDim, letterSpacing: 0.5)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // ── Preset list ───────────────────────────────────
-            Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: [
-                  // 0x10 PRESET
-                  _SetSectionHeader(t: t, addr: '0x10', label: 'preset'),
-                  for (final p in DnsServerConfig.presets) ...[
-                    _DnsPresetRow(
-                      t: t,
-                      label: p['label'] as String,
-                      value: p['value'] as String,
-                      selected: _selectedPreset == p['value'],
-                      onTap: () => setState(() => _selectedPreset = p['value'] as String),
-                    ),
-                  ],
-                  // 0x20 CUSTOM (only when custom selected)
-                  if (isCustom) ...[
-                    _SetSectionHeader(t: t, addr: '0x20', label: 'custom server'),
-                    // Type selector
-                    Container(
-                      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-                      decoration: BoxDecoration(
-                          border: Border(bottom: BorderSide(color: t.lineSoft))),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('ТИП ПРОТОКОЛА',
-                              style: AppTheme.mono(
-                                  size: 10, color: t.textMuted, letterSpacing: 1)),
-                          const SizedBox(height: 10),
-                          Container(
-                            decoration: BoxDecoration(border: Border.all(color: t.line)),
-                            child: Row(
-                              children: [
-                                for (final (type, lab) in [
-                                  (DnsType.udp, 'UDP'),
-                                  (DnsType.doh, 'DOH'),
-                                  (DnsType.dot, 'DOT'),
-                                ]) ...[
-                                  Expanded(
-                                    child: GestureDetector(
-                                      onTap: () => setState(() => _customType = type),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(vertical: 10),
-                                        decoration: BoxDecoration(
-                                          color: _customType == type ? t.accentSoft : Colors.transparent,
-                                          border: Border(
-                                            right: type != DnsType.dot
-                                                ? BorderSide(color: t.line)
-                                                : BorderSide.none,
-                                          ),
-                                        ),
-                                        child: Text(lab,
-                                            textAlign: TextAlign.center,
-                                            style: AppTheme.mono(
-                                                size: 11,
-                                                color: _customType == type ? t.accent : t.textDim,
-                                                letterSpacing: 1)),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Address field
-                    Container(
-                      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-                      decoration: BoxDecoration(
-                          border: Border(bottom: BorderSide(color: t.line))),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('АДРЕС СЕРВЕРА',
-                              style: AppTheme.mono(
-                                  size: 10, color: t.textMuted, letterSpacing: 1)),
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: _customCtrl,
-                            style: AppTheme.mono(size: 13, color: t.text),
-                            onChanged: (_) => setState(() {}),
-                            decoration: InputDecoration(
-                              hintText: _customType == DnsType.doh
-                                  ? 'https://1.1.1.1/dns-query'
-                                  : '1.1.1.1',
-                              hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
-                              contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 10),
-                              isDense: true,
-                              enabledBorder: OutlineInputBorder(
-                                  borderSide: BorderSide(color: t.line),
-                                  borderRadius: BorderRadius.zero),
-                              focusedBorder: OutlineInputBorder(
-                                  borderSide: BorderSide(color: t.accent),
-                                  borderRadius: BorderRadius.zero),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 32),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── DNS preset row ────────────────────────────────────────────────
-
-class _DnsPresetRow extends StatelessWidget {
-  final TeapodTokens t;
-  final String label;
-  final String value;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _DnsPresetRow({
-    required this.t, required this.label, required this.value,
-    required this.selected, required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-        decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: t.lineSoft))),
-        child: Row(
-          children: [
-            Container(
-              width: 18, height: 18,
-              decoration: BoxDecoration(
-                border: Border.all(color: selected ? t.accent : t.line),
-                color: selected ? t.accent : Colors.transparent,
-              ),
-              child: selected
-                  ? Icon(Icons.check, size: 12, color: t.bg)
-                  : null,
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(label, style: AppTheme.sans(size: 14, color: t.text)),
-            ),
-            Text(value,
-                style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5)),
-          ],
-        ),
-      ),
-    );
-  }
+        (p) => p['value'] == settings.dnsPreset,
+        orElse: () => {'label': settings.dnsPreset},
+      )['label'] ??
+      settings.dnsPreset;
 }

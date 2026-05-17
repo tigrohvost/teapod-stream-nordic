@@ -104,6 +104,7 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
             "socksPort" to socksPort,
             "socksUser" to socksUser,
             "socksPassword" to socksPassword,
+            "connectedAtMs" to XrayVpnService.connectedAtMs,
         ))
         appContext?.let { VpnTileService.updateTile(it) }
     }

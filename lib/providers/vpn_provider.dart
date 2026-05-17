@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../core/interfaces/vpn_engine.dart';
+import '../core/models/vpn_config.dart';
 import '../core/constants/app_constants.dart';
 import '../core/models/vpn_stats.dart';
 import '../core/models/vpn_log_entry.dart';
@@ -56,15 +58,17 @@ class VpnState2 {
 
 class VpnNotifier extends Notifier<VpnState2> {
   late final XrayEngine _engine;
-  static const _eventChannel =
-      EventChannel('${AppConstants.methodChannel}/events');
+  static const _eventChannel = EventChannel(
+    '${AppConstants.methodChannel}/events',
+  );
 
   StreamSubscription<dynamic>? _eventSub;
   Timer? _connectTimeout;
   Timer? _disconnectTimeout;
   Timer? _statsPoller;
+  Timer? _subRefreshTimer;
+  bool _isPinging = false;
   DateTime? _connectedAt;
-
 
   @override
   VpnState2 build() {
@@ -88,18 +92,54 @@ class VpnNotifier extends Notifier<VpnState2> {
       _connectTimeout?.cancel();
       _disconnectTimeout?.cancel();
       _statsPoller?.cancel();
+      _subRefreshTimer?.cancel();
+    });
+
+    // Auto-refresh subscriptions: timer fires hourly, staleness check uses configured interval
+    _subRefreshTimer = Timer.periodic(const Duration(hours: 1), (_) async {
+      final settings = ref
+          .read(settingsProvider)
+          .maybeWhen(data: (d) => d, orElse: () => null);
+      if (settings?.subAutoRefresh != true) return;
+      await ref
+          .read(configProvider.notifier)
+          .refreshStaleSubscriptions(
+            intervalHours: settings!.subAutoRefreshHours,
+          );
     });
 
     // Sync state on init (for case when VPN is already running from tile/notification)
     Future.microtask(() async {
+      // Auto-refresh stale subscriptions on startup
+      final settings = ref
+          .read(settingsProvider)
+          .maybeWhen(data: (d) => d, orElse: () => null);
+      if (settings?.subAutoRefresh == true) {
+        await ref
+            .read(configProvider.notifier)
+            .refreshStaleSubscriptions(
+              intervalHours: settings!.subAutoRefreshHours,
+            );
+      }
+
       final vpnState = await _engine.getVpnState();
       if (vpnState.state == VpnState.connected && vpnState.socksPort > 0) {
+        if (vpnState.connectedAtMs > 0) {
+          _connectedAt = DateTime.fromMillisecondsSinceEpoch(
+            vpnState.connectedAtMs,
+          );
+        }
         state = VpnState2(
           connectionState: VpnState.connected,
           activeSocksPort: vpnState.socksPort,
           activeSocksUser: vpnState.socksUser,
           activeSocksPassword: vpnState.socksPassword,
         );
+        // Restore log history from persisted file
+        final logEntries = await _engine.getLogs();
+        if (logEntries.isNotEmpty) {
+          ref.read(logServiceProvider.notifier).loadFromEntries(logEntries);
+        }
         // ipInfoProvider is AsyncNotifier, needs refresh to rebuild
         // ignore: unused_result
         ref.refresh(ipInfoProvider);
@@ -121,12 +161,14 @@ class VpnNotifier extends Notifier<VpnState2> {
       }
       try {
         final stats = await _engine.getStats();
-        _handleStats(Map<String, dynamic>.from({
-          'upload': stats.upload,
-          'download': stats.download,
-          'uploadSpeed': stats.uploadSpeed,
-          'downloadSpeed': stats.downloadSpeed,
-        }));
+        _handleStats(
+          Map<String, dynamic>.from({
+            'upload': stats.upload,
+            'download': stats.download,
+            'uploadSpeed': stats.uploadSpeed,
+            'downloadSpeed': stats.downloadSpeed,
+          }),
+        );
 
         // Also fetch stats history for chart
         final history = await _engine.getStatsHistory();
@@ -141,12 +183,21 @@ class VpnNotifier extends Notifier<VpnState2> {
     final type = event['type'] as String?;
     switch (type) {
       case 'state':
-        final newState = _parseState(event['value'] as String?);
+        final rawValue = event['value'] as String?;
+        final isReconnect = rawValue == 'reconnecting';
+        final newState = _parseState(rawValue);
         if (newState == VpnState.connected) {
           final port = event['socksPort'] as int?;
           if (port != null && port > 0) {
             final user = event['socksUser'] as String? ?? '';
             final pass = event['socksPassword'] as String? ?? '';
+            final connectedAtMs =
+                (event['connectedAtMs'] as num?)?.toInt() ?? 0;
+            if (connectedAtMs > 0) {
+              _connectedAt ??= DateTime.fromMillisecondsSinceEpoch(
+                connectedAtMs,
+              );
+            }
             state = state.copyWith(
               activeSocksPort: port,
               activeSocksUser: user,
@@ -154,19 +205,23 @@ class VpnNotifier extends Notifier<VpnState2> {
             );
           }
         }
-        _onNativeState(newState);
+        _onNativeState(newState, isReconnect: isReconnect);
       case 'log':
         final level = event['level'] as String? ?? 'info';
         final msg = event['message'] as String? ?? '';
-        ref.read(logServiceProvider.notifier).add(VpnLogEntry(
-          timestamp: DateTime.now(),
-          level: LogLevel.values.firstWhere(
-            (e) => e.name == level,
-            orElse: () => LogLevel.info,
-          ),
-          message: msg,
-          source: 'xray',
-        ));
+        ref
+            .read(logServiceProvider.notifier)
+            .add(
+              VpnLogEntry(
+                timestamp: DateTime.now(),
+                level: LogLevel.values.firstWhere(
+                  (e) => e.name == level,
+                  orElse: () => LogLevel.info,
+                ),
+                message: msg,
+                source: 'xray',
+              ),
+            );
       case 'stats':
         break; // Ignore stats from EventChannel - we use poller instead
       case 'statsHistory':
@@ -175,15 +230,16 @@ class VpnNotifier extends Notifier<VpnState2> {
   }
 
   VpnState _parseState(String? s) => switch (s) {
-        'connecting' => VpnState.connecting,
-        'connected' => VpnState.connected,
-        'disconnecting' => VpnState.disconnecting,
-        'disconnected' => VpnState.disconnected,
-        'error' => VpnState.error,
-        _ => VpnState.disconnected,
-      };
+    'connecting' => VpnState.connecting,
+    'reconnecting' => VpnState.connecting,
+    'connected' => VpnState.connected,
+    'disconnecting' => VpnState.disconnecting,
+    'disconnected' => VpnState.disconnected,
+    'error' => VpnState.error,
+    _ => VpnState.disconnected,
+  };
 
-  void _onNativeState(VpnState nativeState) {
+  void _onNativeState(VpnState nativeState, {bool isReconnect = false}) {
     if (nativeState == VpnState.connected) {
       _connectedAt ??= DateTime.now();
       _connectTimeout?.cancel();
@@ -198,14 +254,23 @@ class VpnNotifier extends Notifier<VpnState2> {
       _disconnectTimeout?.cancel();
       _disconnectTimeout = null;
     } else if (nativeState == VpnState.connecting) {
-      _connectTimeout ??= Timer(const Duration(seconds: 45), () {
-        if (state.connectionState == VpnState.connecting) {
-          state = state.copyWith(
-              connectionState: VpnState.error, error: 'Connection timeout');
-          _connectTimeout = null;
-          _engine.disconnect().ignore();
-        }
-      });
+      if (isReconnect) {
+        // Native-triggered reconnect: cancel Flutter-side timeout so it doesn't
+        // force error while the service is mid-reconnect (cycle can exceed 45s).
+        _connectTimeout?.cancel();
+        _connectTimeout = null;
+      } else {
+        _connectTimeout ??= Timer(const Duration(seconds: 45), () {
+          if (state.connectionState == VpnState.connecting) {
+            state = state.copyWith(
+              connectionState: VpnState.error,
+              error: 'Connection timeout',
+            );
+            _connectTimeout = null;
+            _engine.disconnect().ignore();
+          }
+        });
+      }
     } else if (nativeState == VpnState.disconnecting) {
       _disconnectTimeout ??= Timer(const Duration(seconds: 10), () {
         if (state.connectionState == VpnState.disconnecting) {
@@ -266,9 +331,7 @@ class VpnNotifier extends Notifier<VpnState2> {
     if (history.isEmpty) return;
 
     // Native history is the source of truth
-    state = state.copyWith(
-      stats: state.stats.copyWith(speedHistory: history),
-    );
+    state = state.copyWith(stats: state.stats.copyWith(speedHistory: history));
   }
 
   Future<void> connect() async {
@@ -282,7 +345,9 @@ class VpnNotifier extends Notifier<VpnState2> {
     _connectTimeout = Timer(const Duration(seconds: 45), () {
       if (state.connectionState == VpnState.connecting) {
         state = state.copyWith(
-            connectionState: VpnState.error, error: 'Connection timeout');
+          connectionState: VpnState.error,
+          error: 'Connection timeout',
+        );
         _connectTimeout = null;
         _engine.disconnect().ignore();
       }
@@ -291,12 +356,18 @@ class VpnNotifier extends Notifier<VpnState2> {
     // Notification permission for foreground service (Android 13+) — best-effort
     await Permission.notification.request();
 
-    final configState =
-        ref.read(configProvider).maybeWhen(data: (d) => d, orElse: () => null);
-    final config = configState?.activeConfig;
+    final configState = ref
+        .read(configProvider)
+        .maybeWhen(data: (d) => d, orElse: () => null);
+    final config = _resolveEffectiveConfig(configState);
     if (config == null) {
-      ref.read(logServiceProvider.notifier).addError('No configuration selected');
-      state = state.copyWith(connectionState: VpnState.error, error: 'No configuration selected');
+      ref
+          .read(logServiceProvider.notifier)
+          .addError('No configuration selected');
+      state = state.copyWith(
+        connectionState: VpnState.error,
+        error: 'No configuration selected',
+      );
       _connectTimeout?.cancel();
       _connectTimeout = null;
       return;
@@ -304,23 +375,30 @@ class VpnNotifier extends Notifier<VpnState2> {
 
     final validationError = config.validate();
     if (validationError != null) {
-      ref.read(logServiceProvider.notifier).addError('Invalid config: $validationError');
-      state = state.copyWith(connectionState: VpnState.error, error: validationError);
+      ref
+          .read(logServiceProvider.notifier)
+          .addError('Invalid config: $validationError');
+      state = state.copyWith(
+        connectionState: VpnState.error,
+        error: validationError,
+      );
       _connectTimeout?.cancel();
       _connectTimeout = null;
       return;
     }
 
     final settings =
-        ref.read(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null) ??
-            const AppSettings();
+        ref
+            .read(settingsProvider)
+            .maybeWhen(data: (d) => d, orElse: () => null) ??
+        const AppSettings();
 
     final socksCredentials = settings.randomCredentials
         ? XrayEngine.generateSocksCredentials()
         : (user: settings.socksUser, password: settings.socksPassword);
 
     final actualSocksPort = settings.randomPort
-        ? (10000 + DateTime.now().millisecondsSinceEpoch % 50000)
+        ? (10000 + Random().nextInt(50000))
         : settings.socksPort;
 
     final options = VpnEngineOptions(
@@ -330,24 +408,30 @@ class VpnNotifier extends Notifier<VpnState2> {
       socksPassword: socksCredentials.password,
       excludedPackages: settings.splitTunnelingEnabled
           ? (settings.vpnMode == VpnMode.allExcept
-              ? settings.excludedPackages
-              : <String>{})
+                ? settings.excludedPackages
+                : <String>{})
           : {},
       includedPackages: settings.splitTunnelingEnabled
           ? (settings.vpnMode == VpnMode.onlySelected
-              ? settings.includedPackages
-              : <String>{})
+                ? settings.includedPackages
+                : <String>{})
           : {},
       logLevel: settings.logLevel,
       enableUdp: settings.enableUdp,
       allowIcmp: settings.allowIcmp,
       dnsMode: settings.dnsMode,
       dnsServer: settings.dnsServer,
-      vpnMode: settings.vpnMode,
+      vpnMode: settings.splitTunnelingEnabled
+          ? settings.vpnMode
+          : VpnMode.allExcept,
       proxyOnly: settings.proxyOnly,
       showNotification: settings.showNotification,
       killSwitch: settings.killSwitchEnabled,
       routing: settings.routing,
+      sniffingEnabled: settings.sniffingEnabled,
+      mtu: settings.mtu,
+      dnsQueryStrategy: settings.dnsQueryStrategy,
+      blockQuic: settings.blockQuic,
     );
     state = state.copyWith(
       activeSocksPort: actualSocksPort,
@@ -362,8 +446,7 @@ class VpnNotifier extends Notifier<VpnState2> {
       ref
           .read(logServiceProvider.notifier)
           .addError('Connection failed: ${e.message}');
-      state = state.copyWith(
-          connectionState: VpnState.error, error: e.message);
+      state = state.copyWith(connectionState: VpnState.error, error: e.message);
       _connectTimeout?.cancel();
       _connectTimeout = null;
     }
@@ -371,7 +454,9 @@ class VpnNotifier extends Notifier<VpnState2> {
 
   Future<void> disconnect() async {
     if (state.connectionState == VpnState.disconnected ||
-        state.connectionState == VpnState.disconnecting) { return; }
+        state.connectionState == VpnState.disconnecting) {
+      return;
+    }
 
     // Update state synchronously
     state = state.copyWith(connectionState: VpnState.disconnecting);
@@ -432,18 +517,91 @@ class VpnNotifier extends Notifier<VpnState2> {
     await connect();
   }
 
+  VpnConfig? _resolveEffectiveConfig(ConfigState? cs) {
+    if (cs == null) return null;
+    final subId = cs.activeSubscriptionId;
+    if (subId != null) {
+      final subConfigs = cs.configs
+          .where((c) => c.subscriptionId == subId)
+          .toList();
+      if (subConfigs.isNotEmpty) {
+        subConfigs.sort((a, b) {
+          if (a.latencyMs == null) return 1;
+          if (b.latencyMs == null) return -1;
+          return a.latencyMs!.compareTo(b.latencyMs!);
+        });
+        return subConfigs.first;
+      }
+    }
+    return cs.activeConfig;
+  }
+
   Future<void> pingAllConfigs() async {
-    final configState = ref.read(configProvider).maybeWhen(data: (d) => d, orElse: () => null);
+    if (_isPinging) return;
+    final configState = ref
+        .read(configProvider)
+        .maybeWhen(data: (d) => d, orElse: () => null);
     if (configState == null) return;
-    // Ping in parallel, then update state sequentially to avoid race condition
-    final pinged = await Future.wait(configState.configs.map((config) async {
-      final ms = await _engine.pingConfig(config);
-      return config.copyWith(latencyMs: ms);
-    }));
-    for (final updated in pinged) {
-      await ref.read(configProvider.notifier).updateConfig(updated);
+    _isPinging = true;
+    try {
+      await _pingEndpoints(configState.configs);
+    } finally {
+      _isPinging = false;
     }
   }
+
+  Future<void> pingStaleConfigs() async {
+    if (_isPinging) return;
+    final configState = ref
+        .read(configProvider)
+        .maybeWhen(data: (d) => d, orElse: () => null);
+    if (configState == null) return;
+    final now = DateTime.now();
+    final stale = configState.configs.where((c) {
+      if (c.lastPingedAt == null) return true;
+      return now.difference(c.lastPingedAt!) > const Duration(hours: 1);
+    }).toList();
+    if (stale.isEmpty) return;
+    _isPinging = true;
+    try {
+      await _pingEndpoints(stale);
+    } finally {
+      _isPinging = false;
+    }
+  }
+
+  Future<void> _pingEndpoints(List<VpnConfig> configs) async {
+    final now = DateTime.now();
+    // Prefer non-raw configs per endpoint so TCP probe works for shared servers
+    final endpoints = <String, VpnConfig>{};
+    for (final c in configs) {
+      if (c.rawXrayConfig == null) {
+        endpoints['${c.address}:${c.port}'] = c;
+      }
+    }
+    for (final c in configs) {
+      if (c.rawXrayConfig != null) {
+        endpoints.putIfAbsent('${c.address}:${c.port}', () => c);
+      }
+    }
+
+    final results = await Future.wait(
+      endpoints.entries.map((e) async {
+        final ms = await _engine.pingConfig(e.value);
+        return MapEntry(e.key, ms);
+      }),
+    );
+    final latencyMap = Map.fromEntries(results);
+
+    // Single batch update — one storage write, one state update
+    await ref
+        .read(configProvider.notifier)
+        .batchUpdatePingResults(latencyMap, now);
+  }
+
+  Future<String?> getLogFilePath() => _engine.getLogFilePath();
+
+  Future<void> clearNativeLogs() => _engine.clearLogs();
 
   VpnState get connectionState => state.connectionState;
 }

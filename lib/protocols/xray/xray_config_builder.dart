@@ -4,16 +4,102 @@ import '../../core/models/vpn_config.dart';
 import '../../core/models/dns_config.dart';
 import '../../core/models/routing_settings.dart';
 import '../../core/constants/xray_defaults.dart';
+import '../../core/services/settings_service.dart' show DnsQueryStrategy;
 
 class XrayConfigBuilder {
+  static const _ruServicesDomains = [
+    'domain:2gis.ru',
+    'domain:2gis.com',
+    'domain:ads.x5.ru',
+    'domain:aif.ru',
+    'domain:aeroflot.ru',
+    'domain:alfabank.ru',
+    'domain:api.oneme.ru',
+    'domain:avito.ru',
+    'domain:beeline.ru',
+    'domain:burgerkingrus.ru',
+    'domain:dellin.ru',
+    'domain:drive2.ru',
+    'domain:dzen.ru',
+    'domain:fd.oneme.ru',
+    'domain:flypobeda.ru',
+    'domain:forbes.ru',
+    'domain:gazeta.ru',
+    'domain:gazprombank.ru',
+    'domain:gismeteo.ru',
+    'domain:gosuslugi.ru',
+    'domain:hh.ru',
+    'domain:i.oneme.ru',
+    'domain:kontur.ru',
+    'domain:kontur.host',
+    'domain:kp.ru',
+    'domain:kuper.ru',
+    'domain:lenta.ru',
+    'domain:mail.ru',
+    'domain:max.ru',
+    'domain:megamarket.ru',
+    'domain:megamarket.tech',
+    'domain:megafon.ru',
+    'domain:miniapps.max.ru',
+    'domain:moex.com',
+    'domain:motivtelecom.ru',
+    'domain:ozon.ru',
+    'domain:pervye.ru',
+    'domain:psbank.ru',
+    'domain:rambler.ru',
+    'domain:rambler-co.ru',
+    'domain:rbc.ru',
+    'domain:reg.ru',
+    'domain:reviews.2gis.com',
+    'domain:rg.ru',
+    'domain:ria.ru',
+    'domain:rustore.ru',
+    'domain:rutube.ru',
+    'domain:ruwiki.ru',
+    'domain:rzd.ru',
+    'domain:sdk-api.apptracer.ru',
+    'domain:sirena-travel.ru',
+    'domain:sravni.ru',
+    'domain:st.max.ru',
+    'domain:t-j.ru',
+    'domain:t2.ru',
+    'domain:tank-online.com',
+    'domain:taximaxim.ru',
+    'domain:tbank-online.com',
+    'domain:tildaapi.com',
+    'domain:tns-counter.ru',
+    'domain:tracker-api.vk-analytics.ru',
+    'domain:trvl.yandex.net',
+    'domain:tutu.ru',
+    'domain:vk.com',
+    'domain:vk.ru',
+    'domain:vkvideo.ru',
+    'domain:vtb.ru',
+    'domain:x5.ru',
+    'domain:xn--90acagbhgpca7c8c7f.xn--p1ai',
+    'domain:xn--80ajghhoc2aj1c8b.xn--p1ai',
+    'domain:xn--90aivcdt6dxbc.xn--p1ai',
+    'domain:xn--b1aew.xn--p1ai',
+    'domain:ya.ru',
+    'domain:yandex.ru',
+    'domain:yandex.net',
+    'domain:yandex.com',
+    'domain:yandexcloud.net',
+    'domain:yastatic.net',
+    'full:go.yandex',
+    'full:ru.ruwiki.ru',
+  ];
+
   static Map<String, dynamic> build(
     VpnConfig config,
     VpnEngineOptions options,
   ) {
     final dnsBlock = _buildDnsBlock(options);
     final routing = options.routing;
-    final routeOnly = _shouldUseRouteOnly(routing);
-    final domainStrategy = _domainStrategyFor(routing);
+    // routeOnly=true: sniffed domain is used for routing only — xray does NOT replace
+    // the connection destination. Without this, xray re-resolves the domain and
+    // redirects the connection to a different IP, breaking tun2socks and leaking DNS.
+    final routeOnly = options.sniffingEnabled;
 
     return {
       'log': {'loglevel': options.logLevel.name},
@@ -33,9 +119,11 @@ class XrayConfigBuilder {
             'udp': options.enableUdp,
           },
           'sniffing': {
-            'enabled': true,
-            'destOverride': ['http', 'tls', 'quic'],
-            'routeOnly': routeOnly,
+            'enabled': options.sniffingEnabled,
+            if (options.sniffingEnabled) ...{
+              'destOverride': ['http', 'tls', 'quic'],
+              'routeOnly': routeOnly,
+            },
           },
         },
       ],
@@ -43,13 +131,37 @@ class XrayConfigBuilder {
         _buildOutbound(config),
         {'tag': 'direct', 'protocol': 'freedom'},
         {'tag': 'dns-out', 'protocol': 'dns'},
+        {'tag': 'block', 'protocol': 'blackhole'},
       ],
       'routing': {
-        'domainStrategy': domainStrategy,
+        'domainStrategy': 'IPIfNonMatch',
         'rules': [
+          if (options.blockQuic) ...[
+            // Only block QUIC for user traffic (socks-in), not for xray's internal DNS module connections.
+            {
+              'type': 'field',
+              'inboundTag': ['socks-in'],
+              'port': '443',
+              'network': 'udp',
+              'outboundTag': 'block',
+            },
+          ],
           if (options.dnsMode == DnsMode.proxy) ...[
-            // Proxy mode: intercept DNS queries from the user and handle them via xray's DNS module.
-            // We only match socks-in to avoid loops when the DNS module sends its own queries.
+            // DoH/DoT connections from the DNS module go direct (not through VLESS proxy).
+            // xray protects these sockets via VpnService.protect(), so they bypass the TUN
+            // and reach the DNS server without going through the VPN tunnel.
+            // Going through VLESS causes unreliable HTTP/2 — each query opens a new
+            // VLESS connection and responses timeout because Google closes them quickly.
+            // DoH/DoT encrypt DNS independently of VPN, so direct is still private.
+            // UDP DNS continues to go through proxy to preserve VPN-side DNS resolution.
+            {
+              'type': 'field',
+              'inboundTag': ['dns-module'],
+              'outboundTag': options.dnsServer.type == DnsType.udp
+                  ? 'proxy'
+                  : 'direct',
+            },
+            // Intercept DNS queries from user apps and handle them via xray's DNS module.
             {
               'type': 'field',
               'inboundTag': ['socks-in'],
@@ -70,10 +182,22 @@ class XrayConfigBuilder {
             },
           ],
           ..._buildGeoRules(routing),
+          // In ONLY mode the catch-all routes to direct, so diagnostic hosts that aren't
+          // in the user's rules would bypass the proxy and may be blocked locally.
+          // Force them via proxy so heartbeat and IP-detection always test the tunnel.
+          if (routing.direction == RoutingDirection.onlySelected) ...[
+            {
+              'type': 'field',
+              'domain': ['full:cp.cloudflare.com', 'full:ip-api.com'],
+              'outboundTag': 'proxy',
+            },
+          ],
           {
             'type': 'field',
             'inboundTag': ['socks-in'],
-            'outboundTag': 'proxy',
+            'outboundTag': routing.direction == RoutingDirection.onlySelected
+                ? 'direct'
+                : 'proxy',
           },
         ],
       },
@@ -138,20 +262,38 @@ class XrayConfigBuilder {
       });
     }
 
+    if (routing.sitesEnabled && routing.sites.isNotEmpty) {
+      rules.add({
+        'type': 'field',
+        'domain': routing.sites.map((s) => 'domain:$s').toList(),
+        'outboundTag': selectedOut,
+      });
+    }
+
+    if (routing.ruServicesEnabled) {
+      rules.add({
+        'type': 'field',
+        'domain': _ruServicesDomains,
+        'outboundTag': selectedOut,
+      });
+    }
+
     return rules;
   }
 
-  static bool _shouldUseRouteOnly(RoutingSettings routing) =>
-      routing.isActive || routing.adBlockEnabled;
+  static String _queryStrategy(DnsQueryStrategy s) => switch (s) {
+    DnsQueryStrategy.ipv4Only => 'UseIPv4',
+    DnsQueryStrategy.ipv6Only => 'UseIPv6',
+    DnsQueryStrategy.auto => 'UseIP',
+  };
 
-  static String _domainStrategyFor(RoutingSettings routing) {
-    final needsIpResolution = routing.bypassLocal || routing.geoEnabled;
-    return needsIpResolution ? 'IPIfNonMatch' : 'AsIs';
-  }
+  static Map<String, dynamic> buildDnsBlock(VpnEngineOptions options) =>
+      _buildDnsBlock(options);
 
   static Map<String, dynamic> _buildDnsBlock(VpnEngineOptions options) {
     final server = options.dnsServer;
     final routing = options.routing;
+    final strategy = _queryStrategy(options.dnsQueryStrategy);
     List<dynamic> servers = [];
 
     if (options.dnsMode == DnsMode.direct) {
@@ -159,7 +301,7 @@ class XrayConfigBuilder {
       // Use system resolver for xray's own domain lookups (e.g. routing decisions).
       return {
         'servers': ['localhost'],
-        'queryStrategy': 'UseIPv4',
+        'queryStrategy': strategy,
         'disableFallback': true,
       };
     }
@@ -169,7 +311,7 @@ class XrayConfigBuilder {
     if (routing.adBlockEnabled) {
       servers.add({
         'address': 'rcode://success',
-        'domains': [XrayDefaults.adBlockGeosite],
+        'domains': [XrayDefaults.adBlockGeosite, 'geosite:win-spy'],
       });
     }
 
@@ -182,8 +324,9 @@ class XrayConfigBuilder {
         servers.add({'address': server.address});
         break;
       case DnsType.dot:
+        // Use domain as TLS address (SNI) when available; fall back to IP.
         servers.add({
-          'address': 'tls://${server.address}',
+          'address': 'tls://${server.domain ?? server.address}',
           'port': server.port,
         });
         break;
@@ -207,7 +350,12 @@ class XrayConfigBuilder {
       }
     }
 
-    return {'hosts': hosts, 'servers': servers, 'queryStrategy': 'UseIPv4'};
+    return {
+      'tag': 'dns-module',
+      'hosts': hosts,
+      'servers': servers,
+      'queryStrategy': strategy,
+    };
   }
 
   static Map<String, dynamic> _buildOutbound(VpnConfig config) {
@@ -355,6 +503,13 @@ class XrayConfigBuilder {
           'allowInsecure': false,
           if (config.fingerprint != null && config.fingerprint!.isNotEmpty)
             'fingerprint': config.fingerprint,
+          if (config.alpn != null && config.alpn!.isNotEmpty)
+            'alpn': config.alpn!.split(',').map((s) => s.trim()).toList(),
+          if (config.ech != null && config.ech!.isNotEmpty)
+            'echSettings': {
+              'enable': true,
+              'config': [config.ech],
+            },
         },
       if (config.transport == VpnTransport.ws)
         'wsSettings': {
@@ -385,6 +540,8 @@ class XrayConfigBuilder {
           if (config.wsHost != null && config.wsHost!.isNotEmpty)
             'host': config.wsHost,
         },
+      if (config.finalmask != null && config.finalmask!.isNotEmpty)
+        'finalmask': config.finalmask,
     };
   }
 
@@ -396,5 +553,113 @@ class XrayConfigBuilder {
     if (RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(host)) return true;
     if (host.contains(':')) return true; // IPv6
     return false;
+  }
+
+  /// Merge app settings into a pre-built raw xray config from a managed subscription.
+  /// App settings take priority: inbounds, dns, log are replaced; app routing rules
+  /// are prepended (with higher priority than server rules).
+  static String mergeWithRaw(String rawConfig, VpnEngineOptions options) {
+    try {
+      final cfg = jsonDecode(rawConfig) as Map<String, dynamic>;
+
+      // Replace inbounds with app's (port, credentials, sniffing)
+      cfg['inbounds'] = [
+        {
+          'tag': 'socks-in',
+          'protocol': 'socks',
+          'port': options.socksPort,
+          'listen': XrayDefaults.socksListen,
+          'settings': {
+            'auth': options.socksUser.isNotEmpty ? 'password' : 'noauth',
+            if (options.socksUser.isNotEmpty)
+              'accounts': [
+                {'user': options.socksUser, 'pass': options.socksPassword},
+              ],
+            'udp': options.enableUdp,
+          },
+          'sniffing': {
+            'enabled': options.sniffingEnabled,
+            if (options.sniffingEnabled) ...{
+              'destOverride': ['http', 'tls', 'quic'],
+              'routeOnly': true,
+            },
+          },
+        },
+      ];
+
+      // Replace dns with app's (adblock, DNS server, DNS mode)
+      cfg['dns'] = _buildDnsBlock(options);
+
+      // Replace log level
+      cfg['log'] = {'loglevel': options.logLevel.name};
+
+      // Ensure dns-out outbound exists (needed for DNS proxy mode rule)
+      if (options.dnsMode == DnsMode.proxy) {
+        final outbounds = List<dynamic>.from(cfg['outbounds'] as List? ?? []);
+        if (!outbounds.any((o) => (o as Map?)?['tag'] == 'dns-out')) {
+          outbounds.add({'tag': 'dns-out', 'protocol': 'dns'});
+          cfg['outbounds'] = outbounds;
+        }
+      }
+
+      // Build app routing rules to prepend (app has priority over server rules)
+      final appRules = <Map<String, dynamic>>[];
+
+      if (options.blockQuic) {
+        appRules.add({
+          'type': 'field',
+          'inboundTag': ['socks-in'],
+          'port': '443',
+          'network': 'udp',
+          'outboundTag': 'block',
+        });
+      }
+
+      if (options.dnsMode == DnsMode.proxy) {
+        appRules.add({
+          'type': 'field',
+          'inboundTag': ['dns-module'],
+          'outboundTag': options.dnsServer.type == DnsType.udp
+              ? 'proxy'
+              : 'direct',
+        });
+        appRules.add({
+          'type': 'field',
+          'inboundTag': ['socks-in'],
+          'port': '53',
+          'network': 'udp,tcp',
+          'outboundTag': 'dns-out',
+        });
+      } else if (options.dnsMode == DnsMode.direct) {
+        appRules.add({
+          'type': 'field',
+          'port': '53',
+          'network': 'udp,tcp',
+          'outboundTag': 'direct',
+        });
+      }
+
+      // Bypass/only rules from app settings — only safe if direction is not global
+      final routing = options.routing;
+      if (routing.isActive) {
+        appRules.addAll(_buildGeoRules(routing));
+      }
+
+      // Prepend app rules to the server's existing rules
+      if (appRules.isNotEmpty) {
+        final serverRouting = cfg['routing'] as Map<String, dynamic>? ?? {};
+        final serverRules = List<dynamic>.from(
+          serverRouting['rules'] as List? ?? [],
+        );
+        cfg['routing'] = {
+          ...serverRouting,
+          'rules': [...appRules, ...serverRules],
+        };
+      }
+
+      return jsonEncode(cfg);
+    } catch (_) {
+      return rawConfig;
+    }
   }
 }

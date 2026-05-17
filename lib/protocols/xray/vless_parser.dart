@@ -19,7 +19,8 @@ class VlessParser {
     if (uri.startsWith('vmess://')) return _parseVmess(uri);
     if (uri.startsWith('trojan://')) return _parseTrojan(uri);
     if (uri.startsWith('ss://')) return _parseShadowsocks(uri);
-    if (uri.startsWith('hy2://') || uri.startsWith('hysteria2://')) return _parseHysteria2(uri);
+    if (uri.startsWith('hy2://') || uri.startsWith('hysteria2://'))
+      return _parseHysteria2(uri);
     return null;
   }
 
@@ -39,8 +40,9 @@ class VlessParser {
       final name = hashIdx >= 0
           ? _decodeName(withoutScheme.substring(hashIdx + 1))
           : 'VLESS Server';
-      final main =
-          hashIdx >= 0 ? withoutScheme.substring(0, hashIdx) : withoutScheme;
+      final main = hashIdx >= 0
+          ? withoutScheme.substring(0, hashIdx)
+          : withoutScheme;
 
       final atIdx = main.lastIndexOf('@');
       if (atIdx < 0) return null;
@@ -85,6 +87,9 @@ class VlessParser {
         encryption: params['encryption'] ?? 'none',
         xhttpMode: params['mode'],
         xhttpExtra: _parseExtra(params['extra']),
+        finalmask: _parseExtra(params['fm']),
+        alpn: params['alpn'],
+        ech: params['ech'],
         createdAt: DateTime.now(),
         rawUri: uri,
       );
@@ -122,7 +127,9 @@ class VlessParser {
         grpcServiceName: json['path'] as String?,
         alterId: json['aid']?.toString() ?? '0',
         xhttpMode: json['mode'] as String?,
-        xhttpExtra: json['extra'] is Map<String, dynamic> ? json['extra'] as Map<String, dynamic> : null,
+        xhttpExtra: json['extra'] is Map<String, dynamic>
+            ? json['extra'] as Map<String, dynamic>
+            : null,
         createdAt: DateTime.now(),
         rawUri: uri,
       );
@@ -139,8 +146,9 @@ class VlessParser {
       final name = hashIdx >= 0
           ? _decodeName(withoutScheme.substring(hashIdx + 1))
           : 'Trojan Server';
-      final main =
-          hashIdx >= 0 ? withoutScheme.substring(0, hashIdx) : withoutScheme;
+      final main = hashIdx >= 0
+          ? withoutScheme.substring(0, hashIdx)
+          : withoutScheme;
 
       final atIdx = main.lastIndexOf('@');
       if (atIdx < 0) return null;
@@ -187,8 +195,9 @@ class VlessParser {
       final name = hashIdx >= 0
           ? _decodeName(withoutScheme.substring(hashIdx + 1))
           : 'Shadowsocks Server';
-      final main =
-          hashIdx >= 0 ? withoutScheme.substring(0, hashIdx) : withoutScheme;
+      final main = hashIdx >= 0
+          ? withoutScheme.substring(0, hashIdx)
+          : withoutScheme;
 
       String method, password, host;
       int port;
@@ -220,14 +229,15 @@ class VlessParser {
         password = decoded.substring(colonIdx + 1);
         (host, port) = _parseHostPort(hostPortClean, 8388);
       } else {
-        final decoded =
-            utf8.decode(base64Decode(_padBase64(main)));
+        final decoded = utf8.decode(base64Decode(_padBase64(main)));
         final atIdx = decoded.lastIndexOf('@');
         if (atIdx < 0) return null;
         final userInfo = decoded.substring(0, atIdx);
         final hostPart = decoded.substring(atIdx + 1);
         final qIdx = hostPart.indexOf('?');
-        final hostPortClean = qIdx >= 0 ? hostPart.substring(0, qIdx) : hostPart;
+        final hostPortClean = qIdx >= 0
+            ? hostPart.substring(0, qIdx)
+            : hostPart;
         if (qIdx >= 0) queryStr = hostPart.substring(qIdx + 1);
         final colonIdx = userInfo.indexOf(':');
         method = userInfo.substring(0, colonIdx);
@@ -283,8 +293,9 @@ class VlessParser {
       final name = hashIdx >= 0
           ? _decodeName(withoutScheme.substring(hashIdx + 1))
           : 'Hysteria2 Server';
-      final main =
-          hashIdx >= 0 ? withoutScheme.substring(0, hashIdx) : withoutScheme;
+      final main = hashIdx >= 0
+          ? withoutScheme.substring(0, hashIdx)
+          : withoutScheme;
 
       final atIdx = main.lastIndexOf('@');
       if (atIdx < 0) return null;
@@ -299,8 +310,9 @@ class VlessParser {
       final params = Uri.splitQueryString(queryStr);
 
       final obfs = params['obfs'];
-      final obfsPassword =
-          obfs == 'salamander' ? params['obfs-password'] : null;
+      final obfsPassword = obfs == 'salamander'
+          ? params['obfs-password']
+          : null;
       final allowInsecure = _parseInsecure(params);
       final pinSHA256 = params['pinSHA256'];
 
