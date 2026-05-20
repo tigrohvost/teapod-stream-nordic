@@ -544,7 +544,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
           _RowToggle(
             t: t,
             title: 'Блокировать QUIC',
-            hint: 'Блокирует UDP 443, чтобы браузер использовал TCP вместо HTTP/3. Устраняет зависания Google после простоя.',
+            hint: 'TUN отвечает на UDP 443 ICMP-ом "порт недоступен": браузер мгновенно падает на TCP вместо ожидания QUIC-таймаута (~55с). Трафик из устройства не уходит.',
             value: s.blockQuic,
             locked: locked,
             onChange: (v) => widget.onUpdate(s.copyWith(blockQuic: v)),
