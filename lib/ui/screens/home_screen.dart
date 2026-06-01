@@ -1,11 +1,13 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/models/routing_settings.dart';
 import '../../core/models/vpn_stats.dart';
 import '../../providers/vpn_provider.dart';
 import '../../providers/config_provider.dart';
 import '../../providers/ip_info_provider.dart';
 import '../../providers/app_info_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/live_sparkline.dart';
@@ -15,30 +17,33 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final vpnState    = ref.watch(vpnProvider);
-    final configAsync = ref.watch(configProvider);
-    final version     = ref.watch(appVersionProvider).maybeWhen(data: (v) => v, orElse: () => 'v?');
+    final vpnState       = ref.watch(vpnProvider);
+    final effectiveConfig = ref.watch(effectiveConfigProvider);
+    final version        = ref.watch(appVersionProvider).maybeWhen(data: (v) => v, orElse: () => 'v?');
     final t = Theme.of(context).extension<TeapodTokens>()!;
-
-    final activeConfig = configAsync.maybeWhen(
-      data: (d) => d.activeConfig,
-      orElse: () => null,
-    );
-    final canToggle = activeConfig != null;
-    final pingMs    = activeConfig?.latencyMs;
+    final canToggle = effectiveConfig != null;
+    final pingMs    = effectiveConfig?.latencyMs;
 
     final isConn  = vpnState.isConnected;
     final isBusy  = vpnState.isBusy;
     final stateCode = isConn ? '01' : (isBusy ? '02' : '00');
 
-    final protoLabel = activeConfig != null
-        ? _protoLabel(activeConfig.protocol)
+    final protoLabel = effectiveConfig != null
+        ? _protoLabel(effectiveConfig.protocol)
         : '—';
-    final serverHint = activeConfig != null
-        ? '${activeConfig.address}:${activeConfig.port}'
+    final serverHint = effectiveConfig != null
+        ? '${effectiveConfig.address}:${effectiveConfig.port}'
         : '—';
 
     final history = vpnState.stats.speedHistory;
+
+    final isManaged = effectiveConfig?.rawXrayConfig != null;
+    final routingDirection = ref.watch(
+      settingsProvider.select((s) => s.maybeWhen(
+        data: (d) => d.routing.direction,
+        orElse: () => RoutingDirection.global,
+      )),
+    );
 
     return Scaffold(
       body: SafeArea(
@@ -63,6 +68,8 @@ class HomeScreen extends ConsumerWidget {
                 pingMs: pingMs,
                 history: history,
               ),
+              if (isManaged)
+                _ManagedWarning(t: t, direction: routingDirection),
             ],
           ),
         ),
@@ -583,6 +590,43 @@ class _MetricsGrid extends StatelessWidget {
           peakMbps: peakDown,
         ),
       ],
+    );
+  }
+}
+
+// ── Managed config warning ────────────────────────────────────────
+
+class _ManagedWarning extends StatelessWidget {
+  final TeapodTokens t;
+  final RoutingDirection direction;
+
+  const _ManagedWarning({required this.t, required this.direction});
+
+  @override
+  Widget build(BuildContext context) {
+    final isOnlySelected = direction == RoutingDirection.onlySelected;
+    final detail = isOnlySelected
+        ? 'режим «Только» по доменам и DNS-настройки не применяются'
+        : 'DNS-настройки не применяются · роутинг управляется сервером';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: t.line, width: 1)),
+      ),
+      child: RichText(
+        text: TextSpan(
+          style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5),
+          children: [
+            TextSpan(
+              text: '[managed] ',
+              style: AppTheme.mono(size: 10, color: AppColors.accentOrange, letterSpacing: 0.5),
+            ),
+            TextSpan(text: '$detail · управляется сервером'),
+          ],
+        ),
+      ),
     );
   }
 }

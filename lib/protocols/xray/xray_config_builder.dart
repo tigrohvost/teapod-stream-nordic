@@ -470,16 +470,27 @@ class XrayConfigBuilder {
   }
 
   /// Merge app settings into a pre-built raw xray config from a managed subscription.
-  /// App settings take priority: inbounds, dns, log are replaced; app routing rules
-  /// are prepended (with higher priority than server rules).
+  ///
+  /// Unlike [build], we preserve the server's outbound topology (load balancers,
+  /// observatory, custom outbound tags). Only port/credentials, DNS, log and
+  /// safe bypass rules (→ direct) are overlaid.
   static String mergeWithRaw(String rawConfig, VpnEngineOptions options) {
     try {
       final cfg = jsonDecode(rawConfig) as Map<String, dynamic>;
 
-      // Replace inbounds with app's (port, credentials, sniffing)
+      // Preserve the original socks inbound tag so server routing rules
+      // (inboundTag: ["socks", "http"]) keep matching after we replace the inbound.
+      final originalInbounds = List<dynamic>.from(cfg['inbounds'] as List? ?? []);
+      final socksTag = originalInbounds
+          .whereType<Map<String, dynamic>>()
+          .where((i) => i['protocol'] == 'socks')
+          .map((i) => i['tag'] as String?)
+          .firstWhere((t) => t != null && t.isNotEmpty, orElse: () => null)
+          ?? 'socks';
+
       cfg['inbounds'] = [
         {
-          'tag': 'socks-in',
+          'tag': socksTag,
           'protocol': 'socks',
           'port': options.socksPort,
           'listen': XrayDefaults.socksListen,
@@ -501,53 +512,33 @@ class XrayConfigBuilder {
         },
       ];
 
-      // Replace dns with app's (adblock, DNS server, DNS mode)
-      cfg['dns'] = _buildDnsBlock(options);
-
-      // Replace log level
+      // DNS block is intentionally NOT replaced: managed configs carry their own DNS
+      // routing configured for their outbound topology. Overriding it breaks dns-module
+      // routing (no 'proxy' outbound exists in these configs) and causes DNS leaks.
+      // User's custom DNS server and adblock settings do not apply to managed configs.
       cfg['log'] = {'loglevel': options.logLevel.name};
 
-      // Ensure dns-out outbound exists (needed for DNS proxy mode rule)
-      if (options.dnsMode == DnsMode.proxy) {
-        final outbounds = List<dynamic>.from(cfg['outbounds'] as List? ?? []);
-        if (!outbounds.any((o) => (o as Map?)?['tag'] == 'dns-out')) {
-          outbounds.add({'tag': 'dns-out', 'protocol': 'dns'});
-          cfg['outbounds'] = outbounds;
-        }
-      }
-
-      // Build app routing rules to prepend (app has priority over server rules)
       final appRules = <Map<String, dynamic>>[];
 
-      // blockQuic is enforced at the TUN level (tun2socks ICMP Port Unreachable),
-      // not in xray routing — see the comment in build() for the rationale.
-
-      if (options.dnsMode == DnsMode.proxy) {
-        appRules.add({
-          'type': 'field',
-          'inboundTag': ['dns-module'],
-          'outboundTag': options.dnsServer.type == DnsType.udp ? 'proxy' : 'direct',
-        });
-        appRules.add({
-          'type': 'field',
-          'inboundTag': ['socks-in'],
-          'port': '53',
-          'network': 'udp,tcp',
-          'outboundTag': 'dns-out',
-        });
-      } else if (options.dnsMode == DnsMode.direct) {
+      // In direct DNS mode, intercept port 53 so it bypasses the tunnel.
+      // In proxy DNS mode we leave DNS handling to the server config entirely.
+      if (options.dnsMode == DnsMode.direct) {
         appRules.add({
           'type': 'field', 'port': '53', 'network': 'udp,tcp', 'outboundTag': 'direct',
         });
       }
 
-      // Bypass/only rules from app settings — only safe if direction is not global
+      // Only inject rules that route to 'direct' — safe regardless of server outbound names.
+      // onlySelected rules (→ 'proxy') are skipped: the server's own catch-all handles routing.
       final routing = options.routing;
-      if (routing.isActive) {
+      if (routing.direction == RoutingDirection.bypass) {
         appRules.addAll(_buildGeoRules(routing));
+      } else if (routing.bypassLocal) {
+        appRules.add({'type': 'field', 'ip': ['geoip:private'], 'outboundTag': 'direct'});
       }
 
-      // Prepend app rules to the server's existing rules
+      // No catch-all rule — the server's routing handles the remainder.
+
       if (appRules.isNotEmpty) {
         final serverRouting = cfg['routing'] as Map<String, dynamic>? ?? {};
         final serverRules = List<dynamic>.from(serverRouting['rules'] as List? ?? []);

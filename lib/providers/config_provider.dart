@@ -454,3 +454,23 @@ class ImportConnectionsResult {
 
 final configProvider =
     AsyncNotifierProvider<ConfigNotifier, ConfigState>(ConfigNotifier.new);
+
+/// The config that will actually be used on connect:
+/// best-latency config from the active subscription, or the manually selected config.
+final effectiveConfigProvider = Provider<VpnConfig?>((ref) {
+  final cs = ref.watch(configProvider).maybeWhen(data: (d) => d, orElse: () => null);
+  if (cs == null) return null;
+  final subId = cs.activeSubscriptionId;
+  if (subId != null) {
+    final subConfigs = cs.configs.where((c) => c.subscriptionId == subId).toList();
+    if (subConfigs.isNotEmpty) {
+      subConfigs.sort((a, b) {
+        if (a.latencyMs == null) return 1;
+        if (b.latencyMs == null) return -1;
+        return a.latencyMs!.compareTo(b.latencyMs!);
+      });
+      return subConfigs.first;
+    }
+  }
+  return cs.activeConfig;
+});

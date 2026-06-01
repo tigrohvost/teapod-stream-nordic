@@ -478,22 +478,8 @@ class VpnNotifier extends Notifier<VpnState2> {
     await connect();
   }
 
-  VpnConfig? _resolveEffectiveConfig(ConfigState? cs) {
-    if (cs == null) return null;
-    final subId = cs.activeSubscriptionId;
-    if (subId != null) {
-      final subConfigs = cs.configs.where((c) => c.subscriptionId == subId).toList();
-      if (subConfigs.isNotEmpty) {
-        subConfigs.sort((a, b) {
-          if (a.latencyMs == null) return 1;
-          if (b.latencyMs == null) return -1;
-          return a.latencyMs!.compareTo(b.latencyMs!);
-        });
-        return subConfigs.first;
-      }
-    }
-    return cs.activeConfig;
-  }
+  VpnConfig? _resolveEffectiveConfig(ConfigState? cs) =>
+      cs == null ? null : ref.read(effectiveConfigProvider);
 
   Future<void> pingAllConfigs() async {
     if (_isPinging) return;
