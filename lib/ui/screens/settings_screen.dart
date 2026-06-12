@@ -477,6 +477,14 @@ class _SettingsBodyState extends State<_SettingsBody> {
             ),
             _RowToggle(
               t: t,
+              title: 'Запуск при загрузке',
+              hint: 'Подключаться автоматически при перезагрузке устройства',
+              value: s.autoStartOnBoot,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(autoStartOnBoot: v)),
+            ),
+            _RowToggle(
+              t: t,
               title: 'Уведомление',
               hint: 'Скорость и кнопка отключения в шторке',
               value: s.showNotification,
@@ -641,7 +649,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
               t: t,
               title: 'Блокировать QUIC',
               hint:
-                  'Блокирует UDP 443, чтобы браузер использовал TCP вместо HTTP/3. Устраняет зависания Google после простоя.',
+                  'TUN отвечает на UDP 443 ICMP-ом "порт недоступен": браузер мгновенно падает на TCP вместо ожидания QUIC-таймаута (~55с). Трафик из устройства не уходит.',
               value: s.blockQuic,
               locked: locked,
               onChange: (v) => widget.onUpdate(s.copyWith(blockQuic: v)),

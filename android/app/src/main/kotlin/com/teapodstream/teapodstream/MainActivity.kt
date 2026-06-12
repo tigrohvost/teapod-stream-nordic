@@ -83,7 +83,8 @@ class MainActivity : FlutterActivity() {
                                 xrayConfig, socksPort, socksUser, socksPassword,
                                 excludedPackages, includedPackages, vpnMode,
                                 ssPrefix, proxyOnly = true, showNotification = showNotification,
-                                killSwitch = killSwitch, allowIcmp = allowIcmp, blockQuic = blockQuic
+                                killSwitch = killSwitch, allowIcmp = allowIcmp,
+                                blockQuic = blockQuic
                             )
                             result.success(null)
                         } else {
@@ -92,7 +93,8 @@ class MainActivity : FlutterActivity() {
                                     xrayConfig, socksPort, socksUser, socksPassword,
                                     excludedPackages, includedPackages, vpnMode,
                                     ssPrefix, proxyOnly = false, showNotification = showNotification,
-                                    killSwitch = killSwitch, allowIcmp = allowIcmp, blockQuic = blockQuic
+                                    killSwitch = killSwitch, allowIcmp = allowIcmp,
+                                    blockQuic = blockQuic
                                 )
                                 result.success(null)
                             }

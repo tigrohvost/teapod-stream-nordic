@@ -55,7 +55,7 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
                     ))
                 }
             }
-            "connecting", "disconnecting" -> sendStateEvent(state)
+            "connecting", "disconnecting", "reconnecting" -> sendStateEvent(state)
             else -> sendStateEvent("disconnected")
         }
     }
@@ -91,8 +91,8 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
         // Обновляем плитку и уведомление при изменении состояния
         appContext?.let { ctx ->
             VpnTileService.updateTile(ctx)
-            if (state == "connecting" || state == "disconnecting") {
-                XrayVpnService.showIntermediateNotification(ctx, state == "connecting")
+            if (state == "connecting" || state == "disconnecting" || state == "reconnecting") {
+                XrayVpnService.showIntermediateNotification(ctx, state != "disconnecting")
             }
         }
     }

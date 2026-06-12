@@ -136,30 +136,16 @@ class XrayConfigBuilder {
       'routing': {
         'domainStrategy': 'IPIfNonMatch',
         'rules': [
-          if (options.blockQuic) ...[
-            // Only block QUIC for user traffic (socks-in), not for xray's internal DNS module connections.
-            {
-              'type': 'field',
-              'inboundTag': ['socks-in'],
-              'port': '443',
-              'network': 'udp',
-              'outboundTag': 'block',
-            },
-          ],
+          // QUIC blocking is handled at the TUN level by tun2socks, which replies
+          // with an ICMP Port Unreachable so the browser falls back to TCP immediately.
+          // No xray routing rule is needed: silently dropping UDP/443 here (blackhole)
+          // would force browsers to wait ~55s for QUIC retransmission to time out,
+          // and rerouting QUIC to 'direct' would leak the destination outside the tunnel.
           if (options.dnsMode == DnsMode.proxy) ...[
-            // DoH/DoT connections from the DNS module go direct (not through VLESS proxy).
-            // xray protects these sockets via VpnService.protect(), so they bypass the TUN
-            // and reach the DNS server without going through the VPN tunnel.
-            // Going through VLESS causes unreliable HTTP/2 — each query opens a new
-            // VLESS connection and responses timeout because Google closes them quickly.
-            // DoH/DoT encrypt DNS independently of VPN, so direct is still private.
-            // UDP DNS continues to go through proxy to preserve VPN-side DNS resolution.
             {
               'type': 'field',
               'inboundTag': ['dns-module'],
-              'outboundTag': options.dnsServer.type == DnsType.udp
-                  ? 'proxy'
-                  : 'direct',
+              'outboundTag': 'proxy',
             },
             // Intercept DNS queries from user apps and handle them via xray's DNS module.
             {
@@ -605,15 +591,8 @@ class XrayConfigBuilder {
       // Build app routing rules to prepend (app has priority over server rules)
       final appRules = <Map<String, dynamic>>[];
 
-      if (options.blockQuic) {
-        appRules.add({
-          'type': 'field',
-          'inboundTag': ['socks-in'],
-          'port': '443',
-          'network': 'udp',
-          'outboundTag': 'block',
-        });
-      }
+      // blockQuic is enforced at the TUN level (tun2socks ICMP Port Unreachable),
+      // not in xray routing — see the comment in build() for the rationale.
 
       if (options.dnsMode == DnsMode.proxy) {
         appRules.add({

@@ -92,6 +92,7 @@ class AppSettings {
   final int subAutoRefreshHours;
   final DnsQueryStrategy dnsQueryStrategy;
   final bool blockQuic;
+  final bool autoStartOnBoot;
 
   const AppSettings({
     this.socksPort = AppConstants.defaultSocksPort,
@@ -126,6 +127,7 @@ class AppSettings {
     this.subAutoRefreshHours = 6,
     this.dnsQueryStrategy = DnsQueryStrategy.ipv4Only,
     this.blockQuic = false,
+    this.autoStartOnBoot = false,
   });
 
   AppSettings copyWith({
@@ -161,6 +163,7 @@ class AppSettings {
     int? subAutoRefreshHours,
     DnsQueryStrategy? dnsQueryStrategy,
     bool? blockQuic,
+    bool? autoStartOnBoot,
   }) {
     return AppSettings(
       socksPort: socksPort ?? this.socksPort,
@@ -196,6 +199,7 @@ class AppSettings {
       subAutoRefreshHours: subAutoRefreshHours ?? this.subAutoRefreshHours,
       dnsQueryStrategy: dnsQueryStrategy ?? this.dnsQueryStrategy,
       blockQuic: blockQuic ?? this.blockQuic,
+      autoStartOnBoot: autoStartOnBoot ?? this.autoStartOnBoot,
     );
   }
 
@@ -232,6 +236,7 @@ class AppSettings {
     'subAutoRefreshHours': subAutoRefreshHours,
     'dnsQueryStrategy': dnsQueryStrategy.name,
     'blockQuic': blockQuic,
+    'autoStartOnBoot': autoStartOnBoot,
   };
 
   static AppSettings fromJson(Map<String, dynamic> json) {
@@ -297,6 +302,7 @@ class AppSettings {
         orElse: () => DnsQueryStrategy.ipv4Only,
       ),
       blockQuic: json['blockQuic'] as bool? ?? false,
+      autoStartOnBoot: json['autoStartOnBoot'] as bool? ?? false,
     );
   }
 
@@ -351,6 +357,7 @@ class SettingsService {
   static const _subAutoRefreshHoursKey = 'sub_auto_refresh_hours';
   static const _dnsQueryStrategyKey = 'dns_query_strategy';
   static const _blockQuicKey = 'block_quic';
+  static const _autoStartOnBootKey = 'auto_start_on_boot';
 
   final _secure = StorageSecureService();
 
@@ -409,6 +416,7 @@ class SettingsService {
         orElse: () => DnsQueryStrategy.ipv4Only,
       ),
       blockQuic: prefs.getBool(_blockQuicKey) ?? false,
+      autoStartOnBoot: prefs.getBool(_autoStartOnBootKey) ?? false,
     );
   }
 
@@ -500,6 +508,7 @@ class SettingsService {
     await prefs.setInt(_subAutoRefreshHoursKey, settings.subAutoRefreshHours);
     await prefs.setString(_dnsQueryStrategyKey, settings.dnsQueryStrategy.name);
     await prefs.setBool(_blockQuicKey, settings.blockQuic);
+    await prefs.setBool(_autoStartOnBootKey, settings.autoStartOnBoot);
     // SOCKS credentials go to encrypted storage
     await _secure.writeSocksCredentials(
       settings.socksUser,

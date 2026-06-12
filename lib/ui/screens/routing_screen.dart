@@ -542,11 +542,11 @@ class _RoutingBody extends StatelessWidget {
                   _CustomInputRow(
                     t: t,
                     ctrl: customCtrl,
-                    hint: 'Код страны (напр. IT)',
+                    hint: 'Код или категория (напр. IT, netflix)',
                     onAdd: () {
-                      final code = customCtrl.text.toUpperCase().trim();
+                      final code = customCtrl.text.trim();
                       if (code.isNotEmpty) {
-                        ss(() => selected.add(code));
+                        ss(() => selected.add(code.toLowerCase()));
                         customCtrl.clear();
                       }
                     },

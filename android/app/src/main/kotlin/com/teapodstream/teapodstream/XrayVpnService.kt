@@ -62,7 +62,7 @@ class XrayVpnService : VpnService() {
         const val EXTRA_SHOW_NOTIFICATION = "show_notification" // show rich notification with speed
         const val EXTRA_KILL_SWITCH = "kill_switch" // block traffic when VPN drops unexpectedly
         const val EXTRA_ALLOW_ICMP = "allow_icmp" // allow ICMP echo (ping) through the tunnel
-        const val EXTRA_BLOCK_QUIC = "block_quic" // block QUIC at the TUN layer
+        const val EXTRA_BLOCK_QUIC = "block_quic" // reject UDP/443 inside the TUN via ICMP Port Unreachable
         const val EXTRA_MTU = "mtu" // TUN MTU size
 
         // Static state tracker for querying from Dart
@@ -257,6 +257,7 @@ class XrayVpnService : VpnService() {
         when (intent?.action) {
             ACTION_DISCONNECT -> {
                 userRequestedDisconnect.set(true)
+                try { File(filesDir, "user_disconnected.flag").createNewFile() } catch (_: Exception) {}
                 // Signal disconnecting immediately so the button turns yellow
                 // even when triggered from the notification (no Flutter-side handler).
                 setState("disconnecting")
@@ -303,6 +304,7 @@ class XrayVpnService : VpnService() {
                     vpnMode, ssPrefix, proxyOnly, showNotification, killSwitch, allowIcmp, blockQuic, mtu)
                     .save(filesDir, ::log)
                 userRequestedDisconnect.set(false)
+                try { File(filesDir, "user_disconnected.flag").delete() } catch (_: Exception) {}
                 ensureForeground()
                 Thread {
                     startVpn(xrayConfig, socksPort, socksUser, socksPassword,
@@ -324,6 +326,7 @@ class XrayVpnService : VpnService() {
                         openApp()
                     } else {
                         userRequestedDisconnect.set(false)
+                        try { File(filesDir, "user_disconnected.flag").delete() } catch (_: Exception) {}
                         setState("reconnecting")
                         val configText = configFile.readText()
                         // Load SOCKS credentials from saved file (survives reconnect)
