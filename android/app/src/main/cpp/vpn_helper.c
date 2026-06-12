@@ -8,8 +8,6 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-extern "C" {
-
 JNIEXPORT jint JNICALL
 Java_com_teapodstream_teapodstream_XrayVpnService_nativeSetMaxFds(
         JNIEnv *env, jclass clazz, jint maxFds) {
@@ -28,5 +26,3 @@ Java_com_teapodstream_teapodstream_XrayVpnService_nativeSetMaxFds(
     LOGI("RLIMIT_NOFILE set to %lu", newrl.rlim_cur);
     return 0;
 }
-
-} // extern "C"

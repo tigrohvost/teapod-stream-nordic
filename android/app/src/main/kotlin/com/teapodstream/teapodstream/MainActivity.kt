@@ -75,6 +75,7 @@ class MainActivity : FlutterActivity() {
                         val showNotification = call.argument<Boolean>("showNotification") ?: true
                         val killSwitch = call.argument<Boolean>("killSwitch") ?: false
                         val allowIcmp = call.argument<Boolean>("allowIcmp") ?: true
+                        val blockQuic = call.argument<Boolean>("blockQuic") ?: false
 
                         if (proxyOnly) {
                             // Proxy-only: no TUN tunnel, no VPN permission needed
@@ -82,7 +83,7 @@ class MainActivity : FlutterActivity() {
                                 xrayConfig, socksPort, socksUser, socksPassword,
                                 excludedPackages, includedPackages, vpnMode,
                                 ssPrefix, proxyOnly = true, showNotification = showNotification,
-                                killSwitch = killSwitch, allowIcmp = allowIcmp
+                                killSwitch = killSwitch, allowIcmp = allowIcmp, blockQuic = blockQuic
                             )
                             result.success(null)
                         } else {
@@ -91,7 +92,7 @@ class MainActivity : FlutterActivity() {
                                     xrayConfig, socksPort, socksUser, socksPassword,
                                     excludedPackages, includedPackages, vpnMode,
                                     ssPrefix, proxyOnly = false, showNotification = showNotification,
-                                    killSwitch = killSwitch, allowIcmp = allowIcmp
+                                    killSwitch = killSwitch, allowIcmp = allowIcmp, blockQuic = blockQuic
                                 )
                                 result.success(null)
                             }
@@ -338,6 +339,7 @@ class MainActivity : FlutterActivity() {
         showNotification: Boolean = true,
         killSwitch: Boolean = false,
         allowIcmp: Boolean = false,
+        blockQuic: Boolean = false,
     ) {
         requestBatteryOptimizationExemption()
         val intent = Intent(this, XrayVpnService::class.java).apply {
@@ -354,6 +356,7 @@ class MainActivity : FlutterActivity() {
             putExtra(XrayVpnService.EXTRA_SHOW_NOTIFICATION, showNotification)
             putExtra(XrayVpnService.EXTRA_KILL_SWITCH, killSwitch)
             putExtra(XrayVpnService.EXTRA_ALLOW_ICMP, allowIcmp)
+            putExtra(XrayVpnService.EXTRA_BLOCK_QUIC, blockQuic)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)

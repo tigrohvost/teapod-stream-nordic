@@ -62,6 +62,7 @@ class XrayVpnService : VpnService() {
         const val EXTRA_SHOW_NOTIFICATION = "show_notification" // show rich notification with speed
         const val EXTRA_KILL_SWITCH = "kill_switch" // block traffic when VPN drops unexpectedly
         const val EXTRA_ALLOW_ICMP = "allow_icmp" // allow ICMP echo (ping) through the tunnel
+        const val EXTRA_BLOCK_QUIC = "block_quic" // block QUIC at the TUN layer
         const val EXTRA_MTU = "mtu" // TUN MTU size
 
         // Static state tracker for querying from Dart
@@ -205,6 +206,7 @@ class XrayVpnService : VpnService() {
     private var screenReceiver: android.content.BroadcastReceiver? = null
     private var killSwitchEnabled = false
     @Volatile private var allowIcmpEnabled = true
+    @Volatile private var blockQuicEnabled = false
     private var proxyOnlyMode = false
     private val networkChangeHandler = Handler(Looper.getMainLooper())
     private var pendingNetworkRunnable: Runnable? = null
@@ -294,17 +296,18 @@ class XrayVpnService : VpnService() {
                 val proxyOnly = intent.getBooleanExtra(EXTRA_PROXY_ONLY, false)
                 val killSwitch = intent.getBooleanExtra(EXTRA_KILL_SWITCH, false)
                 val allowIcmp = intent.getBooleanExtra(EXTRA_ALLOW_ICMP, true)
+                val blockQuic = intent.getBooleanExtra(EXTRA_BLOCK_QUIC, false)
                 val mtu = intent.getIntExtra(EXTRA_MTU, 1500).coerceIn(576, 9000)
                 // Persist non-sensitive params for CONNECT_QUICK reconnect (no credentials)
                 ConnectionParams(socksPort, excludedPackages, includedPackages,
-                    vpnMode, ssPrefix, proxyOnly, showNotification, killSwitch, allowIcmp, mtu)
+                    vpnMode, ssPrefix, proxyOnly, showNotification, killSwitch, allowIcmp, blockQuic, mtu)
                     .save(filesDir, ::log)
                 userRequestedDisconnect.set(false)
                 ensureForeground()
                 Thread {
                     startVpn(xrayConfig, socksPort, socksUser, socksPassword,
                         excludedPackages, includedPackages, vpnMode, ssPrefix, proxyOnly, killSwitch,
-                        allowIcmp, mtu = mtu)
+                        allowIcmp, blockQuic, mtu = mtu)
                 }.start()
                 return START_STICKY
             }
@@ -351,7 +354,7 @@ class XrayVpnService : VpnService() {
                                 params.socksPort, socksUser, socksPassword,
                                 params.excludedPackages, params.includedPackages, params.vpnMode,
                                 params.ssPrefix, params.proxyOnly, params.killSwitch,
-                                params.allowIcmp, mtu = params.mtu, isReconnect = true
+                                params.allowIcmp, params.blockQuic, mtu = params.mtu, isReconnect = true
                             )
                         }.start()
                     }
@@ -385,7 +388,7 @@ class XrayVpnService : VpnService() {
                             params.socksPort, socksUser, socksPassword,
                             params.excludedPackages, params.includedPackages, params.vpnMode,
                             params.ssPrefix, params.proxyOnly, params.killSwitch,
-                            params.allowIcmp, mtu = params.mtu, isReconnect = true
+                            params.allowIcmp, params.blockQuic, mtu = params.mtu, isReconnect = true
                         )
                     }.start()
                     return START_STICKY
@@ -440,6 +443,7 @@ class XrayVpnService : VpnService() {
         proxyOnly: Boolean = false,
         killSwitch: Boolean = false,
         allowIcmp: Boolean = true,
+        blockQuic: Boolean = false,
         mtu: Int = 1500,
         isReconnect: Boolean = false,
     ) {
@@ -449,6 +453,7 @@ class XrayVpnService : VpnService() {
         killSwitchEnabled = killSwitch
         tunModeActive = !proxyOnly
         allowIcmpEnabled = allowIcmp
+        blockQuicEnabled = blockQuic
         proxyOnlyMode = proxyOnly
         tunMtu = mtu.coerceIn(576, 9000)
         if (!isReconnect) clearLogFile()
@@ -552,6 +557,7 @@ class XrayVpnService : VpnService() {
                     socksUser,
                     socksPassword,
                     allowIcmpEnabled,
+                    blockQuicEnabled,
                     validator
                 )
                 if (tunErr.isNotEmpty()) throw IllegalStateException("tun2socks: $tunErr")
