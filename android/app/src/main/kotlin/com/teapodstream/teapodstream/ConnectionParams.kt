@@ -52,7 +52,7 @@ internal data class ConnectionParams(
                 proxyOnly = json.optBoolean("proxyOnly", false),
                 showNotification = json.optBoolean("showNotification", true),
                 killSwitch = json.optBoolean("killSwitch", false),
-                allowIcmp = json.optBoolean("allowIcmp", false),
+                allowIcmp = json.optBoolean("allowIcmp", true),
                 blockQuic = json.optBoolean("blockQuic", false),
                 mtu = json.optInt("mtu", 1500).coerceIn(576, 9000),
             )

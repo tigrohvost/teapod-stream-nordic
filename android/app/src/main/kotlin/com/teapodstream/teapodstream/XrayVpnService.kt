@@ -1319,6 +1319,17 @@ class XrayVpnService : VpnService() {
         heartbeatFailures.set(0)
     }
 
+    private fun readFully(inp: java.io.InputStream, size: Int): ByteArray {
+        val buf = ByteArray(size)
+        var read = 0
+        while (read < size) {
+            val n = inp.read(buf, read, size - read)
+            if (n < 0) throw Exception("SOCKS reply truncated (EOF at $read/$size)")
+            read += n
+        }
+        return buf
+    }
+
     private fun checkTunnelConnectivity(port: Int) {
         var stage = "init"
         val socket = Socket()
@@ -1331,8 +1342,7 @@ class XrayVpnService : VpnService() {
 
             stage = "socks_greeting"
             out.write(byteArrayOf(5, 2, 0, 2))
-            val resp = ByteArray(2)
-            inp.read(resp)
+            val resp = readFully(inp, 2)
             if (resp[0] != 5.toByte()) throw Exception("SOCKS ver mismatch")
 
             when (resp[1].toInt()) {
@@ -1344,8 +1354,8 @@ class XrayVpnService : VpnService() {
                         val u = creds.user.toByteArray()
                         val p = creds.password.toByteArray()
                         out.write(byteArrayOf(1, u.size.toByte()) + u + byteArrayOf(p.size.toByte()) + p)
-                        inp.read(resp)
-                        if (resp[1] != 0.toByte()) throw Exception("SOCKS auth failed")
+                        val authResp = readFully(inp, 2)
+                        if (authResp[1] != 0.toByte()) throw Exception("SOCKS auth failed")
                     }
                 }
                 else -> throw Exception("SOCKS auth not supported")
@@ -1361,21 +1371,18 @@ class XrayVpnService : VpnService() {
                 byteArrayOf((destPort shr 8).toByte(), destPort.toByte())
             )
 
-            val replyVer = inp.read()
-            val replyRep = inp.read()
-            val replyRsv = inp.read()
-            val replyAtyp = inp.read()
-            if (replyVer != 5 || replyRep != 0) throw Exception("SOCKS connect failed: $replyRep")
-            if (replyAtyp == 1) {
-                val buf = ByteArray(6)
-                var read = 0; while (read < buf.size) read += inp.read(buf, read, buf.size - read)
-            } else if (replyAtyp == 4) {
-                val buf = ByteArray(18)
-                var read = 0; while (read < buf.size) read += inp.read(buf, read, buf.size - read)
-            } else if (replyAtyp == 3) {
-                val len = inp.read()
-                val buf = ByteArray(len + 2)
-                var read = 0; while (read < buf.size) read += inp.read(buf, read, buf.size - read)
+            val reply = readFully(inp, 4)
+            val replyRep = reply[1].toInt()
+            val replyAtyp = reply[3].toInt()
+            if (reply[0].toInt() != 5 || replyRep != 0) throw Exception("SOCKS connect failed: $replyRep")
+            when (replyAtyp) {
+                1 -> readFully(inp, 6)
+                4 -> readFully(inp, 18)
+                3 -> {
+                    val len = inp.read()
+                    if (len < 0) throw Exception("SOCKS reply truncated (no domain len)")
+                    readFully(inp, len + 2)
+                }
             }
 
             stage = "http_request"
@@ -1509,7 +1516,12 @@ class XrayVpnService : VpnService() {
         // Save credentials to file for CONNECT_QUICK reconnect
         try {
             val credsFile = File(filesDir, "socks_creds.json")
-            credsFile.writeText("""{"port":$socksPort,"user":"$socksUser","pass":"$socksPassword"}""")
+            val json = org.json.JSONObject().apply {
+                put("port", socksPort)
+                put("user", socksUser)
+                put("pass", socksPassword)
+            }
+            credsFile.writeText(json.toString())
         } catch (e: Exception) {
             log("warning", "Failed to save socks_creds: ${e.message}")
         }
