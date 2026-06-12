@@ -20,9 +20,7 @@ import android.os.PowerManager
 import android.system.OsConstants
 import android.util.LruCache
 import androidx.core.app.NotificationCompat
-import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -32,7 +30,6 @@ import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import teapodcore.Teapodcore
 import teapodcore.XrayCallback
@@ -111,26 +108,12 @@ class XrayVpnService : VpnService() {
         private const val NOTIFICATION_CHANNEL_MINIMAL_ID = "vpn_service_minimal"
         private const val NOTIFICATION_ID = 1
 
-        private const val HEARTBEAT_URL_HOST = "cp.cloudflare.com"
         // DNS-over-TCP endpoints for the direct-internet probe. Multiple providers so a
         // single blocked resolver (e.g. Google DNS unreachable in some regions) doesn't
         // make hasDirectInternet() report "no internet" forever, which would suppress
         // heartbeat failure counting and block reconnects. Yandex DNS covers networks
         // where foreign resolvers are filtered.
         private val CONNECTIVITY_CHECK_HOSTS = arrayOf("8.8.8.8", "1.1.1.1", "77.88.8.8")
-        private const val HEARTBEAT_INTERVAL_MS = 15_000L
-        // If tun2socks has more than this many active proxy goroutines the gVisor TCP
-        // state machine is leaking connections. Trigger a reconnect to reset it.
-        private const val TUN_CONN_LEAK_THRESHOLD = 200L
-        // If no data has reached the TUN interface for this long while ≥2 connections
-        // are active, tun2socks goroutines are stuck (proxy connections held alive by
-        // keepalives but real data not flowing). SOCKS5 heartbeat won't catch this.
-        private const val TUN_STALL_TIMEOUT_MS = 120_000L
-        // After a reconnect xray establishes its outbound connection lazily. Probes run every
-        // 15 s but failures are not counted until the first probe succeeds (warmup mode). This
-        // self-adjusts to actual network speed instead of relying on a fixed timer. Hard ceiling:
-        // if no probe succeeds within HEARTBEAT_WARMUP_TIMEOUT_MS → something is genuinely broken.
-        private const val HEARTBEAT_WARMUP_TIMEOUT_MS = 30_000L
         private const val STATS_INTERVAL_MS = 1_000L
         private const val STOP_THREAD_TIMEOUT_MS = 5_000L
         private const val RECONNECT_DEBOUNCE_MS = 2_000L
@@ -215,8 +198,20 @@ class XrayVpnService : VpnService() {
     private var proxyOnlyMode = false
     private val networkChangeHandler = Handler(Looper.getMainLooper())
     private var pendingNetworkRunnable: Runnable? = null
-    private var heartbeatThread: Thread? = null
-    private val heartbeatFailures = AtomicInteger(0)
+    private val heartbeat = HeartbeatMonitor(object : HeartbeatMonitor.Deps {
+        override val running: Boolean get() = isRunning.get()
+        override val tunModeActive: Boolean get() = Companion.tunModeActive
+        override val socksPort: Int get() = activeSocksPort
+        override fun socksAuth(): Pair<String, String> =
+            _socksCredentials.get().let { it.user to it.password }
+        override fun isTunRunning() = Teapodcore.isTunRunning()
+        override fun tunActiveConnections() = Teapodcore.tunActiveConnections()
+        override fun tunLastRxActivityMs() = Teapodcore.getTunLastRxActivityMs()
+        override fun tunStatsLine(): String = Teapodcore.getTunStatsLine()
+        override fun hasDirectInternet() = this@XrayVpnService.hasDirectInternet()
+        override fun requestReconnect() = reconnectInternal()
+        override fun log(level: String, message: String) = this@XrayVpnService.log(level, message)
+    })
 
     private val tunAddress = "10.120.230.1"
     private val tunNetmask = "255.255.255.0"
@@ -493,7 +488,7 @@ class XrayVpnService : VpnService() {
                 startStatsMonitoring()
                 acquireWakeLock()
                 setConnected(socksPort, socksUser, socksPassword)
-                startHeartbeat(isReconnect)
+                heartbeat.start(isReconnect)
                 log("info", "Proxy-only mode active")
             } else {
                 val randomSubnet1 = (2..250).random()
@@ -576,7 +571,7 @@ class XrayVpnService : VpnService() {
                 registerNetworkCallback()
                 acquireWakeLock()
                 setConnected(socksPort, socksUser, socksPassword)
-                startHeartbeat(isReconnect)
+                heartbeat.start(isReconnect)
                 log("info", "VPN connected successfully")
             }
         } catch (e: Exception) {
@@ -758,7 +753,7 @@ class XrayVpnService : VpnService() {
     ) {
         if (!isRunning.compareAndSet(true, false)) return  // idempotent — safe to call multiple times
         log("info", "stopVpn: begin (explicit=$explicit, reconnecting=$reconnecting)")
-        stopHeartbeat()
+        heartbeat.stop()
         tunModeActive = false
         lastUnderlyingNetwork = null
         lastConnectedMs = 0L
@@ -908,7 +903,7 @@ class XrayVpnService : VpnService() {
         val lastRx = Teapodcore.getTunLastRxActivityMs()
         if (lastRx <= 0) return
         val idleSec = (System.currentTimeMillis() - lastRx) / 1000
-        if (idleSec < TUN_STALL_TIMEOUT_MS / 1000) return
+        if (idleSec < HeartbeatMonitor.TUN_STALL_TIMEOUT_MS / 1000) return
         // Don't require activeConns >= 2: after Doze, connections drain to 0 naturally
         // but the tunnel session (xray upstream) may be stale for new connections.
         val activeConns = Teapodcore.tunActiveConnections()
@@ -1178,258 +1173,6 @@ class XrayVpnService : VpnService() {
             }
         }
         return false
-    }
-
-    private fun startHeartbeat(isReconnect: Boolean = false) {
-        log("info", "startHeartbeat (isReconnect=$isReconnect)")
-        heartbeatThread?.interrupt()
-        heartbeatFailures.set(0)
-        heartbeatThread = Thread {
-            // In reconnect mode: probes run every 15 s but failures are ignored until the
-            // first probe succeeds (warmup). This self-adjusts to actual network conditions —
-            // no magic fixed delay. Hard ceiling: warmupDeadline prevents staying in warmup
-            // forever if the server is genuinely unreachable.
-            var warmupDone = !isReconnect
-            var warmupDeadline = 0L  // set on first probe iteration, not at thread start
-            // Counts consecutive skips due to no physical internet. When internet returns
-            // after a long absence the tunnel session is stale regardless of protocol, so
-            // the first probe failure should immediately trigger a reconnect.
-            var noInternetStreak = 0
-            var successCount = 0
-            var lastStallWarnAt = 0L
-
-            while (!Thread.currentThread().isInterrupted && isRunning.get()) {
-                try {
-                    Thread.sleep(HEARTBEAT_INTERVAL_MS)
-                    if (!isRunning.get()) break
-                    // Start deadline from first actual probe — not from thread creation,
-                    // which may be long before xray is ready after a slow reconnect.
-                    if (!warmupDone && warmupDeadline == 0L) {
-                        warmupDeadline = System.currentTimeMillis() + HEARTBEAT_WARMUP_TIMEOUT_MS
-                    }
-                    val port = activeSocksPort
-                    if (port <= 0) continue
-
-                    // Check tun2socks is alive before testing SOCKS5 connectivity.
-                    // The SOCKS5 probe bypasses TUN entirely, so it passes even if tun2socks
-                    // has crashed or its goroutines are deadlocked.
-                    // Skip in proxy-only mode: tun2socks is intentionally not started.
-                    if (tunModeActive && !Teapodcore.isTunRunning()) {
-                        log("warning", "tun2socks not running, reconnecting")
-                        reconnectInternal()
-                        break
-                    }
-
-                    // Detect gVisor connection table leak: if the number of active proxy
-                    // goroutines is abnormally high the TCP state machine is accumulating
-                    // stale entries (TIME_WAIT / CLOSE_WAIT). Reconnect to reset gVisor.
-                    if (tunModeActive) {
-                        val activeConns = Teapodcore.tunActiveConnections()
-                        if (activeConns > TUN_CONN_LEAK_THRESHOLD) {
-                            log("warning", "gVisor connection leak detected (activeConns=$activeConns), reconnecting")
-                            reconnectInternal()
-                            break
-                        }
-                    }
-
-                    checkTunnelConnectivity(port)
-                    warmupDone = true
-                    heartbeatFailures.set(0)
-                    noInternetStreak = 0
-                    successCount++
-                    if (successCount % 5 == 0) {
-                        val activeConns = if (tunModeActive) Teapodcore.tunActiveConnections() else 0L
-                        log("info", "Heartbeat alive (${successCount} ok, tun=${Teapodcore.isTunRunning()}, conns=$activeConns)")
-                    }
-                    // Log detailed tunnel stats every ~1 minute for diagnostics.
-                    // getTunStatsLine() returns a Go string → log() routes it to
-                    // vpn_log.txt + Flutter EventChannel (not only logcat).
-                    if (tunModeActive && successCount % 4 == 0) {
-                        val stats = Teapodcore.getTunStatsLine()
-                        if (stats.isNotEmpty()) {
-                            val lastRx = Teapodcore.getTunLastRxActivityMs()
-                            val lastRxSec = if (lastRx > 0) (System.currentTimeMillis() - lastRx) / 1000 else -1
-                            log("debug", "tun stats: $stats lastRxSec=$lastRxSec")
-                        }
-                    }
-                    // Detect TUN-layer stall: SOCKS5 heartbeat bypasses tun2socks entirely,
-                    // so it passes even when proxy goroutines are alive but no data reaches
-                    // the TUN interface (e.g. xray connections half-open, held by keepalives).
-                    // getTunLastRxActivityMs() is updated on every TUN write in tun2socks.
-                    if (tunModeActive) {
-                        val lastRx = Teapodcore.getTunLastRxActivityMs()
-                        if (lastRx > 0) {
-                            val now = System.currentTimeMillis()
-                            val idleSec = (now - lastRx) / 1000
-                            val activeConns by lazy { Teapodcore.tunActiveConnections() }
-                            when {
-                                idleSec >= TUN_STALL_TIMEOUT_MS / 1000 && activeConns >= 2 -> {
-                                    log("warning", "TUN stall: no data for ${idleSec}s (conns=$activeConns), reconnecting")
-                                    reconnectInternal()
-                                    break
-                                }
-                                idleSec >= 60 && activeConns >= 2 && now - lastStallWarnAt >= 60_000 -> {
-                                    log("warning", "TUN rx idle for ${idleSec}s (conns=$activeConns)")
-                                    lastStallWarnAt = now
-                                }
-                            }
-                        }
-                    }
-                } catch (_: InterruptedException) {
-                    break
-                } catch (e: Exception) {
-                    // If the physical network is down it's not xray's fault — skip failure
-                    // count to prevent useless reconnect cycles during WiFi→LTE transitions.
-                    // network_changed will trigger a reconnect once the new network is ready.
-                    if (!hasDirectInternet()) {
-                        noInternetStreak++
-                        log("debug", "Heartbeat skipped: no direct internet (streak=$noInternetStreak)")
-                        continue
-                    }
-                    // Network just returned after a long absence — the tunnel session is
-                    // guaranteed stale (QUIC/TCP connection to the server was dead while we
-                    // had no route). Skip the normal 3-failure wait and reconnect immediately.
-                    if (noInternetStreak >= 3) {
-                        val absenceSec = noInternetStreak * (HEARTBEAT_INTERVAL_MS / 1000)
-                        noInternetStreak = 0
-                        log("warning", "Tunnel stale after ${absenceSec}s network absence, reconnecting")
-                        reconnectInternal()
-                        break
-                    }
-                    noInternetStreak = 0
-                    if (!warmupDone) {
-                        if (warmupDeadline == 0L || System.currentTimeMillis() < warmupDeadline) {
-                            log("debug", "Heartbeat warmup probe failed: ${e.message}")
-                            continue
-                        }
-                        log("warning", "Heartbeat warmup timed out (30 s), reconnecting")
-                        reconnectInternal()
-                        break
-                    }
-                    val failures = heartbeatFailures.incrementAndGet()
-                    log("warning", "Heartbeat failed ($failures): ${e.message}")
-                    if (failures >= 3) {
-                        log("warning", "Heartbeat failed $failures times, reconnecting")
-                        reconnectInternal()
-                        break
-                    }
-                    var immediateRetries = 0
-                    while (immediateRetries < 2 && !Thread.currentThread().isInterrupted) {
-                        try {
-                            Thread.sleep(3000)
-                            checkTunnelConnectivity(activeSocksPort)
-                            warmupDone = true
-                            heartbeatFailures.set(0)
-                            break
-                        } catch (_: InterruptedException) {
-                            break
-                        } catch (_: Exception) {
-                            immediateRetries++
-                        }
-                    }
-                    if (heartbeatFailures.get() >= 3) {
-                        log("warning", "Heartbeat retries exhausted, reconnecting")
-                        reconnectInternal()
-                        break
-                    }
-                }
-            }
-        }.also { it.isDaemon = true; it.start() }
-    }
-
-    private fun stopHeartbeat() {
-        if (heartbeatThread != null) log("info", "stopHeartbeat: interrupting heartbeat thread")
-        heartbeatThread?.interrupt()
-        heartbeatThread = null
-        heartbeatFailures.set(0)
-    }
-
-    private fun readFully(inp: java.io.InputStream, size: Int): ByteArray {
-        val buf = ByteArray(size)
-        var read = 0
-        while (read < size) {
-            val n = inp.read(buf, read, size - read)
-            if (n < 0) throw Exception("SOCKS reply truncated (EOF at $read/$size)")
-            read += n
-        }
-        return buf
-    }
-
-    private fun checkTunnelConnectivity(port: Int) {
-        var stage = "init"
-        val socket = Socket()
-        try {
-            socket.soTimeout = 10000
-            stage = "tcp_connect"
-            socket.connect(InetSocketAddress("127.0.0.1", port), 10000)
-            val out = socket.getOutputStream()
-            val inp = socket.getInputStream()
-
-            stage = "socks_greeting"
-            out.write(byteArrayOf(5, 2, 0, 2))
-            val resp = readFully(inp, 2)
-            if (resp[0] != 5.toByte()) throw Exception("SOCKS ver mismatch")
-
-            when (resp[1].toInt()) {
-                0 -> {}
-                2 -> {
-                    stage = "socks_auth"
-                    val creds = _socksCredentials.get()
-                    if (creds.user.isNotEmpty()) {
-                        val u = creds.user.toByteArray()
-                        val p = creds.password.toByteArray()
-                        out.write(byteArrayOf(1, u.size.toByte()) + u + byteArrayOf(p.size.toByte()) + p)
-                        val authResp = readFully(inp, 2)
-                        if (authResp[1] != 0.toByte()) throw Exception("SOCKS auth failed")
-                    }
-                }
-                else -> throw Exception("SOCKS auth not supported")
-            }
-
-            stage = "socks_connect"
-            val destHost = HEARTBEAT_URL_HOST
-            val destPort = 80
-            val domainBytes = destHost.toByteArray()
-            out.write(
-                byteArrayOf(5, 1, 0, 3, domainBytes.size.toByte()) +
-                domainBytes +
-                byteArrayOf((destPort shr 8).toByte(), destPort.toByte())
-            )
-
-            val reply = readFully(inp, 4)
-            val replyRep = reply[1].toInt()
-            val replyAtyp = reply[3].toInt()
-            if (reply[0].toInt() != 5 || replyRep != 0) throw Exception("SOCKS connect failed: $replyRep")
-            when (replyAtyp) {
-                1 -> readFully(inp, 6)
-                4 -> readFully(inp, 18)
-                3 -> {
-                    val len = inp.read()
-                    if (len < 0) throw Exception("SOCKS reply truncated (no domain len)")
-                    readFully(inp, len + 2)
-                }
-            }
-
-            stage = "http_request"
-            val request = "GET /generate_204 HTTP/1.1\r\nHost: $destHost\r\nConnection: close\r\n\r\n"
-            out.write(request.toByteArray())
-            out.flush()
-
-            stage = "http_response"
-            val reader = BufferedReader(InputStreamReader(inp))
-            val line = reader.readLine()
-            if (line == null || !line.contains("204")) {
-                throw Exception("Invalid HTTP response: $line")
-            }
-
-            heartbeatFailures.set(0)
-            log("debug", "Heartbeat OK")
-        } catch (e: Exception) {
-            log("warning", "Heartbeat check failed at [$stage]: ${e.message}")
-            throw e
-        } finally {
-            socket.close()
-        }
     }
 
     private fun unregisterNetworkCallback() {
