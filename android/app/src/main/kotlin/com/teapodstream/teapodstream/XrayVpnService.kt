@@ -112,7 +112,12 @@ class XrayVpnService : VpnService() {
         private const val NOTIFICATION_ID = 1
 
         private const val HEARTBEAT_URL_HOST = "cp.cloudflare.com"
-        private const val CONNECTIVITY_CHECK_HOST = "8.8.8.8"
+        // DNS-over-TCP endpoints for the direct-internet probe. Multiple providers so a
+        // single blocked resolver (e.g. Google DNS unreachable in some regions) doesn't
+        // make hasDirectInternet() report "no internet" forever, which would suppress
+        // heartbeat failure counting and block reconnects. Yandex DNS covers networks
+        // where foreign resolvers are filtered.
+        private val CONNECTIVITY_CHECK_HOSTS = arrayOf("8.8.8.8", "1.1.1.1", "77.88.8.8")
         private const val HEARTBEAT_INTERVAL_MS = 15_000L
         // If tun2socks has more than this many active proxy goroutines the gVisor TCP
         // state machine is leaking connections. Trigger a reconnect to reset it.
@@ -1143,17 +1148,37 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    // Returns true if the physical network (not through VPN) can reach 8.8.8.8:53.
+    // Index of the host in CONNECTIVITY_CHECK_HOSTS that answered last — tried first on
+    // the next probe so the happy path stays a single connection attempt.
+    @Volatile private var lastGoodCheckHost = 0
+
+    // Returns true if the physical network (not through VPN) can reach any of the
+    // CONNECTIVITY_CHECK_HOSTS on port 53 (DNS-over-TCP).
     // The VpnService process UID is excluded from the tunnel, so sockets here bypass TUN.
     // bindSocket() additionally pins the socket to the physical interface, avoiding
     // stale routing state during WiFi→LTE handover.
-    private fun hasDirectInternet(): Boolean = try {
-        Socket().use { socket ->
-            findPhysicalNetwork()?.bindSocket(socket)
-            socket.connect(InetSocketAddress(CONNECTIVITY_CHECK_HOST, 53), RECONNECT_DEBOUNCE_MS.toInt())
-            true
+    private fun hasDirectInternet(): Boolean {
+        val n = CONNECTIVITY_CHECK_HOSTS.size
+        val physicalNetwork = findPhysicalNetwork()
+        for (attempt in 0 until n) {
+            val idx = (lastGoodCheckHost + attempt) % n
+            try {
+                Socket().use { socket ->
+                    physicalNetwork?.bindSocket(socket)
+                    socket.connect(
+                        InetSocketAddress(CONNECTIVITY_CHECK_HOSTS[idx], 53),
+                        RECONNECT_DEBOUNCE_MS.toInt()
+                    )
+                }
+                lastGoodCheckHost = idx
+                return true
+            } catch (_: Exception) {
+                // Try the next host — a single blocked/unreachable resolver must not
+                // be mistaken for total loss of connectivity.
+            }
         }
-    } catch (_: Exception) { false }
+        return false
+    }
 
     private fun startHeartbeat(isReconnect: Boolean = false) {
         log("info", "startHeartbeat (isReconnect=$isReconnect)")
