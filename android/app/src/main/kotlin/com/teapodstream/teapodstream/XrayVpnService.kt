@@ -343,7 +343,7 @@ class XrayVpnService : VpnService() {
                                 val json = org.json.JSONObject(credsFile.readText())
                                 socksUser = json.optString("user", "")
                                 socksPassword = json.optString("pass", "")
-                                log("debug", "CONNECT_QUICK: loaded creds from file, user=$socksUser")
+                                log("debug", "CONNECT_QUICK: loaded creds from file (auth=${socksUser.isNotEmpty()})")
                             } else {
                                 // Fallback: extract from config
                                 val (u, p) = extractSocksFromConfig(configText)
@@ -422,7 +422,7 @@ class XrayVpnService : VpnService() {
                         val acc = accounts.getJSONObject(0)
                         val user = acc.optString("user", "")
                         val pass = acc.optString("pass", "")
-                        log("debug", "extractSocksFromConfig: extracted user=$user")
+                        log("debug", "extractSocksFromConfig: extracted creds (auth=${user.isNotEmpty()})")
                         return user to pass
                     }
                 }
