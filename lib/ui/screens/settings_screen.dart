@@ -382,6 +382,59 @@ class _SettingsBodyState extends State<_SettingsBody> {
     }
   }
 
+  static String _fpLabel(TlsFingerprint fp) =>
+      fp == TlsFingerprint.defaultFp ? 'DEFAULT' : fp.name.toUpperCase();
+
+  void _showFingerprintPicker(BuildContext context, AppSettings s) {
+    final t = Theme.of(context).extension<TeapodTokens>()!;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: t.bg,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+              child: Row(children: [
+                Expanded(
+                  child: Text('tls // fingerprint',
+                      style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+                ),
+              ]),
+            ),
+            Container(height: 1, color: t.line),
+            for (final fp in TlsFingerprint.values)
+              InkWell(
+                onTap: () {
+                  widget.onUpdate(s.copyWith(tlsFingerprint: fp));
+                  Navigator.pop(ctx);
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(_fpLabel(fp),
+                            style: AppTheme.mono(
+                                size: 12,
+                                color: fp == s.tlsFingerprint ? t.accent : t.text,
+                                letterSpacing: 0.5)),
+                      ),
+                      if (fp == s.tlsFingerprint)
+                        Text('●', style: AppTheme.mono(size: 10, color: t.accent)),
+                    ],
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).extension<TeapodTokens>()!;
@@ -595,6 +648,39 @@ class _SettingsBodyState extends State<_SettingsBody> {
             value: s.blockQuic,
             locked: locked,
             onChange: (v) => widget.onUpdate(s.copyWith(blockQuic: v)),
+          ),
+          // TLS fingerprint (uTLS) override
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+            decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: t.lineSoft))),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('TLS fingerprint',
+                        style: AppTheme.sans(size: 14, color: t.text)),
+                    const SizedBox(height: 3),
+                    Text('uTLS-маскировка ClientHello (TLS/REALITY)',
+                        style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5)),
+                  ],
+                ),
+                GestureDetector(
+                  onTap: locked ? null : () => _showFingerprintPicker(context, s),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(border: Border.all(color: t.line)),
+                    child: Text(_fpLabel(s.tlsFingerprint),
+                        style: AppTheme.mono(
+                            size: 11,
+                            color: locked ? t.textDim : t.accent,
+                            letterSpacing: 0.5)),
+                  ),
+                ),
+              ],
+            ),
           ),
           if (!s.proxyOnly)
             _RowToggle(

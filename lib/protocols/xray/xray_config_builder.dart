@@ -4,7 +4,7 @@ import '../../core/models/vpn_config.dart';
 import '../../core/models/dns_config.dart';
 import '../../core/models/routing_settings.dart';
 import '../../core/constants/xray_defaults.dart';
-import '../../core/services/settings_service.dart' show DnsQueryStrategy;
+import '../../core/services/settings_service.dart' show DnsQueryStrategy, TlsFingerprint;
 
 class XrayConfigBuilder {
   static const _ruServicesDomains = [
@@ -68,7 +68,7 @@ class XrayConfigBuilder {
         },
       ],
       'outbounds': [
-        _buildOutbound(config),
+        _buildOutbound(config, options.tlsFingerprint),
         {'tag': 'direct', 'protocol': 'freedom'},
         {'tag': 'dns-out', 'protocol': 'dns'},
         {'tag': 'block', 'protocol': 'blackhole'},
@@ -273,20 +273,20 @@ class XrayConfigBuilder {
     };
   }
 
-  static Map<String, dynamic> _buildOutbound(VpnConfig config) {
+  static Map<String, dynamic> _buildOutbound(VpnConfig config, TlsFingerprint fp) {
     if (config.protocol == VpnProtocol.hysteria2) {
       return {
         'tag': 'proxy',
         'protocol': 'hysteria',
         'settings': _buildOutboundSettings(config),
-        'streamSettings': _buildStreamSettings(config),
+        'streamSettings': _buildStreamSettings(config, fp),
       };
     }
     return {
       'tag': 'proxy',
       'protocol': config.protocol.name,
       'settings': _buildOutboundSettings(config),
-      'streamSettings': _buildStreamSettings(config),
+      'streamSettings': _buildStreamSettings(config, fp),
     };
   }
 
@@ -370,7 +370,9 @@ class XrayConfigBuilder {
     }
   }
 
-  static Map<String, dynamic> _buildStreamSettings(VpnConfig config) {
+  static Map<String, dynamic> _buildStreamSettings(VpnConfig config, TlsFingerprint fp) {
+    // Глобальный override из настроек приложения; defaultFp — значение из конфига.
+    final fingerprint = fp.xrayValue ?? config.fingerprint;
     if (config.protocol == VpnProtocol.hysteria2) {
       return {
         'network': 'hysteria',
@@ -402,7 +404,7 @@ class XrayConfigBuilder {
       if (config.security == VpnSecurity.reality)
         'realitySettings': {
           'serverName': config.sni ?? '',
-          'fingerprint': config.fingerprint ?? 'chrome',
+          'fingerprint': fingerprint ?? 'chrome',
           'publicKey': config.publicKey ?? '',
           'shortId': config.shortId ?? '',
           'spiderX': config.spiderX ?? '',
@@ -413,8 +415,8 @@ class XrayConfigBuilder {
         'tlsSettings': {
           'serverName': config.sni ?? '',
           'allowInsecure': false,
-          if (config.fingerprint != null && config.fingerprint!.isNotEmpty)
-            'fingerprint': config.fingerprint,
+          if (fingerprint != null && fingerprint.isNotEmpty)
+            'fingerprint': fingerprint,
           if (config.alpn != null && config.alpn!.isNotEmpty)
             'alpn': config.alpn!.split(',').map((s) => s.trim()).toList(),
           if (config.ech != null && config.ech!.isNotEmpty)

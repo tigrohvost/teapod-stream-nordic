@@ -17,6 +17,15 @@ enum FontScale { normal, large }
 
 enum DnsQueryStrategy { ipv4Only, ipv6Only, auto }
 
+/// uTLS fingerprint override for TLS/REALITY outbounds.
+/// `defaultFp` — не переопределять (используется значение из конфига/URI).
+enum TlsFingerprint {
+  defaultFp, chrome, firefox, safari, ios, android, edge, random, randomized;
+
+  /// Значение для поля `fingerprint` в xray streamSettings; null = не переопределять.
+  String? get xrayValue => this == defaultFp ? null : name;
+}
+
 class GeoPresets {
   static const _lsGeoip    = 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat';
   static const _lsGeosite  = 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat';
@@ -78,6 +87,7 @@ class AppSettings {
   final bool blockQuic;
   final bool ipv6Enabled;
   final bool autoStartOnBoot;
+  final TlsFingerprint tlsFingerprint;
 
   const AppSettings({
     this.socksPort = AppConstants.defaultSocksPort,
@@ -116,6 +126,7 @@ class AppSettings {
     this.blockQuic = false,
     this.ipv6Enabled = false,
     this.autoStartOnBoot = false,
+    this.tlsFingerprint = TlsFingerprint.defaultFp,
   });
 
   AppSettings copyWith({
@@ -155,6 +166,7 @@ class AppSettings {
     bool? blockQuic,
     bool? ipv6Enabled,
     bool? autoStartOnBoot,
+    TlsFingerprint? tlsFingerprint,
   }) {
     return AppSettings(
       socksPort: socksPort ?? this.socksPort,
@@ -193,6 +205,7 @@ class AppSettings {
       blockQuic: blockQuic ?? this.blockQuic,
       ipv6Enabled: ipv6Enabled ?? this.ipv6Enabled,
       autoStartOnBoot: autoStartOnBoot ?? this.autoStartOnBoot,
+      tlsFingerprint: tlsFingerprint ?? this.tlsFingerprint,
     );
   }
 
@@ -233,6 +246,7 @@ class AppSettings {
     'blockQuic': blockQuic,
     'ipv6Enabled': ipv6Enabled,
     'autoStartOnBoot': autoStartOnBoot,
+    'tlsFingerprint': tlsFingerprint.name,
   };
 
   static AppSettings fromJson(Map<String, dynamic> json) {
@@ -280,6 +294,8 @@ class AppSettings {
       blockQuic: json['blockQuic'] as bool? ?? false,
       ipv6Enabled: json['ipv6Enabled'] as bool? ?? false,
       autoStartOnBoot: json['autoStartOnBoot'] as bool? ?? false,
+      tlsFingerprint: TlsFingerprint.values.firstWhere(
+        (e) => e.name == json['tlsFingerprint'], orElse: () => TlsFingerprint.defaultFp),
     );
   }
 
@@ -334,6 +350,7 @@ class SettingsService {
   static const _blockQuicKey = 'block_quic';
   static const _ipv6EnabledKey = 'ipv6_enabled';
   static const _autoStartOnBootKey = 'auto_start_on_boot';
+  static const _tlsFingerprintKey = 'tls_fingerprint';
 
   final _secure = StorageSecureService();
 
@@ -396,6 +413,10 @@ class SettingsService {
       blockQuic: prefs.getBool(_blockQuicKey) ?? false,
       ipv6Enabled: prefs.getBool(_ipv6EnabledKey) ?? false,
       autoStartOnBoot: prefs.getBool(_autoStartOnBootKey) ?? false,
+      tlsFingerprint: TlsFingerprint.values.firstWhere(
+        (e) => e.name == prefs.getString(_tlsFingerprintKey),
+        orElse: () => TlsFingerprint.defaultFp,
+      ),
     );
   }
 
@@ -466,6 +487,7 @@ class SettingsService {
     await prefs.setBool(_blockQuicKey, settings.blockQuic);
     await prefs.setBool(_ipv6EnabledKey, settings.ipv6Enabled);
     await prefs.setBool(_autoStartOnBootKey, settings.autoStartOnBoot);
+    await prefs.setString(_tlsFingerprintKey, settings.tlsFingerprint.name);
     // SOCKS credentials go to encrypted storage
     await _secure.writeSocksCredentials(settings.socksUser, settings.socksPassword);
   }
