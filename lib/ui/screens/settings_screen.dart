@@ -8,7 +8,7 @@ import '../../core/constants/app_constants.dart';
 import '../../core/models/dns_config.dart';
 import '../../core/services/update_service.dart' show UpdateChannel, UpdateInfo;
 import '../../core/services/settings_service.dart';
-import 'routing_screen.dart';
+import 'logs_screen.dart';
 import 'profiles_screen.dart';
 import 'dns_settings_screen.dart';
 import '../../providers/settings_provider.dart';
@@ -824,14 +824,6 @@ class _SettingsBodyState extends State<_SettingsBody> {
 
           // ── 0x40 ROUTING ──────────────────────────────────────
           SetSectionHeader(t: t, addr: '0x40', label: 'routing'),
-          _RowChev(
-            t: t,
-            title: 'Маршрутизация трафика',
-            hint: s.routing.summary,
-            locked: locked,
-            onTap: locked ? null : () => Navigator.push(
-                context, MaterialPageRoute(builder: (_) => const RoutingScreen())),
-          ),
           _RowToggle(
             t: t,
             title: 'Сплит-туннелирование',
@@ -870,6 +862,14 @@ class _SettingsBodyState extends State<_SettingsBody> {
               final uri = Uri.parse('https://github.com/Wendor/teapod-stream');
               if (await canLaunchUrl(uri)) launchUrl(uri, mode: LaunchMode.externalApplication);
             },
+          ),
+          _RowChev(
+            t: t,
+            title: 'Логи',
+            hint: 'журнал приложения и xray',
+            locked: false,
+            onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const LogsScreen(breadcrumbParent: 'settings'))),
           ),
           // Update channel
           _InlineField(

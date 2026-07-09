@@ -7,7 +7,6 @@ import '../../providers/geo_provider.dart';
 import '../../core/services/settings_service.dart' show GeoPresets;
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
-import '../widgets/breadcrumb_bar.dart';
 import '../widgets/hero_panel.dart';
 
 String _formatDomainLabel(String zone) {
@@ -131,7 +130,6 @@ class _RoutingBody extends StatelessWidget {
             ],
           ),
         ),
-        BreadcrumbBar(t: t, parent: 'settings', current: 'routing'),
         // ── Hero panel ──────────────────────────────────────────
         HeroPanel(
           t: t,

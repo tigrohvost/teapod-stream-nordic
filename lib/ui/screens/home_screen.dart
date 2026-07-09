@@ -11,6 +11,7 @@ import '../../providers/settings_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/live_sparkline.dart';
+import 'logs_screen.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -89,7 +90,7 @@ class _HeaderStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      padding: const EdgeInsets.fromLTRB(20, 6, 20, 6),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.line, width: 1)),
       ),
@@ -98,8 +99,31 @@ class _HeaderStrip extends StatelessWidget {
         children: [
           Text('teapod.stream // $version',
               style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-          Text('sys.state [$stateCode]',
-              style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+          Row(
+            children: [
+              Text('sys.state [$stateCode]',
+                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+              const SizedBox(width: 12),
+              Semantics(
+                label: 'логи',
+                button: true,
+                child: GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const LogsScreen(breadcrumbParent: 'home')),
+                  ),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(border: Border.all(color: t.line)),
+                    child: Icon(Icons.receipt_long_outlined, size: 14, color: t.textDim),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
