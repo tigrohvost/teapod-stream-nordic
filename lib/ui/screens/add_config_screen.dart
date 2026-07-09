@@ -22,6 +22,26 @@ class _AddConfigScreenState extends ConsumerState<AddConfigScreen> {
   final _uriController = TextEditingController();
   bool _loading = false;
   String? _error;
+  String? _clipboardSuggestion;
+
+  static final _uriRe = RegExp(
+      r'^(vless|vmess|trojan|ss|hy2|hysteria2|teapod|https?)://',
+      caseSensitive: false);
+
+  @override
+  void initState() {
+    super.initState();
+    _checkClipboard();
+  }
+
+  Future<void> _checkClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text?.trim();
+    if (!mounted || text == null || text.isEmpty) return;
+    if (_uriRe.hasMatch(text) && _uriController.text.isEmpty) {
+      setState(() => _clipboardSuggestion = text);
+    }
+  }
 
   @override
   void dispose() {
@@ -119,6 +139,37 @@ class _AddConfigScreenState extends ConsumerState<AddConfigScreen> {
                             ),
                           ),
                         ),
+                        if (_clipboardSuggestion != null) ...[
+                          const SizedBox(height: 10),
+                          GestureDetector(
+                            onTap: () {
+                              final text = _clipboardSuggestion!;
+                              setState(() {
+                                _uriController.text = text;
+                                _clipboardSuggestion = null;
+                              });
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration:
+                                  BoxDecoration(border: Border.all(color: t.accent)),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.paste_rounded, size: 13, color: t.accent),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'из буфера: ${_clipboardSuggestion!.length > 48 ? '${_clipboardSuggestion!.substring(0, 48)}…' : _clipboardSuggestion!}',
+                                      style: AppTheme.mono(
+                                          size: 10, color: t.accent, letterSpacing: 0.5),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                         if (_error != null) ...[
                           const SizedBox(height: 10),
                           Container(
