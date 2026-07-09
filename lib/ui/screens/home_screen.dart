@@ -10,7 +10,11 @@ import '../../providers/app_info_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
+import '../../app.dart';
 import '../widgets/live_sparkline.dart';
+import '../widgets/reconnect_banner.dart';
+import '../widgets/server_picker_sheet.dart';
+import 'logs_screen.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -51,6 +55,7 @@ class HomeScreen extends ConsumerWidget {
           child: Column(
             children: [
               _HeaderStrip(t: t, stateCode: stateCode, version: version),
+              const ReconnectBanner(),
               _HeroPanel(
                 t: t,
                 vpnState: vpnState,
@@ -58,15 +63,20 @@ class HomeScreen extends ConsumerWidget {
                 pingMs: pingMs,
                 canToggle: canToggle,
                 onToggle: () => ref.read(vpnProvider.notifier).toggle(),
+                // Без конфигов кнопка ведёт на вкладку «Конфиги»
+                onDisabledTap: () => ref.read(tabIndexProvider.notifier).set(1),
               ),
               _MetricsGrid(
                 t: t,
                 stats: vpnState.stats,
-                protoLabel: protoLabel,
-                serverHint: serverHint,
+                serverName: effectiveConfig?.name ?? '—',
+                serverHint: effectiveConfig != null
+                    ? '$protoLabel · $serverHint'
+                    : 'нет конфигурации',
                 isConnected: isConn,
                 pingMs: pingMs,
                 history: history,
+                onServerTap: () => showServerPicker(context, ref),
               ),
               if (isManaged)
                 _ManagedWarning(t: t, direction: routingDirection),
@@ -89,7 +99,7 @@ class _HeaderStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      padding: const EdgeInsets.fromLTRB(20, 6, 20, 6),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.line, width: 1)),
       ),
@@ -98,8 +108,31 @@ class _HeaderStrip extends StatelessWidget {
         children: [
           Text('teapod.stream // $version',
               style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-          Text('sys.state [$stateCode]',
-              style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+          Row(
+            children: [
+              Text('sys.state [$stateCode]',
+                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+              const SizedBox(width: 12),
+              Semantics(
+                label: 'логи',
+                button: true,
+                child: GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const LogsScreen(breadcrumbParent: 'home')),
+                  ),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(border: Border.all(color: t.line)),
+                    child: Icon(Icons.receipt_long_outlined, size: 14, color: t.textDim),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -115,6 +148,7 @@ class _HeroPanel extends StatelessWidget {
   final int? pingMs;
   final bool canToggle;
   final VoidCallback onToggle;
+  final VoidCallback onDisabledTap;
 
   const _HeroPanel({
     required this.t,
@@ -123,6 +157,7 @@ class _HeroPanel extends StatelessWidget {
     required this.pingMs,
     required this.canToggle,
     required this.onToggle,
+    required this.onDisabledTap,
   });
 
   @override
@@ -152,8 +187,9 @@ class _HeroPanel extends StatelessWidget {
                   t: t,
                   isConnected: isConn,
                   isBusy: isBusy,
+                  isBlocked: vpnState.isBlocked,
                   enabled: canToggle,
-                  onTap: onToggle,
+                  onTap: canToggle ? onToggle : onDisabledTap,
                 ),
                 const SizedBox(height: 16),
                 _StateInfo(
@@ -188,24 +224,32 @@ class _StateInfo extends ConsumerWidget {
     final isConn          = vpnState.isConnected;
     final isConnecting    = vpnState.isConnecting;
     final isDisconnecting = vpnState.isDisconnecting;
+    final isBlocked       = vpnState.isBlocked;
     final ipAsync         = ref.watch(ipInfoProvider);
+    final hasConfig       = ref.watch(effectiveConfigProvider) != null;
 
-    final stateWord = isConn
-        ? 'ONLINE'
-        : (isConnecting ? 'HANDSHAKE' : (isDisconnecting ? 'SHUTDOWN' : 'OFFLINE'));
-    final stateColor = isConn ? t.accent : t.textDim;
+    final stateWord = isBlocked
+        ? 'BLOCKED'
+        : isConn
+            ? 'ONLINE'
+            : (isConnecting ? 'HANDSHAKE' : (isDisconnecting ? 'SHUTDOWN' : 'OFFLINE'));
+    final stateColor = isBlocked ? t.danger : (isConn ? t.accent : t.textDim);
 
     String subtitle;
-    if (isConn) {
+    if (isBlocked) {
+      subtitle = 'kill switch · трафик заблокирован';
+    } else if (isConn) {
       final ipStr = ipAsync.maybeWhen(data: (d) => d?.ip, orElse: () => null) ?? '—';
       final cc    = ipAsync.maybeWhen(data: (d) => d?.countryCode.toLowerCase(), orElse: () => null) ?? '—';
       subtitle = pingMs != null ? '${pingMs}ms · $cc · $ipStr' : '$cc · $ipStr';
     } else if (isConnecting) {
-      subtitle = 'negotiating session…';
+      subtitle = 'установка соединения…';
     } else if (isDisconnecting) {
-      subtitle = 'closing session…';
+      subtitle = 'завершение сеанса…';
+    } else if (!hasConfig) {
+      subtitle = 'нет конфигурации — добавьте';
     } else {
-      subtitle = 'tap to connect';
+      subtitle = 'нажмите для подключения';
     }
 
     return Column(
@@ -220,6 +264,18 @@ class _StateInfo extends ConsumerWidget {
         const SizedBox(height: 6),
         Text(subtitle,
             style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5)),
+        if (isBlocked) ...[
+          const SizedBox(height: 10),
+          GestureDetector(
+            onTap: () => ref.read(vpnProvider.notifier).disconnect(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(border: Border.all(color: t.danger)),
+              child: Text('ОТКЛЮЧИТЬ',
+                  style: AppTheme.mono(size: 9, color: t.danger, letterSpacing: 1.5)),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -231,6 +287,7 @@ class _PowerCore extends StatefulWidget {
   final TeapodTokens t;
   final bool isConnected;
   final bool isBusy;
+  final bool isBlocked;
   final bool enabled;
   final VoidCallback onTap;
 
@@ -238,6 +295,7 @@ class _PowerCore extends StatefulWidget {
     required this.t,
     required this.isConnected,
     required this.isBusy,
+    required this.isBlocked,
     required this.enabled,
     required this.onTap,
   });
@@ -266,17 +324,27 @@ class _PowerCoreState extends State<_PowerCore> with SingleTickerProviderStateMi
 
   @override
   Widget build(BuildContext context) {
-    final t    = widget.t;
-    final conn = widget.isConnected;
-    final busy = widget.isBusy;
-    final actionLabel = conn ? 'отключить' : (busy ? 'ожидание' : 'подключить');
+    final t       = widget.t;
+    final conn    = widget.isConnected;
+    final busy    = widget.isBusy;
+    final blocked = widget.isBlocked;
+    final actionLabel = !widget.enabled
+        ? 'нет конфига'
+        : blocked
+            ? 'переподключить'
+            : conn
+                ? 'отключить'
+                : (busy ? 'ожидание' : 'подключить');
 
     const coreSize  = 220.0;
     const outerSize = coreSize + 32.0;
     const innerSize = coreSize - 44.0;
 
-    return GestureDetector(
-      onTap: widget.enabled ? widget.onTap : null,
+    return Semantics(
+      label: actionLabel,
+      button: true,
+      child: GestureDetector(
+      onTap: widget.onTap,
       child: SizedBox(
         width: outerSize,
         height: outerSize,
@@ -290,7 +358,7 @@ class _PowerCoreState extends State<_PowerCore> with SingleTickerProviderStateMi
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: conn ? t.accentSoft : t.line,
+                  color: blocked ? t.danger : (conn ? t.accentSoft : t.line),
                   width: 1,
                 ),
               ),
@@ -312,7 +380,8 @@ class _PowerCoreState extends State<_PowerCore> with SingleTickerProviderStateMi
               height: coreSize,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(color: conn ? t.accent : t.line, width: 1),
+                border: Border.all(
+                    color: blocked ? t.danger : (conn ? t.accent : t.line), width: 1),
                 boxShadow: conn
                     ? [BoxShadow(color: t.accentSoft, blurRadius: 60, spreadRadius: 4)]
                     : null,
@@ -347,7 +416,7 @@ class _PowerCoreState extends State<_PowerCore> with SingleTickerProviderStateMi
           ],
         ),
       ),
-    );
+    ));
   }
 }
 
@@ -489,20 +558,22 @@ class _TickPainter extends CustomPainter {
 class _MetricsGrid extends StatelessWidget {
   final TeapodTokens t;
   final VpnStats stats;
-  final String protoLabel;
+  final String serverName;
   final String serverHint;
   final bool isConnected;
   final int? pingMs;
   final List<SpeedPoint> history;
+  final VoidCallback onServerTap;
 
   const _MetricsGrid({
     required this.t,
     required this.stats,
-    required this.protoLabel,
+    required this.serverName,
     required this.serverHint,
     required this.isConnected,
     required this.pingMs,
     required this.history,
+    required this.onServerTap,
   });
 
   String _bitrateValue(int bps) {
@@ -538,12 +609,22 @@ class _MetricsGrid extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(
-                child: _MetricCell(
-                  t: t,
-                  label: 'Протокол',
-                  value: protoLabel,
-                  hint: serverHint,
-                  borderRight: true,
+                child: Semantics(
+                  label: 'сменить сервер',
+                  button: true,
+                  child: GestureDetector(
+                    onTap: onServerTap,
+                    behavior: HitTestBehavior.opaque,
+                    child: _MetricCell(
+                      t: t,
+                      label: 'Сервер',
+                      value: serverName,
+                      hint: serverHint,
+                      borderRight: true,
+                      compactValue: true,
+                      chevron: true,
+                    ),
+                  ),
                 ),
               ),
               Expanded(
@@ -606,7 +687,7 @@ class _ManagedWarning extends StatelessWidget {
   Widget build(BuildContext context) {
     final isOnlySelected = direction == RoutingDirection.onlySelected;
     final detail = isOnlySelected
-        ? 'режим «Только» по доменам и DNS-настройки не применяются'
+        ? 'режим «Только» по доменам и DNS-настройки не применяются · роутинг управляется сервером'
         : 'DNS-настройки не применяются · роутинг управляется сервером';
 
     return Container(
@@ -623,7 +704,7 @@ class _ManagedWarning extends StatelessWidget {
               text: '[managed] ',
               style: AppTheme.mono(size: 10, color: AppColors.accentOrange, letterSpacing: 0.5),
             ),
-            TextSpan(text: '$detail · управляется сервером'),
+            TextSpan(text: detail),
           ],
         ),
       ),
@@ -640,6 +721,10 @@ class _MetricCell extends StatelessWidget {
   final bool borderRight;
   final bool alignRight;
 
+  /// Компактный текст значения (для имени сервера вместо цифр).
+  final bool compactValue;
+  final bool chevron;
+
   const _MetricCell({
     required this.t,
     required this.label,
@@ -648,6 +733,8 @@ class _MetricCell extends StatelessWidget {
     this.hint,
     this.borderRight = false,
     this.alignRight = false,
+    this.compactValue = false,
+    this.chevron = false,
   });
 
   @override
@@ -674,19 +761,32 @@ class _MetricCell extends StatelessWidget {
           Row(
             mainAxisAlignment:
                 alignRight ? MainAxisAlignment.end : MainAxisAlignment.start,
-            crossAxisAlignment: CrossAxisAlignment.baseline,
+            crossAxisAlignment: compactValue
+                ? CrossAxisAlignment.center
+                : CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: [
-              Text(
-                value,
-                style: AppTheme.mono(
-                  size: 20, weight: FontWeight.w500,
-                  color: t.text, letterSpacing: -0.5),
+              Flexible(
+                child: Text(
+                  value,
+                  overflow: TextOverflow.ellipsis,
+                  style: compactValue
+                      ? AppTheme.sans(
+                          size: 15, weight: FontWeight.w500,
+                          color: t.text, letterSpacing: -0.3)
+                      : AppTheme.mono(
+                          size: 20, weight: FontWeight.w500,
+                          color: t.text, letterSpacing: -0.5),
+                ),
               ),
               if (unit != null) ...[
                 const SizedBox(width: 4),
                 Text(unit!,
                     style: AppTheme.mono(size: 9, color: t.textDim)),
+              ],
+              if (chevron) ...[
+                const SizedBox(width: 6),
+                Text('›', style: AppTheme.mono(size: 14, color: t.textDim)),
               ],
             ],
           ),

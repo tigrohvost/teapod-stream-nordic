@@ -7,8 +7,8 @@ import '../../providers/geo_provider.dart';
 import '../../core/services/settings_service.dart' show GeoPresets;
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
-import '../widgets/breadcrumb_bar.dart';
 import '../widgets/hero_panel.dart';
+import '../widgets/reconnect_banner.dart';
 
 String _formatDomainLabel(String zone) {
   if (zone == 'xn--p1ai') return '.рф';
@@ -43,12 +43,12 @@ class RoutingScreen extends ConsumerWidget {
             geoipUrl: settings.geoipUrl,
             geositeUrl: settings.geositeUrl,
             sniffingEnabled: settings.sniffingEnabled,
-            onUpdate: (r) => ref
-                .read(settingsProvider.notifier)
-                .save(settings.copyWith(routing: r)),
-            onUpdateSniffing: (v) => ref
-                .read(settingsProvider.notifier)
-                .save(settings.copyWith(sniffingEnabled: v)),
+            onUpdate: (r) {
+              ref.read(settingsProvider.notifier).save(settings.copyWith(routing: r));
+            },
+            onUpdateSniffing: (v) {
+              ref.read(settingsProvider.notifier).save(settings.copyWith(sniffingEnabled: v));
+            },
             onUpdateGeo: (ip, site) => ref
                 .read(settingsProvider.notifier)
                 .save(settings.copyWith(geoipUrl: ip, geositeUrl: site)),
@@ -109,11 +109,10 @@ class _RoutingBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).extension<TeapodTokens>()!;
     final ruleStr = _ruleCount.toString().padLeft(2, '0');
-    final locked  = isConnected;
     final geoHint = geoMissing ? 'Загрузите geo-базы (Настройки → geo.data)' : null;
     const sniffHint = 'Требует снифинг (Настройки → xray)';
-    final domainLocked  = locked || !sniffingEnabled;
-    final geositeLocked = locked || geoMissing || !sniffingEnabled;
+    final domainLocked  = !sniffingEnabled;
+    final geositeLocked = geoMissing || !sniffingEnabled;
 
     return Column(
       children: [
@@ -131,7 +130,6 @@ class _RoutingBody extends StatelessWidget {
             ],
           ),
         ),
-        BreadcrumbBar(t: t, parent: 'settings', current: 'routing'),
         // ── Hero panel ──────────────────────────────────────────
         HeroPanel(
           t: t,
@@ -172,16 +170,17 @@ class _RoutingBody extends StatelessWidget {
             ),
           ),
         ),
+        const ReconnectBanner(),
         // ── Scrollable sections ─────────────────────────────────
         Expanded(
           child: Opacity(
-            opacity: locked ? 0.6 : 1.0,
+            opacity: 1.0,
             child: ListView(
               padding: EdgeInsets.zero,
               children: [
                 // 0x10 MODE
                 _SectionHeader(t: t, addr: '0x10', label: 'mode'),
-                _ModeSelector(t: t, routing: routing, locked: locked, onUpdate: onUpdate),
+                _ModeSelector(t: t, routing: routing, locked: false, onUpdate: onUpdate),
 
                 if (routing.isActive) ...[
                   // 0x20 BYPASS
@@ -192,7 +191,7 @@ class _RoutingBody extends StatelessWidget {
                     title: 'Локальные сети',
                     hint: 'Не туннелировать 10/8, 192.168/16',
                     value: routing.bypassLocal,
-                    locked: locked,
+                    locked: false,
                     onChange: (v) => onUpdate(routing.copyWith(bypassLocal: v)),
                   ),
                   // GeoIP
@@ -201,13 +200,13 @@ class _RoutingBody extends StatelessWidget {
                     subLabel: 'geoip',
                     count: routing.geoCodes.length,
                     enabled: routing.geoEnabled,
-                    locked: locked || geoMissing,
+                    locked: geoMissing,
                     hint: geoHint,
                     onToggle: (v) => onUpdate(routing.copyWith(geoEnabled: v)),
                     chips: routing.geoCodes,
-                    onRemove: (locked || geoMissing) ? null : (code) => onUpdate(routing.copyWith(
+                    onRemove: geoMissing ? null : (code) => onUpdate(routing.copyWith(
                         geoCodes: routing.geoCodes.where((c) => c != code).toList())),
-                    onAdd: (locked || geoMissing) ? null : () => _showCountryPicker(context),
+                    onAdd: geoMissing ? null : () => _showCountryPicker(context),
                     addLabel: '+ регион',
                   ),
                   // Sniffing
@@ -216,7 +215,7 @@ class _RoutingBody extends StatelessWidget {
                     title: 'Снифинг',
                     hint: 'Определять домен из TLS SNI · нужен для domain.suffix и geosite',
                     value: sniffingEnabled,
-                    locked: locked,
+                    locked: false,
                     onChange: onUpdateSniffing,
                   ),
                   // Domain
@@ -281,7 +280,7 @@ class _RoutingBody extends StatelessWidget {
                   title: 'Блокировка рекламы',
                   hint: geoHint ?? 'geosite:category-ads-all + geosite:win-spy → block',
                   value: routing.adBlockEnabled,
-                  locked: locked || geoMissing,
+                  locked: geoMissing,
                   onChange: (v) => onUpdate(routing.copyWith(adBlockEnabled: v)),
                 ),
                 _RowToggle(
@@ -289,7 +288,7 @@ class _RoutingBody extends StatelessWidget {
                   title: 'Российские сервисы',
                   hint: 'Яндекс, VK, Сбер, Ozon, Авито и др. → выбранный outbound',
                   value: routing.ruServicesEnabled,
-                  locked: locked,
+                  locked: false,
                   last: true,
                   onChange: (v) => onUpdate(routing.copyWith(ruServicesEnabled: v)),
                 ),

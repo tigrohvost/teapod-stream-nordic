@@ -9,9 +9,12 @@ import '../../providers/vpn_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/hero_panel.dart';
+import '../widgets/breadcrumb_bar.dart';
 
 class LogsScreen extends ConsumerStatefulWidget {
-  const LogsScreen({super.key});
+  /// Имя родительского экрана для breadcrumb; null — экран без breadcrumb.
+  final String? breadcrumbParent;
+  const LogsScreen({super.key, this.breadcrumbParent});
 
   @override
   ConsumerState<LogsScreen> createState() => _LogsScreenState();
@@ -130,6 +133,8 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                 ],
               ),
             ),
+            if (widget.breadcrumbParent != null)
+              BreadcrumbBar(t: t, parent: widget.breadcrumbParent!, current: 'logs'),
 
             // ── Hero panel ──────────────────────────────────────
             HeroPanel(

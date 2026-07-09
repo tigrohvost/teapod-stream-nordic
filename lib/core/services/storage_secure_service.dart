@@ -16,12 +16,17 @@ class StorageSecureService {
   static const _socksPasswordKey = 'socks_password_v2';
   static const _deviceIdKey = 'device_id_v2';
   static const _deviceInfoKey = 'device_info_v2';
+  static const _pinnedRefsKey = 'pinned_refs_v1';
 
   Future<String?> readProfilesRaw() => _storage.read(key: _profilesKey);
   Future<void> writeProfilesRaw(String json) =>
       _storage.write(key: _profilesKey, value: json);
 
   Future<String?> readConfigsRaw() => _storage.read(key: _configsKey);
+
+  Future<String?> readPinsRaw() => _storage.read(key: _pinnedRefsKey);
+  Future<void> writePinsRaw(String json) =>
+      _storage.write(key: _pinnedRefsKey, value: json);
   Future<void> writeConfigsRaw(String json) =>
       _storage.write(key: _configsKey, value: json);
 

@@ -86,6 +86,10 @@ class VpnTileService : TileService() {
                 tile.state = Tile.STATE_UNAVAILABLE
                 setSubtitle(if (vpnState == "connecting") "Подключение…" else "Отключение…")
             }
+            "blocked" -> {
+                tile.state = Tile.STATE_INACTIVE
+                setSubtitle("Kill switch")
+            }
             else -> {
                 tile.state = Tile.STATE_INACTIVE
                 setSubtitle(null)

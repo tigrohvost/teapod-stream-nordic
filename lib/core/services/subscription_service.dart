@@ -148,7 +148,8 @@ class SubscriptionService {
         final items = jsonData is List ? jsonData : [jsonData];
         for (final item in items) {
           if (item is! Map<String, dynamic>) continue;
-          final remarks = item['remarks'] as String? ?? 'Server';
+          final rawRemarks = item['remarks'] as String? ?? 'Server';
+          final remarks = rawRemarks.replaceFirst(RegExp(r'^[\s\-\—\–]+'), '');
           final rawJson = jsonEncode(item);
           String address = '';
           int port = 0;

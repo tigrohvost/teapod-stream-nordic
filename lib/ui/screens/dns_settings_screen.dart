@@ -18,6 +18,8 @@ class _DnsSettingsScreenState extends ConsumerState<DnsSettingsScreen> {
   late String _selectedPreset;
   late DnsType _customType;
   late TextEditingController _customCtrl;
+  late DnsMode _dnsMode;
+  late DnsQueryStrategy _strategy;
 
   @override
   void initState() {
@@ -31,6 +33,8 @@ class _DnsSettingsScreenState extends ConsumerState<DnsSettingsScreen> {
             ? DnsType.dot
             : DnsType.udp;
     _customCtrl = TextEditingController(text: s.customDnsAddress);
+    _dnsMode = s.dnsMode;
+    _strategy = s.dnsQueryStrategy;
   }
 
   @override
@@ -47,6 +51,8 @@ class _DnsSettingsScreenState extends ConsumerState<DnsSettingsScreen> {
             customDnsAddress:
                 _customCtrl.text.trim().isEmpty ? '1.1.1.1' : _customCtrl.text.trim(),
             customDnsType: _customType.name,
+            dnsMode: _dnsMode,
+            dnsQueryStrategy: _strategy,
           ));
     }
     Navigator.pop(context);
@@ -151,6 +157,67 @@ class _DnsSettingsScreenState extends ConsumerState<DnsSettingsScreen> {
               child: ListView(
                 padding: EdgeInsets.zero,
                 children: [
+                  SetSectionHeader(t: t, addr: '0x05', label: 'mode'),
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+                    decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: t.lineSoft))),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Режим DNS',
+                                style: AppTheme.sans(size: 14, color: t.text)),
+                            const SizedBox(height: 3),
+                            Text(_dnsMode == DnsMode.proxy ? 'через VPN-туннель' : 'напрямую',
+                                style: AppTheme.mono(
+                                    size: 10, color: t.textMuted, letterSpacing: 0.5)),
+                          ],
+                        ),
+                        SetSegSquare(
+                          t: t,
+                          value: _dnsMode == DnsMode.proxy ? 'proxy' : 'direct',
+                          opts: const [('proxy', 'VPN'), ('direct', 'DIRECT')],
+                          onChanged: (v) => setState(() =>
+                              _dnsMode = v == 'proxy' ? DnsMode.proxy : DnsMode.direct),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+                    decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: t.lineSoft))),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('DNS стратегия',
+                                style: AppTheme.sans(size: 14, color: t.text)),
+                            const SizedBox(height: 3),
+                            Text('IP-версия для DNS-запросов',
+                                style: AppTheme.mono(
+                                    size: 10, color: t.textMuted, letterSpacing: 0.5)),
+                          ],
+                        ),
+                        SetSegSquare(
+                          t: t,
+                          value: _strategy.name,
+                          opts: const [
+                            ('ipv4Only', 'IPv4'),
+                            ('ipv6Only', 'IPv6'),
+                            ('auto', 'AUTO'),
+                          ],
+                          onChanged: (v) => setState(() => _strategy =
+                              DnsQueryStrategy.values.firstWhere((e) => e.name == v)),
+                        ),
+                      ],
+                    ),
+                  ),
                   SetSectionHeader(t: t, addr: '0x10', label: 'preset'),
                   for (final p in DnsServerConfig.presets)
                     _DnsPresetRow(

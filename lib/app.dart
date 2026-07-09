@@ -7,7 +7,7 @@ import 'ui/theme/app_theme.dart';
 import 'ui/theme/app_colors.dart';
 import 'ui/screens/home_screen.dart';
 import 'ui/screens/configs_screen.dart';
-import 'ui/screens/logs_screen.dart';
+import 'ui/screens/routing_screen.dart';
 import 'ui/screens/settings_screen.dart';
 import 'providers/config_provider.dart';
 import 'providers/vpn_provider.dart';
@@ -17,6 +17,16 @@ import 'providers/update_provider.dart';
 import 'providers/geo_provider.dart';
 import 'providers/theme_provider.dart';
 import 'core/services/deeplink_handler.dart';
+
+/// Индекс активной вкладки. Отдельный provider, чтобы экраны
+/// (например, Home при пустом списке конфигов) могли переключать вкладку.
+class TabIndexNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+  void set(int index) => state = index;
+}
+
+final tabIndexProvider = NotifierProvider<TabIndexNotifier, int>(TabIndexNotifier.new);
 
 class TeapodApp extends StatelessWidget {
   const TeapodApp({super.key});
@@ -68,7 +78,6 @@ class _AppShell extends ConsumerStatefulWidget {
 
 class _AppShellState extends ConsumerState<_AppShell>
     with WidgetsBindingObserver {
-  int _currentIndex = 0;
   bool _autoConnectAttempted = false;
   StreamSubscription? _deeplinkSubscription;
 
@@ -77,7 +86,7 @@ class _AppShellState extends ConsumerState<_AppShell>
   static const _pages = [
     HomeScreen(),
     ConfigsScreen(),
-    LogsScreen(),
+    RoutingScreen(),
     SettingsScreen(),
   ];
 
@@ -180,12 +189,13 @@ class _AppShellState extends ConsumerState<_AppShell>
               : Brightness.dark,
     ));
 
+    final currentIndex = ref.watch(tabIndexProvider);
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: _pages),
+      body: IndexedStack(index: currentIndex, children: _pages),
       bottomNavigationBar: _ConsoleTabBar(
-        currentIndex: _currentIndex,
+        currentIndex: currentIndex,
         hasUpdateBadge: hasUpdate,
-        onTap: (i) => setState(() => _currentIndex = i),
+        onTap: (i) => ref.read(tabIndexProvider.notifier).set(i),
       ),
     );
   }
@@ -211,7 +221,7 @@ class _ConsoleTabBar extends ConsumerWidget {
     final items = [
       _TabItem(icon: _TabIcon.shield,   label: 'VPN'),
       _TabItem(icon: _TabIcon.key,      label: 'Конфиги'),
-      _TabItem(icon: _TabIcon.list,     label: 'Логи'),
+      _TabItem(icon: _TabIcon.route,    label: 'Маршрут'),
       _TabItem(icon: _TabIcon.cog,      label: 'Настройки', badge: hasUpdateBadge),
     ];
 
@@ -230,7 +240,11 @@ class _ConsoleTabBar extends ConsumerWidget {
               final item   = e.value;
               final active = idx == currentIndex;
               return Expanded(
-                child: GestureDetector(
+                child: Semantics(
+                  label: item.label,
+                  button: true,
+                  selected: active,
+                  child: GestureDetector(
                   onTap: () => onTap(idx),
                   behavior: HitTestBehavior.opaque,
                   child: Column(
@@ -277,6 +291,7 @@ class _ConsoleTabBar extends ConsumerWidget {
                     ],
                   ),
                 ),
+                ),
               );
             }).toList(),
           ),
@@ -293,7 +308,7 @@ class _TabItem {
   const _TabItem({required this.icon, required this.label, this.badge = false});
 }
 
-enum _TabIcon { shield, key, list, cog }
+enum _TabIcon { shield, key, route, cog }
 
 class _SvgTabIcon extends StatelessWidget {
   final _TabIcon icon;
@@ -344,12 +359,16 @@ class _TabIconPainter extends CustomPainter {
         canvas.drawLine(const Offset(17, 6), const Offset(20, 9), paint);
         canvas.drawLine(const Offset(15, 8), const Offset(17, 10), paint);
         break;
-      case _TabIcon.list:
-        for (final y in [6.0, 12.0, 18.0]) {
-          canvas.drawLine(Offset(8, y), Offset(20, y), paint);
-          canvas.drawCircle(Offset(4, y), 0.5,
-              Paint()..color = color..style = PaintingStyle.fill);
-        }
+      case _TabIcon.route:
+        final route = Path()
+          ..moveTo(4, 18)
+          ..lineTo(10, 18)
+          ..lineTo(14, 6)
+          ..lineTo(20, 6);
+        canvas.drawPath(route, paint);
+        canvas.drawLine(const Offset(17, 3), const Offset(20, 6), paint);
+        canvas.drawLine(const Offset(20, 6), const Offset(17, 9), paint);
+        canvas.drawCircle(const Offset(4, 18), 1.4, paint);
         break;
       case _TabIcon.cog:
         canvas.drawCircle(const Offset(12, 12), 3, paint);

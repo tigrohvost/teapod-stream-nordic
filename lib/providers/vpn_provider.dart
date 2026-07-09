@@ -8,6 +8,7 @@ import '../core/interfaces/vpn_engine.dart';
 import '../core/models/vpn_config.dart';
 import '../core/constants/app_constants.dart';
 import '../core/models/vpn_stats.dart';
+import '../core/models/connection_fingerprint.dart';
 import '../core/models/vpn_log_entry.dart';
 import '../core/services/log_service.dart';
 import '../core/services/settings_service.dart';
@@ -24,6 +25,10 @@ class VpnState2 {
   final String activeSocksUser;
   final String activeSocksPassword;
 
+  /// Fingerprint настроек, с которыми установлено текущее соединение.
+  /// null — соединение не активно или отпечаток неизвестен.
+  final String? appliedFingerprint;
+
   const VpnState2({
     this.connectionState = VpnState.disconnected,
     this.stats = const VpnStats(),
@@ -31,11 +36,13 @@ class VpnState2 {
     this.activeSocksPort = 0,
     this.activeSocksUser = '',
     this.activeSocksPassword = '',
+    this.appliedFingerprint,
   });
 
   bool get isConnected => connectionState == VpnState.connected;
   bool get isConnecting => connectionState == VpnState.connecting;
   bool get isDisconnecting => connectionState == VpnState.disconnecting;
+  bool get isBlocked => connectionState == VpnState.blocked;
   bool get isBusy => isConnecting || isDisconnecting;
 
   VpnState2 copyWith({
@@ -45,6 +52,7 @@ class VpnState2 {
     int? activeSocksPort,
     String? activeSocksUser,
     String? activeSocksPassword,
+    String? appliedFingerprint,
   }) {
     return VpnState2(
       connectionState: connectionState ?? this.connectionState,
@@ -53,6 +61,7 @@ class VpnState2 {
       activeSocksPort: activeSocksPort ?? this.activeSocksPort,
       activeSocksUser: activeSocksUser ?? this.activeSocksUser,
       activeSocksPassword: activeSocksPassword ?? this.activeSocksPassword,
+      appliedFingerprint: appliedFingerprint ?? this.appliedFingerprint,
     );
   }
 }
@@ -136,6 +145,10 @@ class VpnNotifier extends Notifier<VpnState2> {
         ref.refresh(ipInfoProvider);
         // Also fetch initial stats
         _startStatsPolling();
+        // VPN уже работал до старта приложения — считаем применёнными текущие
+        // настройки (точный снапшот на момент connect недоступен).
+        final s = await ref.read(settingsProvider.future);
+        state = state.copyWith(appliedFingerprint: connectionFingerprint(s));
       }
     });
 
@@ -218,6 +231,7 @@ class VpnNotifier extends Notifier<VpnState2> {
         'disconnecting' => VpnState.disconnecting,
         'disconnected' => VpnState.disconnected,
         'error' => VpnState.error,
+        'blocked' => VpnState.blocked,
         _ => VpnState.disconnected,
       };
 
@@ -229,7 +243,8 @@ class VpnNotifier extends Notifier<VpnState2> {
       // Start polling as backup for when EventChannel doesn't deliver (app in background)
       _startStatsPolling();
     } else if (nativeState == VpnState.disconnected ||
-        nativeState == VpnState.error) {
+        nativeState == VpnState.error ||
+        nativeState == VpnState.blocked) {
       _connectedAt = null;
       _connectTimeout?.cancel();
       _connectTimeout = null;
@@ -262,8 +277,10 @@ class VpnNotifier extends Notifier<VpnState2> {
 
     if (state.connectionState == nativeState) return;
 
-    if (nativeState == VpnState.disconnected || nativeState == VpnState.error) {
-      // Reset stats on disconnect/error
+    if (nativeState == VpnState.disconnected ||
+        nativeState == VpnState.error ||
+        nativeState == VpnState.blocked) {
+      // Reset stats on disconnect/error/blocked
       _statsPoller?.cancel();
       state = VpnState2(
         connectionState: nativeState,
@@ -408,6 +425,7 @@ class VpnNotifier extends Notifier<VpnState2> {
       activeSocksPort: actualSocksPort,
       activeSocksUser: socksCredentials.user,
       activeSocksPassword: socksCredentials.password,
+      appliedFingerprint: connectionFingerprint(settings),
     );
 
     try {
@@ -593,4 +611,14 @@ final vpnConnectionStateProvider = Provider<VpnState>((ref) {
 // Convenience selector for stats
 final vpnStatsProvider = Provider<VpnStats>((ref) {
   return ref.watch(vpnProvider).stats;
+});
+
+/// true — настройки соединения изменены после подключения,
+/// для применения нужен reconnect.
+final pendingReconnectProvider = Provider<bool>((ref) {
+  final vpn = ref.watch(vpnProvider);
+  if (!vpn.isConnected || vpn.appliedFingerprint == null) return false;
+  final s = ref.watch(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
+  if (s == null) return false;
+  return connectionFingerprint(s) != vpn.appliedFingerprint;
 });

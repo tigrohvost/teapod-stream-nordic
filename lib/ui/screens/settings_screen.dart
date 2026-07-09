@@ -8,16 +8,17 @@ import '../../core/constants/app_constants.dart';
 import '../../core/models/dns_config.dart';
 import '../../core/services/update_service.dart' show UpdateChannel, UpdateInfo;
 import '../../core/services/settings_service.dart';
-import 'routing_screen.dart';
+import 'logs_screen.dart';
+import 'network_settings_screen.dart';
 import 'profiles_screen.dart';
 import 'dns_settings_screen.dart';
 import '../../providers/settings_provider.dart';
-import '../../providers/vpn_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../providers/profile_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/settings_shared.dart';
+import '../widgets/reconnect_banner.dart';
 import 'split_tunnel_screen.dart';
 
 // ── Screen ────────────────────────────────────────────────────────
@@ -55,13 +56,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final settingsAsync = ref.watch(settingsProvider);
-    final vpnState = ref.watch(vpnProvider);
     final profileState = ref.watch(profileProvider).maybeWhen(data: (d) => d, orElse: () => null);
     final version = ref.watch(appVersionProvider).maybeWhen(data: (v) => v, orElse: () => 'v?');
     final t = Theme.of(context).extension<TeapodTokens>()!;
-    final vpnLocked = vpnState.isConnected || vpnState.isConnecting;
     final profileReadonly = profileState?.isReadonly ?? false;
-    final locked = vpnLocked || profileReadonly;
+    final locked = profileReadonly;
+    final updateState = ref.watch(updateProvider);
+    final hasUpdate = updateState is UpdateAvailable ||
+        updateState is UpdateDownloading ||
+        updateState is UpdateDownloaded;
 
     return Scaffold(
       body: SafeArea(
@@ -74,6 +77,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               profileName: profileState?.activeProfile?.name ?? 'default',
               profileReadonly: profileReadonly,
             ),
+            const ReconnectBanner(),
             Expanded(
               child: settingsAsync.when(
                 loading: () => Center(
@@ -83,8 +87,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         style: AppTheme.mono(size: 12, color: t.danger))),
                 data: (settings) => _SettingsBody(
                   settings: settings,
-                  isConnected: vpnLocked,
                   isProfileReadonly: profileReadonly,
+                  hasUpdate: hasUpdate,
                   version: version,
                   xrayVersion: _xrayVersion,
                   onUpdate: (s) => ref.read(settingsProvider.notifier).save(s),
@@ -169,9 +173,7 @@ class _SetHeroPanel extends StatelessWidget {
                       const SizedBox(height: 6),
                       Text(
                         locked
-                            ? (profileReadonly
-                                ? 'профиль заблокирован · только чтение'
-                                : 'отключите VPN чтобы изменить параметры')
+                            ? 'профиль заблокирован · только чтение'
                             : 'профиль: $profileName · автосохранение',
                         style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5),
                       ),
@@ -305,16 +307,16 @@ class _LockPainter extends CustomPainter {
 
 class _SettingsBody extends StatefulWidget {
   final AppSettings settings;
-  final bool isConnected;
   final bool isProfileReadonly;
+  final bool hasUpdate;
   final String version;
   final String xrayVersion;
   final void Function(AppSettings) onUpdate;
 
   const _SettingsBody({
     required this.settings,
-    required this.isConnected,
     required this.isProfileReadonly,
+    required this.hasUpdate,
     required this.version,
     required this.xrayVersion,
     required this.onUpdate,
@@ -325,127 +327,42 @@ class _SettingsBody extends StatefulWidget {
 }
 
 class _SettingsBodyState extends State<_SettingsBody> {
-  late final TextEditingController _socksPortCtrl;
-  late final TextEditingController _socksUserCtrl;
-  late final TextEditingController _socksPasswordCtrl;
-  late final TextEditingController _mtuCtrl;
   late final TextEditingController _subUaCtrl;
-  late final TextEditingController _obsCtrl;
 
   @override
   void initState() {
     super.initState();
-    _socksPortCtrl    = TextEditingController(text: widget.settings.socksPort.toString());
-    _socksUserCtrl    = TextEditingController(text: widget.settings.socksUser);
-    _socksPasswordCtrl = TextEditingController(text: widget.settings.socksPassword);
-    _mtuCtrl          = TextEditingController(text: widget.settings.mtu.toString());
-    _subUaCtrl        = TextEditingController(text: widget.settings.subUserAgent);
-    _obsCtrl          = TextEditingController(text: widget.settings.obsProbeIntervalSec.toString());
+    _subUaCtrl = TextEditingController(text: widget.settings.subUserAgent);
   }
 
   @override
   void dispose() {
-    _socksPortCtrl.dispose();
-    _socksUserCtrl.dispose();
-    _socksPasswordCtrl.dispose();
-    _mtuCtrl.dispose();
     _subUaCtrl.dispose();
-    _obsCtrl.dispose();
     super.dispose();
-  }
-
-  void _updatePorts() {
-    final socks = int.tryParse(_socksPortCtrl.text);
-    if (socks != null) {
-      widget.onUpdate(widget.settings.copyWith(socksPort: socks.clamp(1024, 65535)));
-    }
-  }
-
-  void _updateCredentials() {
-    widget.onUpdate(widget.settings.copyWith(
-      socksUser: _socksUserCtrl.text,
-      socksPassword: _socksPasswordCtrl.text,
-    ));
-  }
-
-  void _updateMtu() {
-    final mtu = int.tryParse(_mtuCtrl.text);
-    if (mtu != null) {
-      widget.onUpdate(widget.settings.copyWith(mtu: mtu.clamp(576, 9000)));
-    }
-  }
-
-  void _updateObsInterval() {
-    final sec = int.tryParse(_obsCtrl.text);
-    if (sec != null) {
-      widget.onUpdate(widget.settings.copyWith(obsProbeIntervalSec: sec.clamp(0, 86400)));
-    }
-  }
-
-  static String _fpLabel(TlsFingerprint fp) =>
-      fp == TlsFingerprint.defaultFp ? 'DEFAULT' : fp.name.toUpperCase();
-
-  void _showFingerprintPicker(BuildContext context, AppSettings s) {
-    final t = Theme.of(context).extension<TeapodTokens>()!;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: t.bg,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-              child: Row(children: [
-                Expanded(
-                  child: Text('tls // fingerprint',
-                      style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-                ),
-              ]),
-            ),
-            Container(height: 1, color: t.line),
-            for (final fp in TlsFingerprint.values)
-              InkWell(
-                onTap: () {
-                  widget.onUpdate(s.copyWith(tlsFingerprint: fp));
-                  Navigator.pop(ctx);
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(_fpLabel(fp),
-                            style: AppTheme.mono(
-                                size: 12,
-                                color: fp == s.tlsFingerprint ? t.accent : t.text,
-                                letterSpacing: 0.5)),
-                      ),
-                      if (fp == s.tlsFingerprint)
-                        Text('●', style: AppTheme.mono(size: 10, color: t.accent)),
-                    ],
-                  ),
-                ),
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).extension<TeapodTokens>()!;
     final s = widget.settings;
-    final locked = widget.isConnected || widget.isProfileReadonly;
+    final locked = widget.isProfileReadonly;
 
     return Stack(
       children: [
         ListView(
         padding: EdgeInsets.zero,
         children: [
+          // Доступно обновление — тайл наверху, чтобы не искать в конце списка
+          if (widget.hasUpdate)
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+              decoration: BoxDecoration(
+                color: t.accentFade,
+                border: Border(bottom: BorderSide(color: t.accent)),
+              ),
+              child: const _UpdateTile(),
+            ),
+
           // ── 0x10 APPEARANCE ───────────────────────────────────
           SetSectionHeader(t: t, addr: '0x10', label: 'appearance'),
           _AppearanceRows(t: t),
@@ -456,7 +373,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
 
           // ── 0x20 CONNECTION ───────────────────────────────────
           SetSectionHeader(t: t, addr: '0x20', label: 'connection'),
-          _RowToggle(
+          SetRowToggle(
             t: t,
             title: 'Автоподключение',
             hint: 'Подключаться при запуске приложения',
@@ -464,7 +381,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
             locked: locked,
             onChange: (v) => widget.onUpdate(s.copyWith(autoConnect: v)),
           ),
-          _RowToggle(
+          SetRowToggle(
             t: t,
             title: 'Запуск при загрузке',
             hint: 'Подключаться автоматически при перезагрузке устройства',
@@ -472,7 +389,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
             locked: locked,
             onChange: (v) => widget.onUpdate(s.copyWith(autoStartOnBoot: v)),
           ),
-          _RowToggle(
+          SetRowToggle(
             t: t,
             title: 'Уведомление',
             hint: 'Скорость и кнопка отключения в шторке',
@@ -480,7 +397,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
             locked: locked,
             onChange: (v) => widget.onUpdate(s.copyWith(showNotification: v)),
           ),
-          _RowToggle(
+          SetRowToggle(
             t: t,
             title: 'Kill Switch',
             hint: 'Блокировать трафик при обрыве VPN',
@@ -488,7 +405,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
             locked: locked,
             onChange: (v) => widget.onUpdate(s.copyWith(killSwitchEnabled: v)),
           ),
-          _RowToggle(
+          SetRowToggle(
             t: t,
             title: 'HWID',
             hint: 'Отправлять ID устройства для привязки подписки',
@@ -496,7 +413,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
             locked: locked,
             onChange: (v) => widget.onUpdate(s.copyWith(hwidEnabled: v)),
           ),
-          _RowToggle(
+          SetRowToggle(
             t: t,
             title: 'Автообновление подписок',
             hint: 'Обновлять подписки по расписанию',
@@ -505,10 +422,10 @@ class _SettingsBodyState extends State<_SettingsBody> {
             onChange: (v) => widget.onUpdate(s.copyWith(subAutoRefresh: v)),
           ),
           if (s.subAutoRefresh)
-            _InlineField(
+            SetInlineField(
               t: t,
               label: 'Интервал',
-              child: _SegSquare(
+              child: SetSegSquare(
                 t: t,
                 value: s.subAutoRefreshHours.toString(),
                 opts: const [('1', '1ч'), ('3', '3ч'), ('6', '6ч'), ('12', '12ч'), ('24', '24ч')],
@@ -516,7 +433,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
                 onChanged: (v) => widget.onUpdate(s.copyWith(subAutoRefreshHours: int.parse(v))),
               ),
             ),
-          _InlineField(
+          SetInlineField(
             t: t,
             label: 'User-Agent',
             child: SizedBox(
@@ -544,319 +461,39 @@ class _SettingsBodyState extends State<_SettingsBody> {
             ),
           ),
 
-          // ── 0x30 XRAY ─────────────────────────────────────────
-          SetSectionHeader(t: t, addr: '0x30', label: 'xray'),
-          _RowToggle(
+          // ── 0x30 NETWORK ──────────────────────────────────────
+          SetSectionHeader(t: t, addr: '0x30', label: 'network'),
+          SetRowChev(
             t: t,
-            title: 'Случайный порт',
-            hint: 'Случайный SOCKS порт при каждом подключении',
-            value: s.randomPort,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(randomPort: v)),
+            title: 'Сеть',
+            hint: 'SOCKS ${s.randomPort ? 'random' : s.socksPort} · MTU ${s.mtu}'
+                '${s.proxyOnly ? ' · только прокси' : ''}',
+            onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const NetworkSettingsScreen())),
           ),
-          if (!s.randomPort)
-            _InlineField(
-              t: t,
-              label: 'SOCKS5 порт',
-              child: SizedBox(
-                width: 90,
-                child: TextField(
-                  controller: _socksPortCtrl,
-                  enabled: !locked,
-                  textAlign: TextAlign.center,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  onChanged: (_) => _updatePorts(),
-                  onEditingComplete: () => FocusScope.of(context).unfocus(),
-                  style: AppTheme.mono(size: 13, color: t.text),
-                  decoration: InputDecoration(
-                    hintText: '10808',
-                    hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    isDense: true,
-                    enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
-                    focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
-                    disabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
-                  ),
-                ),
-              ),
-            ),
-          _RowToggle(
+          SetRowChev(
             t: t,
-            title: 'Случайные учётные данные',
-            hint: 'Генерировать случайный логин/пароль SOCKS',
-            value: s.randomCredentials,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(randomCredentials: v)),
-          ),
-          if (!s.randomCredentials) ...[
-            _InlineField(
-              t: t,
-              label: 'Логин SOCKS',
-              child: _CredField(
-                controller: _socksUserCtrl,
-                enabled: !locked,
-                hint: 'без пароля',
-                onChanged: (_) => _updateCredentials(),
-                t: t,
-              ),
-            ),
-            _InlineField(
-              t: t,
-              label: 'Пароль SOCKS',
-              child: _CredField(
-                controller: _socksPasswordCtrl,
-                enabled: !locked,
-                hint: 'без пароля',
-                obscureText: true,
-                onChanged: (_) => _updateCredentials(),
-                t: t,
-              ),
-            ),
-          ],
-          _RowToggle(
-            t: t,
-            title: 'Только прокси',
-            hint: 'Запустить SOCKS прокси без VPN-туннеля',
-            value: s.proxyOnly,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(proxyOnly: v)),
-          ),
-          _RowToggle(
-            t: t,
-            title: 'UDP',
-            hint: 'Разрешить UDP-трафик через SOCKS',
-            value: s.enableUdp,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(enableUdp: v)),
-          ),
-          _RowToggle(
-            t: t,
-            title: 'ICMP (ping)',
-            hint: 'Разрешить ping-запросы через туннель',
-            value: s.allowIcmp,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(allowIcmp: v)),
-          ),
-          _RowToggle(
-            t: t,
-            title: 'Блокировать QUIC',
-            hint: 'TUN отвечает на UDP 443 ICMP-ом "порт недоступен": браузер мгновенно падает на TCP вместо ожидания QUIC-таймаута (~55с). Трафик из устройства не уходит.',
-            value: s.blockQuic,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(blockQuic: v)),
-          ),
-          // TLS fingerprint (uTLS) override
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-            decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: t.lineSoft))),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('TLS fingerprint',
-                        style: AppTheme.sans(size: 14, color: t.text)),
-                    const SizedBox(height: 3),
-                    Text('uTLS-маскировка ClientHello (TLS/REALITY)',
-                        style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5)),
-                  ],
-                ),
-                GestureDetector(
-                  onTap: locked ? null : () => _showFingerprintPicker(context, s),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(border: Border.all(color: t.line)),
-                    child: Text(_fpLabel(s.tlsFingerprint),
-                        style: AppTheme.mono(
-                            size: 11,
-                            color: locked ? t.textDim : t.accent,
-                            letterSpacing: 0.5)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (!s.proxyOnly)
-            _RowToggle(
-              t: t,
-              title: 'IPv6 в туннеле',
-              hint: 'Добавить IPv6-адрес на TUN-интерфейс. Включайте только если VPN-сервер имеет IPv6: иначе приложения с IPv6-адресами (Telegram) зависают. При выключении IPv6 блокируется системой без утечек — приложения мгновенно переходят на IPv4.',
-              value: s.ipv6Enabled,
-              locked: locked,
-              onChange: (v) => widget.onUpdate(s.copyWith(ipv6Enabled: v)),
-            ),
-          if (!s.proxyOnly)
-            _InlineField(
-              t: t,
-              label: 'MTU',
-              child: SizedBox(
-                width: 90,
-                child: TextField(
-                  controller: _mtuCtrl,
-                  enabled: !locked,
-                  textAlign: TextAlign.center,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  onChanged: (_) => _updateMtu(),
-                  onEditingComplete: () => FocusScope.of(context).unfocus(),
-                  style: AppTheme.mono(size: 13, color: t.text),
-                  decoration: InputDecoration(
-                    hintText: '1500',
-                    hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    isDense: true,
-                    enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
-                    focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
-                    disabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
-                  ),
-                ),
-              ),
-            ),
-          _InlineField(
-            t: t,
-            label: 'Observatory мин. интервал, сек',
-            child: SizedBox(
-              width: 90,
-              child: TextField(
-                controller: _obsCtrl,
-                enabled: !locked,
-                textAlign: TextAlign.center,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                onChanged: (_) => _updateObsInterval(),
-                onEditingComplete: () => FocusScope.of(context).unfocus(),
-                style: AppTheme.mono(size: 13, color: t.text),
-                decoration: InputDecoration(
-                  hintText: '600',
-                  hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  isDense: true,
-                  enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
-                  focusedBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
-                  disabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
-                ),
-              ),
-            ),
-          ),
-          // DNS mode inline selector
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-            decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: t.lineSoft))),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Режим DNS',
-                        style: AppTheme.sans(size: 14, color: t.text)),
-                    const SizedBox(height: 3),
-                    Text(s.dnsMode == DnsMode.proxy ? 'через VPN-туннель' : 'напрямую',
-                        style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5)),
-                  ],
-                ),
-                _SegSquare(
-                  t: t,
-                  value: s.dnsMode == DnsMode.proxy ? 'proxy' : 'direct',
-                  opts: const [('proxy', 'VPN'), ('direct', 'DIRECT')],
-                  locked: locked,
-                  onChanged: (v) => widget.onUpdate(
-                      s.copyWith(dnsMode: v == 'proxy' ? DnsMode.proxy : DnsMode.direct)),
-                ),
-              ],
-            ),
-          ),
-          // DNS query strategy (IPv4 / IPv6 / Auto)
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-            decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: t.lineSoft))),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('DNS стратегия',
-                        style: AppTheme.sans(size: 14, color: t.text)),
-                    const SizedBox(height: 3),
-                    Text('IP-версия для DNS-запросов',
-                        style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5)),
-                  ],
-                ),
-                _SegSquare(
-                  t: t,
-                  value: s.dnsQueryStrategy.name,
-                  opts: const [
-                    ('ipv4Only', 'IPv4'),
-                    ('ipv6Only', 'IPv6'),
-                    ('auto', 'AUTO'),
-                  ],
-                  locked: locked,
-                  onChanged: (v) => widget.onUpdate(
-                      s.copyWith(dnsQueryStrategy: DnsQueryStrategy.values.firstWhere((e) => e.name == v))),
-                ),
-              ],
-            ),
-          ),
-          _RowChev(
-            t: t,
-            title: 'DNS сервер',
-            hint: _dnsLabel(s),
-            locked: locked,
+            title: 'DNS',
+            hint: '${s.dnsMode == DnsMode.proxy ? 'через VPN' : 'напрямую'} · ${_dnsLabel(s)}',
             last: true,
-            onTap: locked ? null : () => Navigator.push(
+            onTap: () => Navigator.push(
                 context, MaterialPageRoute(builder: (_) => const DnsSettingsScreen())),
           ),
 
           // ── 0x40 ROUTING ──────────────────────────────────────
           SetSectionHeader(t: t, addr: '0x40', label: 'routing'),
-          _RowChev(
-            t: t,
-            title: 'Маршрутизация трафика',
-            hint: s.routing.summary,
-            locked: locked,
-            onTap: locked ? null : () => Navigator.push(
-                context, MaterialPageRoute(builder: (_) => const RoutingScreen())),
-          ),
-          _RowToggle(
+          SetRowChev(
             t: t,
             title: 'Сплит-туннелирование',
-            hint: s.vpnMode == VpnMode.onlySelected
-                ? 'Только выбранные приложения через VPN'
-                : 'Выбранные приложения исключены из VPN',
-            value: s.splitTunnelingEnabled,
-            locked: locked,
-            onChange: (v) => widget.onUpdate(s.copyWith(splitTunnelingEnabled: v)),
+            hint: !s.splitTunnelingEnabled
+                ? 'выкл'
+                : s.vpnMode == VpnMode.onlySelected
+                    ? '${s.includedPackages.length} прил · ТОЛЬКО'
+                    : '${s.excludedPackages.length} прил · КРОМЕ',
+            last: true,
+            onTap: () => Navigator.push(
+                context, MaterialPageRoute(builder: (_) => const SplitTunnelScreen())),
           ),
-          if (s.splitTunnelingEnabled)
-            _RowChev(
-              t: t,
-              title: 'Выбрать приложения',
-              hint: s.vpnMode == VpnMode.onlySelected
-                  ? '${s.includedPackages.length} выбрано'
-                  : '${s.excludedPackages.length} исключено',
-              locked: locked,
-              last: true,
-              onTap: locked ? null : () => Navigator.push(
-                  context, MaterialPageRoute(builder: (_) => const SplitTunnelScreen())),
-            )
-          else
-            SizedBox(height: 1,
-                child: Container(color: t.line)),
 
           // ── 0x50 ABOUT ────────────────────────────────────────
           SetSectionHeader(t: t, addr: '0x50', label: 'about'),
@@ -871,241 +508,34 @@ class _SettingsBodyState extends State<_SettingsBody> {
               if (await canLaunchUrl(uri)) launchUrl(uri, mode: LaunchMode.externalApplication);
             },
           ),
+          SetRowChev(
+            t: t,
+            title: 'Логи',
+            hint: 'журнал приложения и xray',
+            locked: false,
+            onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const LogsScreen(breadcrumbParent: 'settings'))),
+          ),
           // Update channel
-          _InlineField(
+          SetInlineField(
             t: t,
             label: 'Канал обновлений',
             child: const _UpdateChannelSegment(),
           ),
-          // Update tile (complex)
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
-            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
-            child: const _UpdateTile(),
-          ),
+          // Update tile (complex) — при доступном обновлении показан наверху
+          if (!widget.hasUpdate)
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
+              child: const _UpdateTile(),
+            ),
           const SizedBox(height: 32),
         ],
       ),
-        if (locked)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: Container(color: t.bg.withValues(alpha: 0)),
-            ),
-          ),
       ],
     );
   }
 
-}
-
-// ── Row: toggle ───────────────────────────────────────────────────
-
-class _RowToggle extends StatelessWidget {
-  final TeapodTokens t;
-  final String title;
-  final String? hint;
-  final bool value;
-  final bool locked;
-  final void Function(bool) onChange;
-
-  const _RowToggle({
-    required this.t,
-    required this.title,
-    required this.value,
-    required this.locked,
-    required this.onChange,
-    this.hint,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-      decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: t.lineSoft))),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: AppTheme.sans(size: 14, color: t.text)),
-                if (hint != null) ...[
-                  const SizedBox(height: 3),
-                  Text(hint!, style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5)),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 14),
-          _SquareSwitch(
-            t: t,
-            value: value,
-            onChanged: locked ? null : (v) => onChange(v),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Square switch ─────────────────────────────────────────────────
-
-class _SquareSwitch extends StatelessWidget {
-  final TeapodTokens t;
-  final bool value;
-  final void Function(bool)? onChanged;
-
-  const _SquareSwitch({required this.t, required this.value, this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onChanged != null ? () => onChanged!(!value) : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        width: 44,
-        height: 22,
-        padding: const EdgeInsets.all(2),
-        decoration: BoxDecoration(
-          border: Border.all(color: value ? t.accent : t.line),
-          color: value ? t.accentSoft : Colors.transparent,
-        ),
-        child: Align(
-          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width: 14,
-            height: 14,
-            color: value ? t.accent : t.textMuted,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Row: chevron ──────────────────────────────────────────────────
-
-class _RowChev extends StatelessWidget {
-  final TeapodTokens t;
-  final String title;
-  final String? hint;
-  final bool locked;
-  final bool last;
-  final VoidCallback? onTap;
-
-  const _RowChev({
-    required this.t,
-    required this.title,
-    required this.locked,
-    this.hint,
-    this.last = false,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-        decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: last ? t.line : t.lineSoft))),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: AppTheme.sans(size: 14, color: t.text)),
-                  if (hint != null) ...[
-                    const SizedBox(height: 3),
-                    Text(hint!, style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5),
-                        overflow: TextOverflow.ellipsis),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text('›', style: AppTheme.mono(size: 16, color: t.textMuted)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── Row: inline field ─────────────────────────────────────────────
-
-class _InlineField extends StatelessWidget {
-  final TeapodTokens t;
-  final String label;
-  final Widget child;
-  const _InlineField({required this.t, required this.label, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: AppTheme.sans(size: 14, color: t.text)),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-// ── Cred text field ───────────────────────────────────────────────
-
-class _CredField extends StatelessWidget {
-  final TextEditingController controller;
-  final bool enabled;
-  final String hint;
-  final bool obscureText;
-  final void Function(String) onChanged;
-  final TeapodTokens t;
-
-  const _CredField({
-    required this.controller,
-    required this.enabled,
-    required this.hint,
-    required this.onChanged,
-    required this.t,
-    this.obscureText = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 140,
-      child: TextField(
-        controller: controller,
-        enabled: enabled,
-        obscureText: obscureText,
-        textAlign: TextAlign.end,
-        onChanged: onChanged,
-        onEditingComplete: () => FocusScope.of(context).unfocus(),
-        style: AppTheme.mono(size: 12, color: t.text),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: AppTheme.mono(size: 11, color: t.textMuted),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          isDense: true,
-          enabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
-          focusedBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
-          disabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
-        ),
-      ),
-    );
-  }
 }
 
 // ── Row: KV ───────────────────────────────────────────────────────
@@ -1166,58 +596,6 @@ class _KVRowTap extends StatelessWidget {
   }
 }
 
-// ── Segmented square selector ─────────────────────────────────────
-
-class _SegSquare extends StatelessWidget {
-  final TeapodTokens t;
-  final String value;
-  final List<(String, String)> opts;
-  final bool locked;
-  final void Function(String) onChanged;
-
-  const _SegSquare({
-    required this.t,
-    required this.value,
-    required this.opts,
-    required this.locked,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(border: Border.all(color: t.line)),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: opts.asMap().entries.map((e) {
-          final idx = e.key;
-          final (val, lab) = e.value;
-          final active = value == val;
-          return GestureDetector(
-            onTap: locked ? null : () => onChanged(val),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: active ? t.accentSoft : Colors.transparent,
-                border: Border(
-                  right: idx < opts.length - 1
-                      ? BorderSide(color: t.line)
-                      : BorderSide.none,
-                ),
-              ),
-              child: Text(lab,
-                  style: AppTheme.mono(
-                      size: 11,
-                      color: active ? t.accent : t.textDim,
-                      letterSpacing: 0.5)),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-}
-
 // ── Update channel segment ────────────────────────────────────────
 
 class _UpdateChannelSegment extends ConsumerWidget {
@@ -1228,7 +606,7 @@ class _UpdateChannelSegment extends ConsumerWidget {
     final t = Theme.of(context).extension<TeapodTokens>()!;
     final settings = ref.watch(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
     if (settings == null) return const SizedBox.shrink();
-    return _SegSquare(
+    return SetSegSquare(
       t: t,
       value: settings.updateChannel == UpdateChannel.stable ? 'stable' : 'beta',
       opts: const [('stable', 'STABLE'), ('beta', 'BETA')],
@@ -1264,7 +642,7 @@ class _AppearanceRows extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Тема', style: AppTheme.sans(size: 14, color: t.text)),
-              _SegSquare(
+              SetSegSquare(
                 t: t,
                 value: themeMode == ThemeMode.dark ? 'dark'
                     : themeMode == ThemeMode.light ? 'light' : 'system',
@@ -1288,7 +666,7 @@ class _AppearanceRows extends ConsumerWidget {
             children: [
               Text('Размер шрифта', style: AppTheme.sans(size: 14, color: t.text)),
               if (settings != null)
-                _SegSquare(
+                SetSegSquare(
                   t: t,
                   value: settings.fontScale == FontScale.large ? 'large' : 'normal',
                   opts: const [('normal', 'ОБЫЧНЫЙ'), ('large', 'КРУПНЫЙ')],

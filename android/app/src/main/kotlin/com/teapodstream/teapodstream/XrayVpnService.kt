@@ -283,6 +283,10 @@ class XrayVpnService : VpnService() {
                         Thread.currentThread().interrupt()
                     }
 
+                    // Из состояния blocked stopVpn выходит по CAS (isRunning уже false),
+                    // TUN-sink kill switch'а нужно закрыть явно.
+                    closeTunSink()
+
                     // Guarantee "disconnected" is always sent
                     setState("disconnected")
                     // Update notification to "Disconnected" ONLY after we've actually
@@ -809,6 +813,13 @@ class XrayVpnService : VpnService() {
         }
     }
 
+    /** Закрывает TUN-sink kill switch'а, если сервис уже остановлен. */
+    private fun closeTunSink() {
+        if (isRunning.get()) return
+        try { tunInterface?.close() } catch (_: Exception) {}
+        tunInterface = null
+    }
+
     private fun stopVpn(
         resultState: String = "disconnected",
         explicit: Boolean = false,
@@ -826,6 +837,7 @@ class XrayVpnService : VpnService() {
         try { wakeLock?.release() } catch (_: Exception) {}
         wakeLock = null
 
+        var keptTunAsSink = false
         try {
             try { unregisterNetworkCallback() } catch (e: Exception) {
                 log("warning", "unregisterNetworkCallback failed: ${e.message}")
@@ -852,6 +864,7 @@ class XrayVpnService : VpnService() {
             val keepTunAsSink = killSwitchEnabled && !explicit && !proxyOnlyMode
                     && tunInterface != null
                     && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+            keptTunAsSink = keepTunAsSink
             if (!keepTunAsSink) {
                 try {
                     tunInterface?.close()
@@ -924,12 +937,14 @@ class XrayVpnService : VpnService() {
             // Don't overwrite "connecting" state when doing internal reconnect
             if (!reconnecting) {
                 connectedAtMs = 0
-                setState(resultState)
+                // TUN-sink остался открытым (kill switch) — трафик заблокирован,
+                // сообщаем отличимое от disconnected состояние.
+                setState(if (keptTunAsSink) "blocked" else resultState)
             } else {
                 // Clear credentials so startVpn picks up fresh ones from configFile
                 _socksCredentials.set(SocksCredentials(0, "", ""))
             }
-            log("info", "stopVpn: done (state=${if (reconnecting) "reconnecting" else resultState})")
+            log("info", "stopVpn: done (state=${if (reconnecting) "reconnecting" else if (keptTunAsSink) "blocked" else resultState})")
         }
     }
 
