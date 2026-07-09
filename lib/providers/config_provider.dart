@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models/vpn_config.dart';
+import '../core/models/pinned_ref.dart';
 import '../core/models/connections_bundle.dart';
 import '../core/services/config_storage_service.dart';
 import '../core/services/subscription_service.dart' show SubscriptionService, SubscriptionFetchResult, HwidDeviceInfo;
@@ -11,12 +12,14 @@ class ConfigState {
   final String? activeConfigId;
   final String? activeSubscriptionId;
   final List<Subscription> subscriptions;
+  final List<PinnedRef> pins;
 
   ConfigState({
     this.configs = const [],
     this.activeConfigId,
     this.activeSubscriptionId,
     this.subscriptions = const [],
+    this.pins = const [],
   });
 
   VpnConfig? get activeConfig => activeConfigId == null
@@ -34,6 +37,14 @@ class ConfigState {
     return result;
   }();
 
+  /// Пины в порядке закрепления; null — конфиг с таким именем
+  /// в подписке отсутствует (пин «потерян», но не удаляется).
+  late final List<(PinnedRef, VpnConfig?)> resolvedPins = pins
+      .map((p) => (p, configs.where(p.matches).firstOrNull))
+      .toList();
+
+  bool isPinned(VpnConfig c) => pins.any((p) => p.matches(c));
+
   ConfigState copyWith({
     List<VpnConfig>? configs,
     String? activeConfigId,
@@ -41,12 +52,14 @@ class ConfigState {
     String? activeSubscriptionId,
     bool clearActiveSub = false,
     List<Subscription>? subscriptions,
+    List<PinnedRef>? pins,
   }) {
     return ConfigState(
       configs: configs ?? this.configs,
       activeConfigId: clearActive ? null : (activeConfigId ?? this.activeConfigId),
       activeSubscriptionId: clearActiveSub ? null : (activeSubscriptionId ?? this.activeSubscriptionId),
       subscriptions: subscriptions ?? this.subscriptions,
+      pins: pins ?? this.pins,
     );
   }
 }
@@ -60,7 +73,28 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     final activeId = await storage.loadActiveConfigId();
     final activeSubId = await storage.loadActiveSubscriptionId();
     final subs = await storage.loadSubscriptions();
-    return ConfigState(configs: configs, activeConfigId: activeId, activeSubscriptionId: activeSubId, subscriptions: subs);
+    final pins = await storage.loadPins();
+    return ConfigState(configs: configs, activeConfigId: activeId, activeSubscriptionId: activeSubId, subscriptions: subs, pins: pins);
+  }
+
+  // ─── Pins ───
+
+  Future<void> togglePin(VpnConfig c) async {
+    final current = state.maybeWhen(data: (d) => d, orElse: () => null);
+    if (current == null) return;
+    final pin = PinnedRef(subscriptionId: c.subscriptionId, name: c.name);
+    final pins = List<PinnedRef>.from(current.pins);
+    if (!pins.remove(pin)) pins.add(pin);
+    await storage.savePins(pins);
+    state = AsyncData(current.copyWith(pins: pins));
+  }
+
+  Future<void> unpin(PinnedRef pin) async {
+    final current = state.maybeWhen(data: (d) => d, orElse: () => null);
+    if (current == null) return;
+    final pins = current.pins.where((p) => p != pin).toList();
+    await storage.savePins(pins);
+    state = AsyncData(current.copyWith(pins: pins));
   }
 
   Future<void> addConfig(VpnConfig config) async {
