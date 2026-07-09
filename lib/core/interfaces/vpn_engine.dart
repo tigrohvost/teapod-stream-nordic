@@ -37,6 +37,8 @@ class VpnEngineOptions {
   final int mtu;
   final DnsQueryStrategy dnsQueryStrategy;
   final bool blockQuic;
+  final bool ipv6Enabled;
+  final int obsProbeIntervalSec;
 
   const VpnEngineOptions({
     required this.socksPort,
@@ -59,5 +61,7 @@ class VpnEngineOptions {
     this.mtu = 1500,
     this.dnsQueryStrategy = DnsQueryStrategy.ipv4Only,
     this.blockQuic = false,
+    this.ipv6Enabled = false,
+    this.obsProbeIntervalSec = 600,
   });
 }

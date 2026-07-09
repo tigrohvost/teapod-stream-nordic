@@ -13,6 +13,7 @@ internal data class ConnectionParams(
     val killSwitch: Boolean,
     val allowIcmp: Boolean,
     val blockQuic: Boolean,
+    val ipv6Enabled: Boolean = false,
     val mtu: Int = 1500,
 ) {
     fun save(dir: File, log: (String, String) -> Unit) {
@@ -28,6 +29,7 @@ internal data class ConnectionParams(
                 put("killSwitch", killSwitch)
                 put("allowIcmp", allowIcmp)
                 put("blockQuic", blockQuic)
+                put("ipv6Enabled", ipv6Enabled)
                 put("mtu", mtu)
             }
             File(dir, "last_connection_meta.json").writeText(json.toString())
@@ -54,6 +56,7 @@ internal data class ConnectionParams(
                 killSwitch = json.optBoolean("killSwitch", false),
                 allowIcmp = json.optBoolean("allowIcmp", false),
                 blockQuic = json.optBoolean("blockQuic", false),
+                ipv6Enabled = json.optBoolean("ipv6Enabled", false),
                 mtu = json.optInt("mtu", 1500).coerceIn(576, 9000),
             )
         } catch (_: Exception) {

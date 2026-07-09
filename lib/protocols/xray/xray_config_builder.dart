@@ -518,7 +518,22 @@ class XrayConfigBuilder {
       // User's custom DNS server and adblock settings do not apply to managed configs.
       cfg['log'] = {'loglevel': options.logLevel.name};
 
+      _clampObservatoryInterval(cfg, options.obsProbeIntervalSec);
+      _neutralizeDirectFallback(cfg);
+
       final appRules = <Map<String, dynamic>>[];
+
+      // Adblock for managed configs: DNS-based blocking is unavailable (the DNS
+      // block belongs to the server), so block ad domains via a routing rule to
+      // the injected blackhole. Requires sniffing (routeOnly) for domain matching.
+      if (options.routing.adBlockEnabled) {
+        _ensureBlackholeOutbound(cfg);
+        appRules.add({
+          'type': 'field',
+          'domain': [XrayDefaults.adBlockGeosite, 'geosite:win-spy'],
+          'outboundTag': blackholeTag,
+        });
+      }
 
       // In direct DNS mode, intercept port 53 so it bypasses the tunnel.
       // In proxy DNS mode we leave DNS handling to the server config entirely.
@@ -551,6 +566,105 @@ class XrayConfigBuilder {
       return jsonEncode(cfg);
     } catch (_) {
       return rawConfig;
+    }
+  }
+
+  /// Tag of the blackhole outbound injected into managed configs (fallback
+  /// neutralization, adblock). Injected once by [_ensureBlackholeOutbound].
+  static const blackholeTag = 'teapod-blackhole';
+
+  /// Balancers in managed configs may declare `fallbackTag: "direct"` — when the
+  /// leastLoad strategy has no qualified nodes (all marked dead, or the first
+  /// seconds after start before observatory produced any probe results), xray
+  /// would silently route user traffic OUTSIDE the VPN via the freedom outbound.
+  /// That is a security leak: rewrite such fallbacks to the first proxy outbound
+  /// matching the balancer's selector (fails via the VPN, works instantly on
+  /// startup), or to a blackhole when no such outbound exists.
+  static void _neutralizeDirectFallback(Map<String, dynamic> cfg) {
+    final routing = cfg['routing'];
+    if (routing is! Map<String, dynamic>) return;
+    final balancers = routing['balancers'];
+    if (balancers is! List) return;
+
+    final outbounds = (cfg['outbounds'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    final freedomTags = outbounds
+        .where((o) => o['protocol'] == 'freedom')
+        .map((o) => o['tag'] as String?)
+        .whereType<String>()
+        .toSet();
+
+    for (final b in balancers.whereType<Map<String, dynamic>>()) {
+      final fb = b['fallbackTag'];
+      if (fb is! String || !freedomTags.contains(fb)) continue;
+      final proxy = _firstSelectorOutbound(outbounds, b['selector']);
+      if (proxy != null) {
+        b['fallbackTag'] = proxy;
+      } else {
+        _ensureBlackholeOutbound(cfg);
+        b['fallbackTag'] = blackholeTag;
+      }
+    }
+  }
+
+  /// First outbound tag matching a balancer selector (xray selectors are tag
+  /// prefixes), skipping non-proxy protocols.
+  static String? _firstSelectorOutbound(
+    List<Map<String, dynamic>> outbounds,
+    dynamic selector,
+  ) {
+    if (selector is! List) return null;
+    const nonProxy = {'freedom', 'blackhole', 'dns', 'loopback'};
+    final prefixes = selector.whereType<String>().toList();
+    for (final o in outbounds) {
+      final tag = o['tag'];
+      if (tag is! String || nonProxy.contains(o['protocol'])) continue;
+      if (prefixes.any(tag.startsWith)) return tag;
+    }
+    return null;
+  }
+
+  static void _ensureBlackholeOutbound(Map<String, dynamic> cfg) {
+    final outbounds = cfg['outbounds'] as List<dynamic>? ?? (cfg['outbounds'] = <dynamic>[]);
+    final exists = outbounds
+        .whereType<Map<String, dynamic>>()
+        .any((o) => o['tag'] == blackholeTag);
+    if (!exists) {
+      outbounds.add({'tag': blackholeTag, 'protocol': 'blackhole', 'settings': {}});
+    }
+  }
+
+  /// Managed configs often ship aggressive observatory settings (e.g. probeInterval
+  /// 30s with 20+ outbounds). On mobile that means a burst of concurrent TLS probes
+  /// every interval: it saturates the LTE radio, drains battery and triggers
+  /// server-side rate limiting that resets in-flight user connections. Clamp the
+  /// probe interval to at least [minSec] (0 = keep the server's value).
+  static void _clampObservatoryInterval(Map<String, dynamic> cfg, int minSec) {
+    if (minSec <= 0) return;
+    for (final key in ['observatory', 'burstObservatory']) {
+      final obs = cfg[key];
+      if (obs is! Map<String, dynamic>) continue;
+      final raw = obs['probeInterval'];
+      if (raw is String && _intervalToSeconds(raw) < minSec) {
+        obs['probeInterval'] = '${minSec}s';
+      }
+    }
+  }
+
+  /// Parses xray duration strings ("30s", "5m", "1h"). Unknown formats → max int
+  /// so we never touch values we cannot read.
+  static int _intervalToSeconds(String v) {
+    final m = RegExp(r'^(\d+)(s|m|h)?$').firstMatch(v.trim());
+    if (m == null) return 1 << 30;
+    final n = int.parse(m.group(1)!);
+    switch (m.group(2)) {
+      case 'h':
+        return n * 3600;
+      case 'm':
+        return n * 60;
+      default:
+        return n;
     }
   }
 }

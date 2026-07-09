@@ -329,6 +329,8 @@ class _SettingsBodyState extends State<_SettingsBody> {
   late final TextEditingController _socksUserCtrl;
   late final TextEditingController _socksPasswordCtrl;
   late final TextEditingController _mtuCtrl;
+  late final TextEditingController _subUaCtrl;
+  late final TextEditingController _obsCtrl;
 
   @override
   void initState() {
@@ -337,6 +339,8 @@ class _SettingsBodyState extends State<_SettingsBody> {
     _socksUserCtrl    = TextEditingController(text: widget.settings.socksUser);
     _socksPasswordCtrl = TextEditingController(text: widget.settings.socksPassword);
     _mtuCtrl          = TextEditingController(text: widget.settings.mtu.toString());
+    _subUaCtrl        = TextEditingController(text: widget.settings.subUserAgent);
+    _obsCtrl          = TextEditingController(text: widget.settings.obsProbeIntervalSec.toString());
   }
 
   @override
@@ -345,6 +349,8 @@ class _SettingsBodyState extends State<_SettingsBody> {
     _socksUserCtrl.dispose();
     _socksPasswordCtrl.dispose();
     _mtuCtrl.dispose();
+    _subUaCtrl.dispose();
+    _obsCtrl.dispose();
     super.dispose();
   }
 
@@ -366,6 +372,13 @@ class _SettingsBodyState extends State<_SettingsBody> {
     final mtu = int.tryParse(_mtuCtrl.text);
     if (mtu != null) {
       widget.onUpdate(widget.settings.copyWith(mtu: mtu.clamp(576, 9000)));
+    }
+  }
+
+  void _updateObsInterval() {
+    final sec = int.tryParse(_obsCtrl.text);
+    if (sec != null) {
+      widget.onUpdate(widget.settings.copyWith(obsProbeIntervalSec: sec.clamp(0, 86400)));
     }
   }
 
@@ -436,7 +449,6 @@ class _SettingsBodyState extends State<_SettingsBody> {
             hint: 'Обновлять подписки по расписанию',
             value: s.subAutoRefresh,
             locked: locked,
-            last: !s.subAutoRefresh,
             onChange: (v) => widget.onUpdate(s.copyWith(subAutoRefresh: v)),
           ),
           if (s.subAutoRefresh)
@@ -451,6 +463,33 @@ class _SettingsBodyState extends State<_SettingsBody> {
                 onChanged: (v) => widget.onUpdate(s.copyWith(subAutoRefreshHours: int.parse(v))),
               ),
             ),
+          _InlineField(
+            t: t,
+            label: 'User-Agent',
+            child: SizedBox(
+              width: 200,
+              child: TextField(
+                controller: _subUaCtrl,
+                enabled: !locked,
+                keyboardType: TextInputType.text,
+                onChanged: (v) => widget.onUpdate(s.copyWith(subUserAgent: v)),
+                onEditingComplete: () => FocusScope.of(context).unfocus(),
+                style: AppTheme.mono(size: 13, color: t.text),
+                decoration: InputDecoration(
+                  hintText: 'по умолчанию',
+                  hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  isDense: true,
+                  enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
+                  focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
+                  disabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
+                ),
+              ),
+            ),
+          ),
 
           // ── 0x30 XRAY ─────────────────────────────────────────
           SetSectionHeader(t: t, addr: '0x30', label: 'xray'),
@@ -558,6 +597,15 @@ class _SettingsBodyState extends State<_SettingsBody> {
             onChange: (v) => widget.onUpdate(s.copyWith(blockQuic: v)),
           ),
           if (!s.proxyOnly)
+            _RowToggle(
+              t: t,
+              title: 'IPv6 в туннеле',
+              hint: 'Добавить IPv6-адрес на TUN-интерфейс. Включайте только если VPN-сервер имеет IPv6: иначе приложения с IPv6-адресами (Telegram) зависают. При выключении IPv6 блокируется системой без утечек — приложения мгновенно переходят на IPv4.',
+              value: s.ipv6Enabled,
+              locked: locked,
+              onChange: (v) => widget.onUpdate(s.copyWith(ipv6Enabled: v)),
+            ),
+          if (!s.proxyOnly)
             _InlineField(
               t: t,
               label: 'MTU',
@@ -587,6 +635,35 @@ class _SettingsBodyState extends State<_SettingsBody> {
                 ),
               ),
             ),
+          _InlineField(
+            t: t,
+            label: 'Observatory мин. интервал, сек',
+            child: SizedBox(
+              width: 90,
+              child: TextField(
+                controller: _obsCtrl,
+                enabled: !locked,
+                textAlign: TextAlign.center,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (_) => _updateObsInterval(),
+                onEditingComplete: () => FocusScope.of(context).unfocus(),
+                style: AppTheme.mono(size: 13, color: t.text),
+                decoration: InputDecoration(
+                  hintText: '600',
+                  hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  isDense: true,
+                  enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
+                  focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
+                  disabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
+                ),
+              ),
+            ),
+          ),
           // DNS mode inline selector
           Container(
             padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
@@ -743,7 +820,6 @@ class _RowToggle extends StatelessWidget {
   final String? hint;
   final bool value;
   final bool locked;
-  final bool last;
   final void Function(bool) onChange;
 
   const _RowToggle({
@@ -753,7 +829,6 @@ class _RowToggle extends StatelessWidget {
     required this.locked,
     required this.onChange,
     this.hint,
-    this.last = false,
   });
 
   @override
@@ -761,7 +836,7 @@ class _RowToggle extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
       decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: last ? t.line : t.lineSoft))),
+          border: Border(bottom: BorderSide(color: t.lineSoft))),
       child: Row(
         children: [
           Expanded(

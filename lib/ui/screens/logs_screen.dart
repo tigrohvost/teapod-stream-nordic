@@ -148,6 +148,12 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                 children: [
                   _IconBtn(
                     t: t,
+                    icon: Icons.monitor_heart_outlined,
+                    onTap: () => ref.read(vpnProvider.notifier).dumpTunnelDiag(),
+                  ),
+                  const SizedBox(width: 6),
+                  _IconBtn(
+                    t: t,
                     icon: Icons.upload_file_rounded,
                     onTap: _exportLogs,
                   ),
