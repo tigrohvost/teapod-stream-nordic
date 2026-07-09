@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/models/connections_bundle.dart';
 import '../../core/models/vpn_config.dart';
+import '../../core/models/pinned_ref.dart';
 import '../../core/services/config_storage_service.dart';
 import '../../core/services/subscription_service.dart';
 import '../../protocols/xray/vless_parser.dart';
@@ -29,6 +30,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
   bool _isRefreshingAll = false;
   bool _hideGroups = false;
   bool _sortByPing = false;
+  bool _sortMode = false; // явный режим ручной сортировки (не персистится)
 
   static const _keyHideGroups = 'cfg_hide_groups';
   static const _keySortByPing = 'cfg_sort_by_ping';
@@ -150,10 +152,23 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
       ...cs.standaloneConfigs,
       for (final s in cs.subscriptions) ...(cs.configsBySubscription[s.id] ?? []),
     ]);
+    final hasPins = cs.pins.isNotEmpty;
     return ListView.builder(
       padding: EdgeInsets.zero,
-      itemCount: allConfigs.length,
-      itemBuilder: (_, i) {
+      itemCount: allConfigs.length + (hasPins ? 1 : 0),
+      itemBuilder: (_, index) {
+        if (hasPins && index == 0) {
+          return _PinnedGroup(
+            key: const Key('__pinned__'),
+            t: t,
+            pins: cs.resolvedPins,
+            activeConfigId: cs.activeConfigId,
+            onSelectConfig: (c) => _selectConfig(ref, c),
+            onConfigMenu: (c) => _showConfigMenu(context, ref, c),
+            onUnpin: (p) => ref.read(configProvider.notifier).unpin(p),
+          );
+        }
+        final i = hasPins ? index - 1 : index;
         final c = allConfigs[i];
         return _ConfigRow(
           key: ValueKey(c.id),
@@ -171,13 +186,27 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
   Widget _buildGroupedList(BuildContext context, ConfigState cs, VpnState2 vpnState, TeapodTokens t) {
     final standalone = _applySort(cs.standaloneConfigs);
     final subs = cs.subscriptions;
-    final localOffset = standalone.isNotEmpty ? 1 : 0;
-    final canReorderSubs = !_sortByPing && subs.length > 1;
+    final pinnedOffset = cs.pins.isNotEmpty ? 1 : 0;
+    final localOffset = pinnedOffset + (standalone.isNotEmpty ? 1 : 0);
+    final canReorderSubs = _sortMode && !_sortByPing && subs.length > 1;
+
+    final pinnedGroup = cs.pins.isNotEmpty
+        ? _PinnedGroup(
+            key: const Key('__pinned__'),
+            t: t,
+            pins: cs.resolvedPins,
+            activeConfigId: cs.activeConfigId,
+            onSelectConfig: (c) => _selectConfig(ref, c),
+            onConfigMenu: (c) => _showConfigMenu(context, ref, c),
+            onUnpin: (p) => ref.read(configProvider.notifier).unpin(p),
+          )
+        : null;
 
     if (subs.isEmpty) {
       return ListView(
         padding: EdgeInsets.zero,
         children: [
+          ?pinnedGroup,
           if (standalone.isNotEmpty)
             _LocalGroup(
               key: const Key('__local__'),
@@ -185,7 +214,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
               configs: standalone,
               isExpanded: _expandedSubs.contains('__local__'),
               activeConfigId: cs.activeConfigId,
-              canReorderConfigs: !_sortByPing,
+              sortMode: _sortMode && !_sortByPing,
               onToggle: () => setState(() {
                 if (_expandedSubs.contains('__local__')) {
                   _expandedSubs.remove('__local__');
@@ -213,6 +242,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
             .reorderSubscriptions(old - localOffset, safeNew - localOffset);
       },
       children: [
+        ?pinnedGroup,
         if (standalone.isNotEmpty)
           _LocalGroup(
             key: const Key('__local__'),
@@ -220,7 +250,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
             configs: standalone,
             isExpanded: _expandedSubs.contains('__local__'),
             activeConfigId: cs.activeConfigId,
-            canReorderConfigs: !_sortByPing,
+            sortMode: _sortMode && !_sortByPing,
             onToggle: () => setState(() {
               if (_expandedSubs.contains('__local__')) {
                 _expandedSubs.remove('__local__');
@@ -246,7 +276,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
             isExpanded: _expandedSubs.contains(subs[i].id),
             vpnState: vpnState.connectionState,
             canReorderGroup: canReorderSubs,
-            canReorderConfigs: !_sortByPing,
+            sortMode: _sortMode && !_sortByPing,
             onToggle: () {
               final id = subs[i].id;
               setState(() {
@@ -313,7 +343,23 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
                 value: _sortByPing,
                 onChanged: (v) {
                   setSheet(() {});
-                  setState(() => _sortByPing = v);
+                  setState(() {
+                    _sortByPing = v;
+                    if (v) _sortMode = false;
+                  });
+                  _savePrefs();
+                },
+              ),
+              _ToggleTile(
+                t: t,
+                label: 'режим сортировки',
+                value: _sortMode,
+                onChanged: (v) {
+                  setSheet(() {});
+                  setState(() {
+                    _sortMode = v;
+                    if (v) _sortByPing = false;
+                  });
                   _savePrefs();
                 },
               ),
@@ -358,6 +404,10 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
 
   Future<void> _showConfigMenu(BuildContext context, WidgetRef ref, VpnConfig config) async {
     final t = Theme.of(context).extension<TeapodTokens>()!;
+    final isPinned = ref.read(configProvider).maybeWhen(
+          data: (d) => d.isPinned(config),
+          orElse: () => false,
+        );
     await showModalBottomSheet(
       context: context,
       backgroundColor: t.bg,
@@ -380,6 +430,14 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
               ),
             ),
             Container(height: 1, color: t.line),
+            _SheetTile(
+              t: t,
+              label: isPinned ? 'Открепить' : 'Закрепить',
+              onTap: () {
+                Navigator.pop(ctx);
+                ref.read(configProvider.notifier).togglePin(config);
+              },
+            ),
             _SheetTile(t: t, label: 'Переименовать', onTap: () async {
               Navigator.pop(ctx);
               if (!context.mounted) return;
@@ -830,7 +888,7 @@ class _LocalGroup extends StatelessWidget {
   final List<VpnConfig> configs;
   final bool isExpanded;
   final String? activeConfigId;
-  final bool canReorderConfigs;
+  final bool sortMode;
   final VoidCallback onToggle;
   final void Function(VpnConfig) onSelectConfig;
   final void Function(VpnConfig) onConfigMenu;
@@ -842,7 +900,7 @@ class _LocalGroup extends StatelessWidget {
     required this.configs,
     required this.isExpanded,
     required this.activeConfigId,
-    required this.canReorderConfigs,
+    required this.sortMode,
     required this.onToggle,
     required this.onSelectConfig,
     required this.onConfigMenu,
@@ -891,7 +949,7 @@ class _LocalGroup extends StatelessWidget {
         if (isExpanded)
           Container(
             color: t.bgSunken,
-            child: canReorderConfigs
+            child: sortMode
                 ? ReorderableListView(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
@@ -944,7 +1002,7 @@ class _SubGroup extends StatelessWidget {
   final bool isExpanded;
   final VpnState vpnState;
   final bool canReorderGroup;
-  final bool canReorderConfigs;
+  final bool sortMode;
   final VoidCallback onToggle;
   final VoidCallback onRefresh;
   final VoidCallback onRename;
@@ -967,7 +1025,7 @@ class _SubGroup extends StatelessWidget {
     required this.isExpanded,
     required this.vpnState,
     required this.canReorderGroup,
-    required this.canReorderConfigs,
+    required this.sortMode,
     required this.onToggle,
     required this.onRefresh,
     required this.onRename,
@@ -1003,24 +1061,13 @@ class _SubGroup extends StatelessWidget {
     final hexAddr = '0x${addr.toString().padLeft(2, '0')}';
     final expireLabel = _expireLabel;
 
-    Widget addrWidget = SizedBox(
+    final Widget addrWidget = SizedBox(
       width: 32,
       child: Text(hexAddr,
           style: AppTheme.mono(
               size: 10,
-              color: isActiveSubscription
-                  ? t.accent
-                  : canReorderGroup
-                      ? t.accent.withAlpha(0xAA)
-                      : t.textMuted)),
+              color: isActiveSubscription ? t.accent : t.textMuted)),
     );
-
-    if (canReorderGroup) {
-      addrWidget = ReorderableDelayedDragStartListener(
-        index: outerIndex,
-        child: addrWidget,
-      );
-    }
 
     return Column(
       children: [
@@ -1075,17 +1122,39 @@ class _SubGroup extends StatelessWidget {
                       ),
                     ),
                   ),
-                  GestureDetector(
-                    onTap: onRefresh,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 11, 8, 11),
-                      child: Icon(Icons.refresh_rounded, size: 16, color: t.textMuted),
+                  if (canReorderGroup)
+                    ReorderableDragStartListener(
+                      index: outerIndex,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 11, 8, 11),
+                        child: Icon(Icons.drag_handle_rounded, size: 18, color: t.accent),
+                      ),
+                    )
+                  else ...[
+                    GestureDetector(
+                      onTap: onRefresh,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 11, 8, 11),
+                        child: Icon(Icons.refresh_rounded, size: 16, color: t.textMuted),
+                      ),
                     ),
-                  ),
+                    Semantics(
+                      label: 'меню подписки',
+                      button: true,
+                      child: GestureDetector(
+                        onTap: () => _showSubMenu(context),
+                        behavior: HitTestBehavior.opaque,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(4, 11, 4, 11),
+                          child: Icon(Icons.more_vert, size: 16, color: t.textMuted),
+                        ),
+                      ),
+                    ),
+                  ],
                   GestureDetector(
                     onTap: onToggle,
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(0, 11, 20, 11),
+                      padding: const EdgeInsets.fromLTRB(4, 11, 20, 11),
                       child: Icon(
                         isExpanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
                         size: 16,
@@ -1141,7 +1210,7 @@ class _SubGroup extends StatelessWidget {
                     ),
                   ),
                 // Config list
-                if (canReorderConfigs)
+                if (sortMode)
                   ReorderableListView(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
@@ -1244,6 +1313,9 @@ class _ConfigRow extends StatelessWidget {
   final int addr;
   final bool isActive;
   final bool indent;
+  final bool pinned;
+
+  /// В режиме сортировки — индекс для ручки ≡; иначе показывается «⋮».
   final int? draggableIndex;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
@@ -1257,6 +1329,7 @@ class _ConfigRow extends StatelessWidget {
     required this.onTap,
     required this.onLongPress,
     this.indent = false,
+    this.pinned = false,
     this.draggableIndex,
   });
 
@@ -1279,20 +1352,28 @@ class _ConfigRow extends StatelessWidget {
     final leftPad = indent ? 52.0 : 20.0;
     final isDraggable = draggableIndex != null;
 
-    Widget addrWidget = SizedBox(
-      width: 32,
-      child: Text(hexAddr,
-          style: AppTheme.mono(
-              size: 10,
-              color: isDraggable ? t.accent.withAlpha(0xAA) : t.textMuted)),
-    );
-
-    if (isDraggable) {
-      addrWidget = ReorderableDelayedDragStartListener(
-        index: draggableIndex!,
-        child: addrWidget,
-      );
-    }
+    final trailing = isDraggable
+        ? ReorderableDragStartListener(
+            index: draggableIndex!,
+            child: SizedBox(
+              width: 36,
+              height: 40,
+              child: Icon(Icons.drag_handle_rounded, size: 18, color: t.accent),
+            ),
+          )
+        : Semantics(
+            label: 'меню конфигурации',
+            button: true,
+            child: GestureDetector(
+              onTap: onLongPress,
+              behavior: HitTestBehavior.opaque,
+              child: SizedBox(
+                width: 36,
+                height: 40,
+                child: Icon(Icons.more_vert, size: 16, color: t.textMuted),
+              ),
+            ),
+          );
 
     return GestureDetector(
       onTap: onTap,
@@ -1310,10 +1391,14 @@ class _ConfigRow extends StatelessWidget {
                 child: Container(width: 2, color: t.accent),
               ),
             Padding(
-              padding: EdgeInsets.fromLTRB(leftPad, 11, 20, 11),
+              padding: EdgeInsets.fromLTRB(leftPad, 6, 10, 6),
               child: Row(
                 children: [
-                  addrWidget,
+                  SizedBox(
+                    width: 32,
+                    child: Text(hexAddr,
+                        style: AppTheme.mono(size: 10, color: t.textMuted)),
+                  ),
                   const SizedBox(width: 10),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
@@ -1342,13 +1427,203 @@ class _ConfigRow extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (pinned) ...[
+                    Text('★', style: AppTheme.mono(size: 10, color: t.accent)),
+                    const SizedBox(width: 6),
+                  ],
                   if (ping != null)
                     Text('${ping}ms',
                         style: AppTheme.mono(size: 11, color: t.accent)),
+                  trailing,
                 ],
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Pinned group ──────────────────────────────────────────────────
+
+class _PinnedGroup extends StatelessWidget {
+  final TeapodTokens t;
+  final List<(PinnedRef, VpnConfig?)> pins;
+  final String? activeConfigId;
+  final void Function(VpnConfig) onSelectConfig;
+  final void Function(VpnConfig) onConfigMenu;
+  final void Function(PinnedRef) onUnpin;
+
+  const _PinnedGroup({
+    super.key,
+    required this.t,
+    required this.pins,
+    required this.activeConfigId,
+    required this.onSelectConfig,
+    required this.onConfigMenu,
+    required this.onUnpin,
+  });
+
+  void _showLostMenu(BuildContext context, PinnedRef pin) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: t.bg,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(pin.name,
+                        style: AppTheme.sans(size: 16, color: t.text, weight: FontWeight.w500)),
+                  ),
+                  Text('нет в подписке',
+                      style: AppTheme.mono(size: 10, color: t.textMuted)),
+                ],
+              ),
+            ),
+            Container(height: 1, color: t.line),
+            _SheetTile(t: t, label: 'Открепить', color: t.danger, onTap: () {
+              Navigator.pop(ctx);
+              onUnpin(pin);
+            }),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(20, 11, 20, 11),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 32,
+                child: Text('[★]',
+                    style: AppTheme.mono(size: 10, color: t.accent)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('[pinned]',
+                        style: AppTheme.sans(
+                            size: 13, weight: FontWeight.w500, color: t.text)),
+                    const SizedBox(height: 2),
+                    Text('cnt=${pins.length} · закреплённые',
+                        style: AppTheme.mono(size: 10, color: t.textMuted)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          color: t.bgSunken,
+          child: Column(
+            children: [
+              for (var i = 0; i < pins.length; i++)
+                if (pins[i].$2 != null)
+                  _ConfigRow(
+                    key: ValueKey('pin_${pins[i].$1.subscriptionId}_${pins[i].$1.name}'),
+                    t: t,
+                    config: pins[i].$2!,
+                    addr: i + 1,
+                    isActive: pins[i].$2!.id == activeConfigId,
+                    pinned: true,
+                    onTap: () => onSelectConfig(pins[i].$2!),
+                    onLongPress: () => onConfigMenu(pins[i].$2!),
+                  )
+                else
+                  _LostPinRow(
+                    key: ValueKey('lost_${pins[i].$1.subscriptionId}_${pins[i].$1.name}'),
+                    t: t,
+                    pin: pins[i].$1,
+                    addr: i + 1,
+                    onTap: () => _showLostMenu(context, pins[i].$1),
+                  ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LostPinRow extends StatelessWidget {
+  final TeapodTokens t;
+  final PinnedRef pin;
+  final int addr;
+  final VoidCallback onTap;
+
+  const _LostPinRow({
+    super.key,
+    required this.t,
+    required this.pin,
+    required this.addr,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hexAddr = '0x${addr.toString().padLeft(2, '0')}';
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 11, 20, 11),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 32,
+                child: Text(hexAddr,
+                    style: AppTheme.mono(size: 10, color: t.textMuted)),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(border: Border.all(color: t.lineSoft)),
+                constraints: const BoxConstraints(minWidth: 44),
+                child: Text('LOST',
+                    textAlign: TextAlign.center,
+                    style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(pin.name,
+                        style: AppTheme.sans(
+                            size: 13,
+                            weight: FontWeight.w500,
+                            color: t.textMuted,
+                            letterSpacing: -0.2),
+                        overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 2),
+                    Text('недоступен · нажмите чтобы открепить',
+                        style: AppTheme.mono(size: 10, color: t.textMuted),
+                        overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
