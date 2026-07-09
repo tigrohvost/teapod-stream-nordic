@@ -55,7 +55,7 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
                     ))
                 }
             }
-            "connecting", "disconnecting", "reconnecting" -> sendStateEvent(state)
+            "connecting", "disconnecting", "reconnecting", "blocked" -> sendStateEvent(state)
             else -> sendStateEvent("disconnected")
         }
     }

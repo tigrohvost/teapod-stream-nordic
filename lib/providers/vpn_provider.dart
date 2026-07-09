@@ -42,6 +42,7 @@ class VpnState2 {
   bool get isConnected => connectionState == VpnState.connected;
   bool get isConnecting => connectionState == VpnState.connecting;
   bool get isDisconnecting => connectionState == VpnState.disconnecting;
+  bool get isBlocked => connectionState == VpnState.blocked;
   bool get isBusy => isConnecting || isDisconnecting;
 
   VpnState2 copyWith({
@@ -230,6 +231,7 @@ class VpnNotifier extends Notifier<VpnState2> {
         'disconnecting' => VpnState.disconnecting,
         'disconnected' => VpnState.disconnected,
         'error' => VpnState.error,
+        'blocked' => VpnState.blocked,
         _ => VpnState.disconnected,
       };
 
@@ -241,7 +243,8 @@ class VpnNotifier extends Notifier<VpnState2> {
       // Start polling as backup for when EventChannel doesn't deliver (app in background)
       _startStatsPolling();
     } else if (nativeState == VpnState.disconnected ||
-        nativeState == VpnState.error) {
+        nativeState == VpnState.error ||
+        nativeState == VpnState.blocked) {
       _connectedAt = null;
       _connectTimeout?.cancel();
       _connectTimeout = null;
@@ -274,8 +277,10 @@ class VpnNotifier extends Notifier<VpnState2> {
 
     if (state.connectionState == nativeState) return;
 
-    if (nativeState == VpnState.disconnected || nativeState == VpnState.error) {
-      // Reset stats on disconnect/error
+    if (nativeState == VpnState.disconnected ||
+        nativeState == VpnState.error ||
+        nativeState == VpnState.blocked) {
+      // Reset stats on disconnect/error/blocked
       _statsPoller?.cancel();
       state = VpnState2(
         connectionState: nativeState,
