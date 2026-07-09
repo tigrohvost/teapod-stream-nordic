@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -112,6 +113,13 @@ class VpnNotifier extends Notifier<VpnState2> {
             .refreshStaleSubscriptions(intervalHours: settings!.subAutoRefreshHours);
       }
 
+      // Restore log history (previous + current session files) even when
+      // disconnected — needed to diagnose failures that ended the last session.
+      final logEntries = await _engine.getLogs();
+      if (logEntries.isNotEmpty) {
+        ref.read(logServiceProvider.notifier).loadFromEntries(logEntries);
+      }
+
       final vpnState = await _engine.getVpnState();
       if (vpnState.state == VpnState.connected && vpnState.socksPort > 0) {
         if (vpnState.connectedAtMs > 0) {
@@ -123,11 +131,6 @@ class VpnNotifier extends Notifier<VpnState2> {
           activeSocksUser: vpnState.socksUser,
           activeSocksPassword: vpnState.socksPassword,
         );
-        // Restore log history from persisted file
-        final logEntries = await _engine.getLogs();
-        if (logEntries.isNotEmpty) {
-          ref.read(logServiceProvider.notifier).loadFromEntries(logEntries);
-        }
         // ipInfoProvider is AsyncNotifier, needs refresh to rebuild
         // ignore: unused_result
         ref.refresh(ipInfoProvider);
@@ -393,7 +396,12 @@ class VpnNotifier extends Notifier<VpnState2> {
       sniffingEnabled: settings.sniffingEnabled,
       mtu: settings.mtu,
       dnsQueryStrategy: settings.dnsQueryStrategy,
-      blockQuic: settings.blockQuic,
+      // XTLS Vision rejects UDP/443 by design: QUIC can never pass, but browsers
+      // keep retrying it (each retry costs a full outbound handshake) and stall
+      // for ~30s before falling back to TCP. Force the ICMP fast-fail.
+      blockQuic: settings.blockQuic || _usesVisionFlow(config),
+      ipv6Enabled: settings.ipv6Enabled,
+      obsProbeIntervalSec: settings.obsProbeIntervalSec,
     );
     state = state.copyWith(
       activeSocksPort: actualSocksPort,
@@ -478,21 +486,30 @@ class VpnNotifier extends Notifier<VpnState2> {
     await connect();
   }
 
-  VpnConfig? _resolveEffectiveConfig(ConfigState? cs) {
-    if (cs == null) return null;
-    final subId = cs.activeSubscriptionId;
-    if (subId != null) {
-      final subConfigs = cs.configs.where((c) => c.subscriptionId == subId).toList();
-      if (subConfigs.isNotEmpty) {
-        subConfigs.sort((a, b) {
-          if (a.latencyMs == null) return 1;
-          if (b.latencyMs == null) return -1;
-          return a.latencyMs!.compareTo(b.latencyMs!);
-        });
-        return subConfigs.first;
+  VpnConfig? _resolveEffectiveConfig(ConfigState? cs) =>
+      cs == null ? null : ref.read(effectiveConfigProvider);
+
+  /// True when the config's outbound(s) use xtls-rprx-vision — such outbounds
+  /// reject UDP/443, so QUIC must be fast-failed on the TUN side.
+  static bool _usesVisionFlow(VpnConfig config) {
+    if (config.flow?.contains('vision') ?? false) return true;
+    final raw = config.rawXrayConfig;
+    if (raw == null) return false;
+    try {
+      final cfg = jsonDecode(raw) as Map<String, dynamic>;
+      final outbounds = cfg['outbounds'] as List<dynamic>? ?? [];
+      for (final o in outbounds.whereType<Map<String, dynamic>>()) {
+        if (o['protocol'] != 'vless') continue;
+        final vnext = (o['settings'] as Map<String, dynamic>?)?['vnext'] as List<dynamic>? ?? [];
+        for (final v in vnext.whereType<Map<String, dynamic>>()) {
+          final users = v['users'] as List<dynamic>? ?? [];
+          for (final u in users.whereType<Map<String, dynamic>>()) {
+            if ((u['flow'] as String?)?.contains('vision') ?? false) return true;
+          }
+        }
       }
-    }
-    return cs.activeConfig;
+    } catch (_) {}
+    return false;
   }
 
   Future<void> pingAllConfigs() async {
@@ -551,6 +568,14 @@ class VpnNotifier extends Notifier<VpnState2> {
   }
 
   Future<String?> getLogFilePath() => _engine.getLogFilePath();
+
+  /// Dumps a tun2socks diagnostics snapshot into the app log.
+  Future<void> dumpTunnelDiag() async {
+    final diag = await _engine.getTunnelDiag();
+    ref.read(logServiceProvider.notifier).addInfo(
+        diag.isEmpty ? 'tunnel diag: not running' : 'tunnel diag: $diag',
+        source: 'diag');
+  }
 
   Future<void> clearNativeLogs() => _engine.clearLogs();
 

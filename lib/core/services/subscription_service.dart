@@ -82,10 +82,12 @@ class SubscriptionService {
   /// certificate details so the caller can decide whether to retry.
   /// If [allowSelfSigned] is true, certificate validation is skipped.
   /// If [hwidEnabled] is true, HWID headers are sent to support device limits.
+  /// If [userAgent] is non-empty, it overrides the default User-Agent.
   Future<SubscriptionFetchResult> fetchSubscription(
     String url, {
     bool allowSelfSigned = false,
     HwidDeviceInfo? hwid,
+    String? userAgent,
   }) async {
     final uri = Uri.parse(url);
     final httpClient = HttpClient();
@@ -107,7 +109,8 @@ class SubscriptionService {
     HttpHeaders responseHeaders;
     try {
       final request = await httpClient.getUrl(uri);
-      request.headers.set('User-Agent', AppConstants.subscriptionUserAgent);
+      final ua = userAgent?.trim() ?? '';
+      request.headers.set('User-Agent', ua.isNotEmpty ? ua : AppConstants.subscriptionUserAgent);
 
       if (hwid != null) {
         request.headers.set('X-Hwid', hwid.deviceId);
@@ -201,18 +204,22 @@ class SubscriptionService {
       }
     }
 
-    // Try base64 decode first.
-    // Many providers wrap base64 output at 76 chars (RFC 2045), so strip all
-    // whitespace before decoding — otherwise base64Decode throws and we fall
-    // back to treating each 76-char chunk as a separate URI (→ 0 configs).
-    try {
-      final cleaned = body.replaceAll(RegExp(r'\s'), '');
-      final padded = cleaned.padRight((cleaned.length + 3) ~/ 4 * 4, '=');
-      final decoded = utf8.decode(base64Decode(padded));
-      lines = decoded.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
-    } catch (_) {
-      // Not base64 — treat as plain-text list of URIs.
-      lines = body.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
+    // Plain-text URI list takes priority: a body that already contains known
+    // URI schemes is never base64 (guards against text that happens to decode).
+    lines = _splitLines(body);
+    if (!lines.any(_isKnownUri)) {
+      // Try base64. Many providers wrap output at 76 chars (RFC 2045), so strip
+      // all whitespace before decoding — otherwise base64Decode throws and each
+      // 76-char chunk would be treated as a separate URI (→ 0 configs).
+      try {
+        final cleaned = body.replaceAll(RegExp(r'\s'), '');
+        final padded = cleaned.padRight((cleaned.length + 3) ~/ 4 * 4, '=');
+        final decoded = utf8.decode(base64Decode(padded));
+        final decodedLines = _splitLines(decoded);
+        if (decodedLines.any(_isKnownUri)) lines = decodedLines;
+      } catch (_) {
+        // Not base64 either — keep the raw lines, the parser will skip them.
+      }
     }
 
     for (final line in lines) {
@@ -236,6 +243,16 @@ class SubscriptionService {
       announceUrl: meta.announceUrl,
       hwidStatus: meta.hwidStatus,
     );
+  }
+
+  static List<String> _splitLines(String s) =>
+      s.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
+
+  static const _uriSchemes = ['vless://', 'vmess://', 'trojan://', 'ss://', 'hy2://', 'hysteria2://'];
+
+  static bool _isKnownUri(String line) {
+    final t = line.trim();
+    return _uriSchemes.any(t.startsWith);
   }
 
   _HeaderMeta _parseHeaders(HttpHeaders headers) {

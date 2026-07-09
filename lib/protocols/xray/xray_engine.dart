@@ -38,6 +38,7 @@ class XrayEngine implements VpnEngine {
       'killSwitch': options.killSwitch,
       'allowIcmp': options.allowIcmp,
       'blockQuic': options.blockQuic,
+      'ipv6Enabled': options.ipv6Enabled,
       'mtu': options.mtu,
       if (config.ssPrefix != null) 'ssPrefix': config.ssPrefix,
     });
@@ -108,6 +109,16 @@ class XrayEngine implements VpnEngine {
       }
     } catch (_) {}
     return (state: VpnState.disconnected, socksPort: 0, socksUser: '', socksPassword: '', connectedAtMs: 0);
+  }
+
+  /// JSON snapshot of tun2socks state (counters, per-connection activity).
+  /// Empty string when the tunnel is not running.
+  Future<String> getTunnelDiag() async {
+    try {
+      return await _channel.invokeMethod<String>('getTunnelDiag') ?? '';
+    } catch (_) {
+      return '';
+    }
   }
 
   /// Returns the absolute path to the native log file (filesDir/vpn_log.txt).

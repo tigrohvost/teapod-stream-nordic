@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:teapodstream/protocols/xray/xray_config_builder.dart';
 import 'package:teapodstream/core/models/vpn_config.dart';
@@ -157,6 +159,120 @@ void main() {
         expect(servers.first['method'], 'chacha20-ietf-poly1305');
         expect(servers.first['password'], 'secret');
       });
+    });
+  });
+
+  group('XrayConfigBuilder.mergeWithRaw', () {
+    Map<String, dynamic> rawManaged({
+      String probeInterval = '30s',
+      String? fallbackTag = 'direct',
+    }) => {
+      'inbounds': [
+        {'tag': 'socks', 'protocol': 'socks', 'port': 1080},
+      ],
+      'outbounds': [
+        {
+          'tag': 'c1-a',
+          'protocol': 'vless',
+          'settings': {
+            'vnext': [
+              {'address': 'srv', 'port': 443, 'users': [{'id': 'u', 'flow': 'xtls-rprx-vision'}]},
+            ],
+          },
+        },
+        {'tag': 'direct', 'protocol': 'freedom', 'settings': {}},
+        {'tag': 'blocked', 'protocol': 'blackhole', 'settings': {}},
+      ],
+      'observatory': {
+        'probeInterval': probeInterval,
+        'probeUrl': 'https://www.cloudflare.com/cdn-cgi/trace',
+        'subjectSelector': ['c1-'],
+      },
+      'routing': {
+        'rules': [
+          {'type': 'field', 'network': 'tcp,udp', 'balancerTag': 'lb'},
+        ],
+        'balancers': [
+          {
+            'tag': 'lb',
+            'selector': ['c1-'],
+            'fallbackTag': ?fallbackTag,
+            'strategy': {'type': 'leastLoad'},
+          },
+        ],
+      },
+    };
+
+    Map<String, dynamic> merge(Map<String, dynamic> raw, [VpnEngineOptions? options]) =>
+        jsonDecode(XrayConfigBuilder.mergeWithRaw(jsonEncode(raw), options ?? _defaultOptions()))
+            as Map<String, dynamic>;
+
+    test('clamps aggressive observatory probeInterval to 600s', () {
+      final cfg = merge(rawManaged(probeInterval: '30s'));
+      expect((cfg['observatory'] as Map)['probeInterval'], '600s');
+    });
+
+    test('keeps probeInterval when already slow', () {
+      final cfg = merge(rawManaged(probeInterval: '15m'));
+      expect((cfg['observatory'] as Map)['probeInterval'], '15m');
+    });
+
+    test('rewrites freedom fallbackTag to first selector outbound', () {
+      final cfg = merge(rawManaged());
+      final balancer = ((cfg['routing'] as Map)['balancers'] as List).first as Map;
+      expect(balancer['fallbackTag'], 'c1-a');
+      final outbounds = cfg['outbounds'] as List;
+      expect(outbounds.any((o) => (o as Map)['tag'] == XrayConfigBuilder.blackholeTag), isFalse);
+    });
+
+    test('rewrites freedom fallbackTag to blackhole when selector matches nothing', () {
+      final raw = rawManaged();
+      (((raw['routing'] as Map)['balancers'] as List).first as Map)['selector'] = ['nope-'];
+      final cfg = merge(raw);
+      final balancer = ((cfg['routing'] as Map)['balancers'] as List).first as Map;
+      expect(balancer['fallbackTag'], XrayConfigBuilder.blackholeTag);
+      final outbounds = cfg['outbounds'] as List;
+      expect(
+        outbounds.any((o) =>
+            (o as Map)['tag'] == XrayConfigBuilder.blackholeTag && o['protocol'] == 'blackhole'),
+        isTrue,
+      );
+    });
+
+    test('keeps fallbackTag pointing to non-freedom outbound', () {
+      final cfg = merge(rawManaged(fallbackTag: 'blocked'));
+      final balancer = ((cfg['routing'] as Map)['balancers'] as List).first as Map;
+      expect(balancer['fallbackTag'], 'blocked');
+      final outbounds = cfg['outbounds'] as List;
+      expect(outbounds.any((o) => (o as Map)['tag'] == XrayConfigBuilder.blackholeTag), isFalse);
+    });
+
+    test('handles config without balancers', () {
+      final raw = rawManaged()..remove('routing');
+      final cfg = merge(raw);
+      expect(cfg['outbounds'], isNotEmpty);
+    });
+
+    test('adds adblock routing rule to blackhole when enabled', () {
+      final cfg = merge(
+        rawManaged(),
+        _defaultOptions(routing: const RoutingSettings(adBlockEnabled: true)),
+      );
+      final rules = (cfg['routing'] as Map)['rules'] as List;
+      final adRule = rules.cast<Map>().firstWhere(
+          (r) => (r['domain'] as List?)?.contains('geosite:category-ads-all') ?? false);
+      expect(adRule['outboundTag'], XrayConfigBuilder.blackholeTag);
+      // App rules must come before server rules (first-match wins).
+      expect(rules.indexOf(adRule), lessThan(rules.indexWhere((r) => (r as Map).containsKey('balancerTag'))));
+    });
+
+    test('no adblock rule when disabled', () {
+      final cfg = merge(rawManaged());
+      final rules = (cfg['routing'] as Map)['rules'] as List;
+      expect(
+        rules.cast<Map>().any((r) => (r['domain'] as List?)?.contains('geosite:category-ads-all') ?? false),
+        isFalse,
+      );
     });
   });
 }

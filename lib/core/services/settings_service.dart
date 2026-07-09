@@ -72,8 +72,11 @@ class AppSettings {
   final int mtu;
   final bool subAutoRefresh;
   final int subAutoRefreshHours;
+  final String subUserAgent;
+  final int obsProbeIntervalSec;
   final DnsQueryStrategy dnsQueryStrategy;
   final bool blockQuic;
+  final bool ipv6Enabled;
   final bool autoStartOnBoot;
 
   const AppSettings({
@@ -107,8 +110,11 @@ class AppSettings {
     this.mtu = 1500,
     this.subAutoRefresh = false,
     this.subAutoRefreshHours = 6,
+    this.subUserAgent = '',
+    this.obsProbeIntervalSec = 600,
     this.dnsQueryStrategy = DnsQueryStrategy.ipv4Only,
     this.blockQuic = false,
+    this.ipv6Enabled = false,
     this.autoStartOnBoot = false,
   });
 
@@ -143,8 +149,11 @@ class AppSettings {
     int? mtu,
     bool? subAutoRefresh,
     int? subAutoRefreshHours,
+    String? subUserAgent,
+    int? obsProbeIntervalSec,
     DnsQueryStrategy? dnsQueryStrategy,
     bool? blockQuic,
+    bool? ipv6Enabled,
     bool? autoStartOnBoot,
   }) {
     return AppSettings(
@@ -178,8 +187,11 @@ class AppSettings {
       mtu: mtu ?? this.mtu,
       subAutoRefresh: subAutoRefresh ?? this.subAutoRefresh,
       subAutoRefreshHours: subAutoRefreshHours ?? this.subAutoRefreshHours,
+      subUserAgent: subUserAgent ?? this.subUserAgent,
+      obsProbeIntervalSec: obsProbeIntervalSec ?? this.obsProbeIntervalSec,
       dnsQueryStrategy: dnsQueryStrategy ?? this.dnsQueryStrategy,
       blockQuic: blockQuic ?? this.blockQuic,
+      ipv6Enabled: ipv6Enabled ?? this.ipv6Enabled,
       autoStartOnBoot: autoStartOnBoot ?? this.autoStartOnBoot,
     );
   }
@@ -215,8 +227,11 @@ class AppSettings {
     'mtu': mtu,
     'subAutoRefresh': subAutoRefresh,
     'subAutoRefreshHours': subAutoRefreshHours,
+    'subUserAgent': subUserAgent,
+    'obsProbeIntervalSec': obsProbeIntervalSec,
     'dnsQueryStrategy': dnsQueryStrategy.name,
     'blockQuic': blockQuic,
+    'ipv6Enabled': ipv6Enabled,
     'autoStartOnBoot': autoStartOnBoot,
   };
 
@@ -258,9 +273,12 @@ class AppSettings {
       mtu: json['mtu'] as int? ?? 1500,
       subAutoRefresh: json['subAutoRefresh'] as bool? ?? false,
       subAutoRefreshHours: json['subAutoRefreshHours'] as int? ?? 6,
+      subUserAgent: json['subUserAgent'] as String? ?? '',
+      obsProbeIntervalSec: json['obsProbeIntervalSec'] as int? ?? 600,
       dnsQueryStrategy: DnsQueryStrategy.values.firstWhere(
         (e) => e.name == json['dnsQueryStrategy'], orElse: () => DnsQueryStrategy.ipv4Only),
       blockQuic: json['blockQuic'] as bool? ?? false,
+      ipv6Enabled: json['ipv6Enabled'] as bool? ?? false,
       autoStartOnBoot: json['autoStartOnBoot'] as bool? ?? false,
     );
   }
@@ -310,8 +328,11 @@ class SettingsService {
   static const _mtuKey = 'mtu';
   static const _subAutoRefreshKey = 'sub_auto_refresh';
   static const _subAutoRefreshHoursKey = 'sub_auto_refresh_hours';
+  static const _subUserAgentKey = 'sub_user_agent';
+  static const _obsProbeIntervalKey = 'obs_probe_interval_sec';
   static const _dnsQueryStrategyKey = 'dns_query_strategy';
   static const _blockQuicKey = 'block_quic';
+  static const _ipv6EnabledKey = 'ipv6_enabled';
   static const _autoStartOnBootKey = 'auto_start_on_boot';
 
   final _secure = StorageSecureService();
@@ -366,11 +387,14 @@ class SettingsService {
       mtu: prefs.getInt(_mtuKey) ?? 1500,
       subAutoRefresh: prefs.getBool(_subAutoRefreshKey) ?? false,
       subAutoRefreshHours: prefs.getInt(_subAutoRefreshHoursKey) ?? 6,
+      subUserAgent: prefs.getString(_subUserAgentKey) ?? '',
+      obsProbeIntervalSec: prefs.getInt(_obsProbeIntervalKey) ?? 600,
       dnsQueryStrategy: DnsQueryStrategy.values.firstWhere(
         (e) => e.name == prefs.getString(_dnsQueryStrategyKey),
         orElse: () => DnsQueryStrategy.ipv4Only,
       ),
       blockQuic: prefs.getBool(_blockQuicKey) ?? false,
+      ipv6Enabled: prefs.getBool(_ipv6EnabledKey) ?? false,
       autoStartOnBoot: prefs.getBool(_autoStartOnBootKey) ?? false,
     );
   }
@@ -436,8 +460,11 @@ class SettingsService {
     await prefs.setInt(_mtuKey, settings.mtu);
     await prefs.setBool(_subAutoRefreshKey, settings.subAutoRefresh);
     await prefs.setInt(_subAutoRefreshHoursKey, settings.subAutoRefreshHours);
+    await prefs.setString(_subUserAgentKey, settings.subUserAgent);
+    await prefs.setInt(_obsProbeIntervalKey, settings.obsProbeIntervalSec);
     await prefs.setString(_dnsQueryStrategyKey, settings.dnsQueryStrategy.name);
     await prefs.setBool(_blockQuicKey, settings.blockQuic);
+    await prefs.setBool(_ipv6EnabledKey, settings.ipv6Enabled);
     await prefs.setBool(_autoStartOnBootKey, settings.autoStartOnBoot);
     // SOCKS credentials go to encrypted storage
     await _secure.writeSocksCredentials(settings.socksUser, settings.socksPassword);

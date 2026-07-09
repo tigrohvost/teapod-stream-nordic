@@ -127,6 +127,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     final settings = settingsAsync.maybeWhen(data: (d) => d, orElse: () => null);
     final hwidEnabled = settings?.hwidEnabled ?? false;
     final hwid = hwidEnabled ? await DeviceService.getHwidInfo() : null;
+    final userAgent = settings?.subUserAgent ?? '';
 
     String subId;
     List<VpnConfig> newConfigs;
@@ -143,7 +144,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         if (old.latencyMs != null) latencyMap[key] = old.latencyMs!;
         if (old.lastPingedAt != null) pingTimeMap[key] = old.lastPingedAt!;
       }
-      final (tagged, fetchResult) = await _fetchAndTagConfigs(url, subId, allowSelfSigned: allowSelfSigned, hwid: hwid);
+      final (tagged, fetchResult) = await _fetchAndTagConfigs(url, subId, allowSelfSigned: allowSelfSigned, hwid: hwid, userAgent: userAgent);
       if (tagged.isEmpty) {
         throw Exception('Subscription returned no valid configurations');
       }
@@ -191,7 +192,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     } else {
       // New subscription
       subId = 'sub_${DateTime.now().millisecondsSinceEpoch}';
-      final (tagged, fetchResult) = await _fetchAndTagConfigs(url, subId, allowSelfSigned: allowSelfSigned, hwid: hwid);
+      final (tagged, fetchResult) = await _fetchAndTagConfigs(url, subId, allowSelfSigned: allowSelfSigned, hwid: hwid, userAgent: userAgent);
       if (tagged.isEmpty) {
         throw Exception('Subscription returned no valid configurations');
       }
@@ -225,9 +226,9 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     }
   }
 
-  Future<(List<VpnConfig>, SubscriptionFetchResult)> _fetchAndTagConfigs(String url, String subId, {bool allowSelfSigned = false, HwidDeviceInfo? hwid}) async {
+  Future<(List<VpnConfig>, SubscriptionFetchResult)> _fetchAndTagConfigs(String url, String subId, {bool allowSelfSigned = false, HwidDeviceInfo? hwid, String? userAgent}) async {
     final svc = SubscriptionService();
-    final result = await svc.fetchSubscription(url, allowSelfSigned: allowSelfSigned, hwid: hwid);
+    final result = await svc.fetchSubscription(url, allowSelfSigned: allowSelfSigned, hwid: hwid, userAgent: userAgent);
     final tagged = result.configs.map((c) => c.copyWith(subscriptionId: subId)).toList();
     return (tagged, result);
   }
@@ -454,3 +455,23 @@ class ImportConnectionsResult {
 
 final configProvider =
     AsyncNotifierProvider<ConfigNotifier, ConfigState>(ConfigNotifier.new);
+
+/// The config that will actually be used on connect:
+/// best-latency config from the active subscription, or the manually selected config.
+final effectiveConfigProvider = Provider<VpnConfig?>((ref) {
+  final cs = ref.watch(configProvider).maybeWhen(data: (d) => d, orElse: () => null);
+  if (cs == null) return null;
+  final subId = cs.activeSubscriptionId;
+  if (subId != null) {
+    final subConfigs = cs.configs.where((c) => c.subscriptionId == subId).toList();
+    if (subConfigs.isNotEmpty) {
+      subConfigs.sort((a, b) {
+        if (a.latencyMs == null) return 1;
+        if (b.latencyMs == null) return -1;
+        return a.latencyMs!.compareTo(b.latencyMs!);
+      });
+      return subConfigs.first;
+    }
+  }
+  return cs.activeConfig;
+});
