@@ -402,6 +402,7 @@ class VpnNotifier extends Notifier<VpnState2> {
       blockQuic: settings.blockQuic || _usesVisionFlow(config),
       ipv6Enabled: settings.ipv6Enabled,
       obsProbeIntervalSec: settings.obsProbeIntervalSec,
+      tlsFingerprint: settings.tlsFingerprint,
     );
     state = state.copyWith(
       activeSocksPort: actualSocksPort,

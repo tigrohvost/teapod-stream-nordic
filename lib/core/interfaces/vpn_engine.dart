@@ -39,6 +39,7 @@ class VpnEngineOptions {
   final bool blockQuic;
   final bool ipv6Enabled;
   final int obsProbeIntervalSec;
+  final TlsFingerprint tlsFingerprint;
 
   const VpnEngineOptions({
     required this.socksPort,
@@ -63,5 +64,6 @@ class VpnEngineOptions {
     this.blockQuic = false,
     this.ipv6Enabled = false,
     this.obsProbeIntervalSec = 600,
+    this.tlsFingerprint = TlsFingerprint.defaultFp,
   });
 }
