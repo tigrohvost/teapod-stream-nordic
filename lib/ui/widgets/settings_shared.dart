@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 
@@ -272,6 +273,7 @@ class SetNumField extends StatelessWidget {
         enabled: enabled,
         textAlign: TextAlign.center,
         keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         onChanged: onChanged,
         onEditingComplete: () => FocusScope.of(context).unfocus(),
         style: AppTheme.mono(size: 13, color: t.text),
