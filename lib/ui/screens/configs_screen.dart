@@ -15,6 +15,7 @@ import '../../core/interfaces/vpn_engine.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/hero_panel.dart';
+import '../widgets/pressable.dart';
 import 'add_config_screen.dart';
 
 class ConfigsScreen extends ConsumerStatefulWidget {
@@ -830,9 +831,9 @@ class _CfgTitlePanel extends StatelessWidget {
           style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5)),
       trailing: Row(
         children: [
-          _IconBtn(t: t, icon: Icons.tune_rounded, accent: false, onTap: onSettings),
+          _IconBtn(t: t, icon: Icons.tune_rounded, accent: false, label: 'настройки отображения', onTap: onSettings),
           const SizedBox(width: 6),
-          _IconBtn(t: t, icon: Icons.ios_share_rounded, accent: false, onTap: onExport),
+          _IconBtn(t: t, icon: Icons.ios_share_rounded, accent: false, label: 'экспорт подключений', onTap: onExport),
           const SizedBox(width: 6),
           if (isRefreshing)
             SizedBox(
@@ -847,9 +848,9 @@ class _CfgTitlePanel extends StatelessWidget {
               ),
             )
           else
-            _IconBtn(t: t, icon: Icons.refresh_rounded, accent: false, onTap: onRefreshAll),
+            _IconBtn(t: t, icon: Icons.refresh_rounded, accent: false, label: 'обновить подписки', onTap: onRefreshAll),
           const SizedBox(width: 6),
-          _IconBtn(t: t, icon: Icons.add_rounded, accent: true, onTap: onAdd),
+          _IconBtn(t: t, icon: Icons.add_rounded, accent: true, label: 'добавить', onTap: onAdd),
         ],
       ),
     );
@@ -860,22 +861,34 @@ class _IconBtn extends StatelessWidget {
   final TeapodTokens t;
   final IconData icon;
   final bool accent;
+  final String label;
   final VoidCallback? onTap;
 
-  const _IconBtn({required this.t, required this.icon, required this.accent, this.onTap});
+  const _IconBtn({
+    required this.t,
+    required this.icon,
+    required this.accent,
+    required this.label,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          color: accent ? t.accent : Colors.transparent,
-          border: Border.all(color: accent ? t.accent : t.line),
+    return Semantics(
+      label: label,
+      button: true,
+      enabled: onTap != null,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: accent ? t.accent : Colors.transparent,
+            border: Border.all(color: accent ? t.accent : t.line),
+          ),
+          child: Icon(icon, size: 15, color: accent ? t.bg : onTap != null ? t.textDim : t.textMuted),
         ),
-        child: Icon(icon, size: 14, color: accent ? t.bg : onTap != null ? t.textDim : t.textMuted),
       ),
     );
   }
@@ -1375,7 +1388,7 @@ class _ConfigRow extends StatelessWidget {
             ),
           );
 
-    return GestureDetector(
+    return Pressable(
       onTap: onTap,
       onLongPress: onLongPress,
       child: Container(
@@ -1681,7 +1694,7 @@ class _SheetTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return Pressable(
       onTap: onTap,
       child: Container(
         width: double.infinity,

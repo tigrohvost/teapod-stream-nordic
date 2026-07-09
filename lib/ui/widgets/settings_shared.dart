@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
+import 'pressable.dart';
 
 /// Снэкбар «профиль только для чтения» — единый для всех заблокированных рядов.
 void showReadonlySnack(BuildContext context) {
@@ -35,8 +36,7 @@ class SetRowToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
+    return Pressable(
       onTap: locked ? () => showReadonlySnack(context) : () => onChange(!value),
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
@@ -128,8 +128,7 @@ class SetRowChev extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
+    return Pressable(
       onTap: locked ? () => showReadonlySnack(context) : onTap,
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),

@@ -240,7 +240,11 @@ class _ConsoleTabBar extends ConsumerWidget {
               final item   = e.value;
               final active = idx == currentIndex;
               return Expanded(
-                child: GestureDetector(
+                child: Semantics(
+                  label: item.label,
+                  button: true,
+                  selected: active,
+                  child: GestureDetector(
                   onTap: () => onTap(idx),
                   behavior: HitTestBehavior.opaque,
                   child: Column(
@@ -286,6 +290,7 @@ class _ConsoleTabBar extends ConsumerWidget {
                       ),
                     ],
                   ),
+                ),
                 ),
               );
             }).toList(),
