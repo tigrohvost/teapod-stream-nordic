@@ -11,6 +11,7 @@ import '../../providers/settings_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/live_sparkline.dart';
+import '../widgets/reconnect_banner.dart';
 import 'logs_screen.dart';
 
 class HomeScreen extends ConsumerWidget {
@@ -52,6 +53,7 @@ class HomeScreen extends ConsumerWidget {
           child: Column(
             children: [
               _HeaderStrip(t: t, stateCode: stateCode, version: version),
+              const ReconnectBanner(),
               _HeroPanel(
                 t: t,
                 vpnState: vpnState,

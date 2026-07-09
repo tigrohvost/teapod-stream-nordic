@@ -17,6 +17,7 @@ import '../../providers/profile_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/settings_shared.dart';
+import '../widgets/reconnect_banner.dart';
 import 'split_tunnel_screen.dart';
 
 // ── Screen ────────────────────────────────────────────────────────
@@ -71,6 +72,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               profileName: profileState?.activeProfile?.name ?? 'default',
               profileReadonly: profileReadonly,
             ),
+            const ReconnectBanner(),
             Expanded(
               child: settingsAsync.when(
                 loading: () => Center(
