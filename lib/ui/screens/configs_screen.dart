@@ -1194,6 +1194,8 @@ class _SubGroup extends StatelessWidget {
             color: t.bgSunken,
             child: Column(
               children: [
+                if (sub.totalBytes != null && sub.totalBytes! > 0)
+                  _DataUsageBanner(t: t, sub: sub),
                 // Expired renewal banner
                 if (sub.expireAt != null &&
                     sub.expireAt!.difference(DateTime.now()).inDays <= 0)
@@ -1313,6 +1315,68 @@ class _SubGroup extends StatelessWidget {
             const SizedBox(height: 8),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ── Data Usage Banner ─────────────────────────────────────────────
+
+class _DataUsageBanner extends StatelessWidget {
+  final TeapodTokens t;
+  final Subscription sub;
+
+  const _DataUsageBanner({required this.t, required this.sub});
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    if (bytes < 1024 * 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    return '${(bytes / (1024 * 1024 * 1024 * 1024)).toStringAsFixed(2)} TB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final used = (sub.uploadBytes ?? 0) + (sub.downloadBytes ?? 0);
+    final total = sub.totalBytes!;
+    final percent = (used / total).clamp(0.0, 1.0);
+    
+    final usedStr = _formatBytes(used);
+    final totalStr = _formatBytes(total);
+    
+    return Container(
+      padding: const EdgeInsets.fromLTRB(52, 12, 20, 12),
+      decoration: BoxDecoration(border: Border(top: BorderSide(color: t.lineSoft))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('data usage', style: AppTheme.mono(size: 10, color: t.textDim, letterSpacing: 1)),
+              Text('$usedStr / $totalStr', style: AppTheme.mono(size: 10, color: t.textDim)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Stack(
+            children: [
+              Container(
+                height: 2,
+                width: double.infinity,
+                color: t.line,
+              ),
+              if (percent > 0)
+                FractionallySizedBox(
+                  widthFactor: percent,
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    height: 2,
+                    color: percent > 0.9 ? t.danger : t.accent,
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }

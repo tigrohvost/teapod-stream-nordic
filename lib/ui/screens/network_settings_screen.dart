@@ -251,17 +251,20 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('TLS fingerprint',
-                                    style: AppTheme.sans(size: 14, color: t.text)),
-                                const SizedBox(height: 3),
-                                Text('uTLS-маскировка ClientHello (TLS/REALITY)',
-                                    style: AppTheme.mono(
-                                        size: 10, color: t.textMuted, letterSpacing: 0.5)),
-                              ],
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('TLS fingerprint',
+                                      style: AppTheme.sans(size: 14, color: t.text)),
+                                  const SizedBox(height: 3),
+                                  Text('uTLS-маскировка ClientHello (TLS/REALITY)',
+                                      style: AppTheme.mono(
+                                          size: 10, color: t.textMuted, letterSpacing: 0.5)),
+                                ],
+                              ),
                             ),
+                            const SizedBox(width: 16),
                             GestureDetector(
                               onTap: locked
                                   ? () => showReadonlySnack(context)
