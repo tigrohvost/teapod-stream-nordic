@@ -1,5 +1,6 @@
 import 'dart:convert';
 import '../models/vpn_config.dart';
+import '../models/pinned_ref.dart';
 import 'storage_secure_service.dart';
 import 'storage_migration_service.dart';
 
@@ -179,6 +180,22 @@ class ConfigStorageService {
     await _secure.writeSubscriptionsRaw(
       jsonEncode(subs.map((s) => s.toJson()).toList()),
     );
+  }
+
+  // ─── Pinned refs ───
+
+  Future<List<PinnedRef>> loadPins() async {
+    final raw = await _secure.readPinsRaw();
+    if (raw == null || raw.isEmpty) return [];
+    final list = jsonDecode(raw) as List<dynamic>;
+    return list
+        .map((e) => PinnedRef.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> savePins(List<PinnedRef> pins) async {
+    await _secure.writePinsRaw(
+        jsonEncode(pins.map((p) => p.toJson()).toList()));
   }
 
   Future<void> addSubscription(Subscription sub) async {

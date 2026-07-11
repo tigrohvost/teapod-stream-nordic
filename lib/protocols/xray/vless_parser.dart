@@ -24,11 +24,15 @@ class VlessParser {
     return null;
   }
 
+  static String _cleanName(String name) {
+    return name.replaceFirst(RegExp(r'^[\s\-\—\–]+'), '');
+  }
+
   static String _decodeName(String raw) {
     try {
-      return Uri.decodeComponent(raw);
+      return _cleanName(Uri.decodeComponent(raw));
     } catch (_) {
-      return raw;
+      return _cleanName(raw);
     }
   }
 
@@ -107,7 +111,8 @@ class VlessParser {
 
       final port = int.tryParse(json['port']?.toString() ?? '443') ?? 443;
       final host = json['add'] as String? ?? '';
-      final name = json['ps'] as String? ?? '$host:$port';
+      final rawName = json['ps'] as String? ?? '$host:$port';
+      final name = _cleanName(rawName);
 
       final net = json['net'] as String? ?? 'tcp';
       final tls = json['tls'] as String? ?? '';

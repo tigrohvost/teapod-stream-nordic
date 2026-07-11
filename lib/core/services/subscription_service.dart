@@ -17,8 +17,7 @@ class UntrustedCertificateException implements Exception {
   });
 
   @override
-  String toString() =>
-      'UntrustedCertificateException: $host — $subject (issued by $issuer)';
+  String toString() => 'UntrustedCertificateException: $host — $subject (issued by $issuer)';
 }
 
 class SubscriptionFetchResult {
@@ -83,10 +82,12 @@ class SubscriptionService {
   /// certificate details so the caller can decide whether to retry.
   /// If [allowSelfSigned] is true, certificate validation is skipped.
   /// If [hwidEnabled] is true, HWID headers are sent to support device limits.
+  /// If [userAgent] is non-empty, it overrides the default User-Agent.
   Future<SubscriptionFetchResult> fetchSubscription(
     String url, {
     bool allowSelfSigned = false,
     HwidDeviceInfo? hwid,
+    String? userAgent,
   }) async {
     final uri = Uri.parse(url);
     final httpClient = HttpClient();
@@ -95,20 +96,21 @@ class SubscriptionService {
 
     httpClient.badCertificateCallback =
         (X509Certificate cert, String host, int port) {
-          if (allowSelfSigned) return true;
-          certError = UntrustedCertificateException(
-            host: host,
-            subject: cert.subject,
-            issuer: cert.issuer,
-          );
-          return false;
-        };
+      if (allowSelfSigned) return true;
+      certError = UntrustedCertificateException(
+        host: host,
+        subject: cert.subject,
+        issuer: cert.issuer,
+      );
+      return false;
+    };
 
     String body;
     HttpHeaders responseHeaders;
     try {
       final request = await httpClient.getUrl(uri);
-      request.headers.set('User-Agent', AppConstants.subscriptionUserAgent);
+      final ua = userAgent?.trim() ?? '';
+      request.headers.set('User-Agent', ua.isNotEmpty ? ua : AppConstants.subscriptionUserAgent);
 
       if (hwid != null) {
         request.headers.set('X-Hwid', hwid.deviceId);
@@ -117,9 +119,8 @@ class SubscriptionService {
         request.headers.set('X-Ver-Os', hwid.osVersion.toString());
       }
 
-      final response = await request.close().timeout(
-        const Duration(seconds: 15),
-      );
+      final response =
+          await request.close().timeout(const Duration(seconds: 15));
 
       if (response.statusCode != 200) {
         throw Exception('Failed to fetch subscription: ${response.statusCode}');
@@ -147,7 +148,8 @@ class SubscriptionService {
         final items = jsonData is List ? jsonData : [jsonData];
         for (final item in items) {
           if (item is! Map<String, dynamic>) continue;
-          final remarks = item['remarks'] as String? ?? 'Server';
+          final rawRemarks = item['remarks'] as String? ?? 'Server';
+          final remarks = rawRemarks.replaceFirst(RegExp(r'^[\s\-\—\–]+'), '');
           final rawJson = jsonEncode(item);
           String address = '';
           int port = 0;
@@ -172,20 +174,18 @@ class SubscriptionService {
               break;
             }
           }
-          configs.add(
-            VpnConfig(
-              id: 'xray_${DateTime.now().millisecondsSinceEpoch}_${configs.length}',
-              name: remarks,
-              protocol: VpnProtocol.vless,
-              address: address.isEmpty ? 'managed' : address,
-              port: port > 0 ? port : 443,
-              uuid: '',
-              security: VpnSecurity.none,
-              transport: VpnTransport.tcp,
-              createdAt: DateTime.now(),
-              rawXrayConfig: rawJson,
-            ),
-          );
+          configs.add(VpnConfig(
+            id: 'xray_${DateTime.now().millisecondsSinceEpoch}_${configs.length}',
+            name: remarks,
+            protocol: VpnProtocol.vless,
+            address: address.isEmpty ? 'managed' : address,
+            port: port > 0 ? port : 443,
+            uuid: '',
+            security: VpnSecurity.none,
+            transport: VpnTransport.tcp,
+            createdAt: DateTime.now(),
+            rawXrayConfig: rawJson,
+          ));
         }
         if (configs.isNotEmpty) {
           return SubscriptionFetchResult(
@@ -205,24 +205,22 @@ class SubscriptionService {
       }
     }
 
-    // Try base64 decode first.
-    // Many providers wrap base64 output at 76 chars (RFC 2045), so strip all
-    // whitespace before decoding — otherwise base64Decode throws and we fall
-    // back to treating each 76-char chunk as a separate URI (→ 0 configs).
-    try {
-      final cleaned = body.replaceAll(RegExp(r'\s'), '');
-      final padded = cleaned.padRight((cleaned.length + 3) ~/ 4 * 4, '=');
-      final decoded = utf8.decode(base64Decode(padded));
-      lines = decoded
-          .split(RegExp(r'\r?\n'))
-          .where((l) => l.trim().isNotEmpty)
-          .toList();
-    } catch (_) {
-      // Not base64 — treat as plain-text list of URIs.
-      lines = body
-          .split(RegExp(r'\r?\n'))
-          .where((l) => l.trim().isNotEmpty)
-          .toList();
+    // Plain-text URI list takes priority: a body that already contains known
+    // URI schemes is never base64 (guards against text that happens to decode).
+    lines = _splitLines(body);
+    if (!lines.any(_isKnownUri)) {
+      // Try base64. Many providers wrap output at 76 chars (RFC 2045), so strip
+      // all whitespace before decoding — otherwise base64Decode throws and each
+      // 76-char chunk would be treated as a separate URI (→ 0 configs).
+      try {
+        final cleaned = body.replaceAll(RegExp(r'\s'), '');
+        final padded = cleaned.padRight((cleaned.length + 3) ~/ 4 * 4, '=');
+        final decoded = utf8.decode(base64Decode(padded));
+        final decodedLines = _splitLines(decoded);
+        if (decodedLines.any(_isKnownUri)) lines = decodedLines;
+      } catch (_) {
+        // Not base64 either — keep the raw lines, the parser will skip them.
+      }
     }
 
     for (final line in lines) {
@@ -248,6 +246,16 @@ class SubscriptionService {
     );
   }
 
+  static List<String> _splitLines(String s) =>
+      s.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
+
+  static const _uriSchemes = ['vless://', 'vmess://', 'trojan://', 'ss://', 'hy2://', 'hysteria2://'];
+
+  static bool _isKnownUri(String line) {
+    final t = line.trim();
+    return _uriSchemes.any(t.startsWith);
+  }
+
   _HeaderMeta _parseHeaders(HttpHeaders headers) {
     String? profileTitle;
     DateTime? expireAt;
@@ -262,9 +270,7 @@ class SubscriptionService {
     final hwidNotSupported = headers.value('x-hwid-not-supported');
     final hwidMaxDevices = headers.value('x-hwid-max-devices-reached');
 
-    if (hwidActive != null ||
-        hwidNotSupported != null ||
-        hwidMaxDevices != null) {
+    if (hwidActive != null || hwidNotSupported != null || hwidMaxDevices != null) {
       hwidStatus = HwidStatus(
         isActive: hwidActive == 'true',
         notSupported: hwidNotSupported == 'true',
@@ -295,8 +301,7 @@ class SubscriptionService {
           case 'total':
             if (val > 0) totalBytes = val;
           case 'expire':
-            if (val > 0)
-              expireAt = DateTime.fromMillisecondsSinceEpoch(val * 1000);
+            if (val > 0) expireAt = DateTime.fromMillisecondsSinceEpoch(val * 1000);
         }
       }
     }

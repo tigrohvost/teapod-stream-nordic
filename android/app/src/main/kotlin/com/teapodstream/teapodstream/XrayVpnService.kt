@@ -30,6 +30,7 @@ import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import teapodcore.Teapodcore
 import teapodcore.XrayCallback
@@ -60,6 +61,7 @@ class XrayVpnService : VpnService() {
         const val EXTRA_KILL_SWITCH = "kill_switch" // block traffic when VPN drops unexpectedly
         const val EXTRA_ALLOW_ICMP = "allow_icmp" // allow ICMP echo (ping) through the tunnel
         const val EXTRA_BLOCK_QUIC = "block_quic" // reject UDP/443 inside the TUN via ICMP Port Unreachable
+        const val EXTRA_IPV6 = "ipv6_enabled" // add IPv6 address/route to the TUN interface
         const val EXTRA_MTU = "mtu" // TUN MTU size
 
         // Static state tracker for querying from Dart
@@ -102,6 +104,7 @@ class XrayVpnService : VpnService() {
         }
 
         const val LOG_FILE_NAME = "vpn_log.txt"
+        const val LOG_PREV_FILE_NAME = "vpn_log.prev.txt"
         val LOG_FILE_LOCK = Any()
 
         private const val NOTIFICATION_CHANNEL_ID = "vpn_service"
@@ -117,6 +120,10 @@ class XrayVpnService : VpnService() {
         private const val STATS_INTERVAL_MS = 1_000L
         private const val STOP_THREAD_TIMEOUT_MS = 5_000L
         private const val RECONNECT_DEBOUNCE_MS = 2_000L
+        // Failed CONNECT_QUICK reconnects are retried with linear backoff instead of
+        // silently leaving the VPN off (and, with kill switch, traffic leaking).
+        private const val MAX_RECONNECT_ATTEMPTS = 3
+        private const val RECONNECT_RETRY_BASE_MS = 5_000L
 
         @Volatile private var totalUpload: Long = 0
         @Volatile private var totalDownload: Long = 0
@@ -198,6 +205,7 @@ class XrayVpnService : VpnService() {
     private var proxyOnlyMode = false
     private val networkChangeHandler = Handler(Looper.getMainLooper())
     private var pendingNetworkRunnable: Runnable? = null
+    private val reconnectAttempts = AtomicInteger(0)
     private val heartbeat = HeartbeatMonitor(object : HeartbeatMonitor.Deps {
         override val running: Boolean get() = isRunning.get()
         override val tunModeActive: Boolean get() = Companion.tunModeActive
@@ -276,6 +284,10 @@ class XrayVpnService : VpnService() {
                         Thread.currentThread().interrupt()
                     }
 
+                    // Из состояния blocked stopVpn выходит по CAS (isRunning уже false),
+                    // TUN-sink kill switch'а нужно закрыть явно.
+                    closeTunSink()
+
                     // Guarantee "disconnected" is always sent
                     setState("disconnected")
                     // Update notification to "Disconnected" ONLY after we've actually
@@ -298,18 +310,20 @@ class XrayVpnService : VpnService() {
                 val killSwitch = intent.getBooleanExtra(EXTRA_KILL_SWITCH, false)
                 val allowIcmp = intent.getBooleanExtra(EXTRA_ALLOW_ICMP, true)
                 val blockQuic = intent.getBooleanExtra(EXTRA_BLOCK_QUIC, false)
+                val ipv6Enabled = intent.getBooleanExtra(EXTRA_IPV6, false)
                 val mtu = intent.getIntExtra(EXTRA_MTU, 1500).coerceIn(576, 9000)
                 // Persist non-sensitive params for CONNECT_QUICK reconnect (no credentials)
                 ConnectionParams(socksPort, excludedPackages, includedPackages,
-                    vpnMode, ssPrefix, proxyOnly, showNotification, killSwitch, allowIcmp, blockQuic, mtu)
+                    vpnMode, ssPrefix, proxyOnly, showNotification, killSwitch, allowIcmp, blockQuic, ipv6Enabled, mtu)
                     .save(filesDir, ::log)
                 userRequestedDisconnect.set(false)
+                reconnectAttempts.set(0)
                 try { File(filesDir, "user_disconnected.flag").delete() } catch (_: Exception) {}
                 ensureForeground()
                 Thread {
                     startVpn(xrayConfig, socksPort, socksUser, socksPassword,
                         excludedPackages, includedPackages, vpnMode, ssPrefix, proxyOnly, killSwitch,
-                        allowIcmp, blockQuic, mtu = mtu)
+                        allowIcmp, blockQuic, ipv6Enabled, mtu = mtu)
                 }.start()
                 return START_STICKY
             }
@@ -319,6 +333,12 @@ class XrayVpnService : VpnService() {
                 val params = ConnectionParams.load(filesDir)
                 if (params != null) showNotification = params.showNotification
                 ensureForeground()
+                if (isRunning.get()) {
+                    // startVpn would bail on its CAS anyway — bail here instead so the
+                    // state isn't left stuck at "reconnecting" over a live tunnel.
+                    log("info", "CONNECT_QUICK ignored: VPN already running")
+                    return START_STICKY
+                }
                 val configFile = File(filesDir, "xray_config.json")
                 if (params != null && configFile.exists()) {
                     val needsPermission = !params.proxyOnly && VpnService.prepare(this) != null
@@ -357,7 +377,7 @@ class XrayVpnService : VpnService() {
                                 params.socksPort, socksUser, socksPassword,
                                 params.excludedPackages, params.includedPackages, params.vpnMode,
                                 params.ssPrefix, params.proxyOnly, params.killSwitch,
-                                params.allowIcmp, params.blockQuic, mtu = params.mtu, isReconnect = true
+                                params.allowIcmp, params.blockQuic, params.ipv6Enabled, mtu = params.mtu, isReconnect = true
                             )
                         }.start()
                     }
@@ -373,9 +393,12 @@ class XrayVpnService : VpnService() {
         if (params != null) showNotification = params.showNotification
         ensureForeground()
         // Auto-connect if saved params exist and user didn't explicitly disconnect.
+        // The flag file covers process restarts: the static userRequestedDisconnect
+        // is reset to false in a fresh process, but the user's choice must survive.
         val configFile = File(filesDir, "xray_config.json")
         if (params != null && configFile.exists()
             && !userRequestedDisconnect.get()
+            && !File(filesDir, "user_disconnected.flag").exists()
             && !isRunning.get()
         ) {
             val needsPermission = !params.proxyOnly && VpnService.prepare(this) != null
@@ -391,7 +414,7 @@ class XrayVpnService : VpnService() {
                             params.socksPort, socksUser, socksPassword,
                             params.excludedPackages, params.includedPackages, params.vpnMode,
                             params.ssPrefix, params.proxyOnly, params.killSwitch,
-                            params.allowIcmp, params.blockQuic, mtu = params.mtu, isReconnect = true
+                            params.allowIcmp, params.blockQuic, params.ipv6Enabled, mtu = params.mtu, isReconnect = true
                         )
                     }.start()
                     return START_STICKY
@@ -447,11 +470,15 @@ class XrayVpnService : VpnService() {
         killSwitch: Boolean = false,
         allowIcmp: Boolean = true,
         blockQuic: Boolean = false,
+        ipv6Enabled: Boolean = false,
         mtu: Int = 1500,
         isReconnect: Boolean = false,
     ) {
         if (!isRunning.compareAndSet(false, true)) return
-        try { tunInterface?.close() } catch (_: Exception) {}
+        // Keep the previous TUN (kill-switch sink left by a reconnect) open until the
+        // new one is established: establish() atomically replaces the interface, so
+        // app traffic is blackholed by the old TUN instead of leaking while xray starts.
+        val previousTun = tunInterface
         tunInterface = null
         killSwitchEnabled = killSwitch
         tunModeActive = !proxyOnly
@@ -481,6 +508,7 @@ class XrayVpnService : VpnService() {
             if (proxyOnly) {
                 // Proxy-only mode: start Xray SOCKS proxy without TUN tunnel or tun2socks
                 log("info", "Proxy-only mode: skipping TUN tunnel")
+                try { previousTun?.close() } catch (_: Exception) {}
 
                 startXrayAndWait(finalConfig)
 
@@ -496,11 +524,6 @@ class XrayVpnService : VpnService() {
                 val randomSubnet3 = (2..250).random()
                 val dynamicTunIp = "10.$randomSubnet1.$randomSubnet2.$randomSubnet3"
 
-                val hex1 = (1..65535).random().toString(16)
-                val hex2 = (1..65535).random().toString(16)
-                val hex3 = (1..65535).random().toString(16)
-                val dynamicTunIp6 = "fd00:$hex1:$hex2:$hex3::1"
-
                 val dynamicSession = "Teapod-${System.currentTimeMillis() % 10000}"
 
                 val builder = Builder()
@@ -508,11 +531,21 @@ class XrayVpnService : VpnService() {
                     .setMtu(tunMtu)
                     .addAddress(dynamicTunIp, 32)
                     .addRoute("0.0.0.0", 0)
-                    .addAddress(dynamicTunIp6, 64)
-                    .addRoute("::", 0)
                     .addDnsServer(tunDns)
                     .setBlocking(true)
                     .setMetered(false)
+
+                // Without an IPv6 address Android blocks the family for tunneled apps
+                // (no leak): connect() fails instantly and apps fall back to IPv4.
+                // With the address, literal-IPv6 destinations (e.g. Telegram DCs) hang
+                // when the VPN server has no IPv6 connectivity (#81).
+                if (ipv6Enabled) {
+                    val hex1 = (1..65535).random().toString(16)
+                    val hex2 = (1..65535).random().toString(16)
+                    val hex3 = (1..65535).random().toString(16)
+                    builder.addAddress("fd00:$hex1:$hex2:$hex3::1", 64)
+                    builder.addRoute("::", 0)
+                }
 
                 if (vpnMode == "onlySelected") {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -541,6 +574,8 @@ class XrayVpnService : VpnService() {
                 log("info", "nativeSetMaxFds result: $fdResult")
 
                 tunInterface = builder.establish() ?: throw IllegalStateException("Failed to establish TUN")
+                // The new interface replaced the old one atomically — the sink fd can go now.
+                try { previousTun?.close() } catch (_: Exception) {}
                 log("info", "TUN established with IP $dynamicTunIp")
 
                 // 1. Start xray-core (in-process library, not subprocess)
@@ -576,7 +611,27 @@ class XrayVpnService : VpnService() {
             }
         } catch (e: Exception) {
             log("error", "Start failed: ${e.message}")
-            stopVpn(resultState = "error", explicit = true)
+            // If no new TUN was established, restore the old kill-switch sink so
+            // stopVpn keeps blocking traffic; otherwise the old fd is obsolete.
+            if (tunInterface == null && previousTun != null && killSwitch && !proxyOnly) {
+                tunInterface = previousTun
+            } else {
+                try { previousTun?.close() } catch (_: Exception) {}
+            }
+            val willRetry = isReconnect && !userRequestedDisconnect.get()
+                    && reconnectAttempts.incrementAndGet() <= MAX_RECONNECT_ATTEMPTS
+            // On final failure with kill switch keep the sink (explicit=false) so
+            // traffic stays blocked instead of silently leaking past the VPN.
+            stopVpn(resultState = "error", explicit = !willRetry && !killSwitch, reconnecting = willRetry)
+            if (willRetry) {
+                val attempt = reconnectAttempts.get()
+                val delayMs = RECONNECT_RETRY_BASE_MS * attempt
+                log("warning", "Reconnect attempt $attempt/$MAX_RECONNECT_ATTEMPTS failed, retrying in ${delayMs}ms")
+                try { Thread.sleep(delayMs) } catch (_: InterruptedException) { return }
+                if (!userRequestedDisconnect.get() && !isRunning.get()) {
+                    startService(Intent(this, XrayVpnService::class.java).setAction(ACTION_CONNECT_QUICK))
+                }
+            }
         }
     }
 
@@ -705,7 +760,20 @@ class XrayVpnService : VpnService() {
             val realHost = server.getString("address")
             val realPort = server.getInt("port")
 
-            val proxy = PrefixTcpProxy(realHost, realPort, prefixBytes)
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val ownUid = android.os.Process.myUid()
+            val proxy = PrefixTcpProxy(realHost, realPort, prefixBytes) { client ->
+                try {
+                    val uid = cm.getConnectionOwnerUid(
+                        OsConstants.IPPROTO_TCP,
+                        client.remoteSocketAddress as InetSocketAddress,
+                        InetSocketAddress(client.localAddress, client.localPort)
+                    )
+                    uid == ownUid
+                } catch (_: Exception) {
+                    true // lookup unavailable — don't break the tunnel
+                }
+            }
             proxy.start()
             prefixProxy = proxy
 
@@ -746,6 +814,13 @@ class XrayVpnService : VpnService() {
         }
     }
 
+    /** Закрывает TUN-sink kill switch'а, если сервис уже остановлен. */
+    private fun closeTunSink() {
+        if (isRunning.get()) return
+        try { tunInterface?.close() } catch (_: Exception) {}
+        tunInterface = null
+    }
+
     private fun stopVpn(
         resultState: String = "disconnected",
         explicit: Boolean = false,
@@ -763,6 +838,7 @@ class XrayVpnService : VpnService() {
         try { wakeLock?.release() } catch (_: Exception) {}
         wakeLock = null
 
+        var keptTunAsSink = false
         try {
             try { unregisterNetworkCallback() } catch (e: Exception) {
                 log("warning", "unregisterNetworkCallback failed: ${e.message}")
@@ -781,13 +857,16 @@ class XrayVpnService : VpnService() {
             prefixProxy = null
 
             // Close TUN fd early so tun2socks goroutines reading from it get EOF and
-            // unblock immediately. This is the main reason stopTun2Socks() was timing
-            // out — goroutines were blocked in a Read() with no pending data.
-            // Kill-switch path keeps TUN open intentionally (traffic sink).
-            val activateKillSwitch = killSwitchEnabled && !explicit && !reconnecting && !proxyOnlyMode
+            // unblock immediately (tun2socks works on a dup'd fd, so this is safe to
+            // skip too). Kill-switch path keeps TUN open intentionally (traffic sink) —
+            // including during internal reconnects: the next startVpn() closes the old
+            // TUN only after the replacement is established, so app traffic is
+            // blackholed by the sink instead of leaking past the VPN in between.
+            val keepTunAsSink = killSwitchEnabled && !explicit && !proxyOnlyMode
                     && tunInterface != null
                     && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-            if (!activateKillSwitch) {
+            keptTunAsSink = keepTunAsSink
+            if (!keepTunAsSink) {
                 try {
                     tunInterface?.close()
                 } catch (e: Exception) {
@@ -841,9 +920,13 @@ class XrayVpnService : VpnService() {
                 Thread.currentThread().interrupt()
             }
 
-            if (activateKillSwitch) {
-                setUnderlyingNetworks(emptyArray())
-                log("info", "Kill switch active: TUN kept open, underlying networks cleared")
+            if (keepTunAsSink) {
+                if (reconnecting) {
+                    log("info", "Kill switch: TUN kept open as sink during reconnect")
+                } else {
+                    setUnderlyingNetworks(emptyArray())
+                    log("info", "Kill switch active: TUN kept open, underlying networks cleared")
+                }
             }
 
             // Keep xray_config.json for Quick Settings tile reconnect.
@@ -855,12 +938,14 @@ class XrayVpnService : VpnService() {
             // Don't overwrite "connecting" state when doing internal reconnect
             if (!reconnecting) {
                 connectedAtMs = 0
-                setState(resultState)
+                // TUN-sink остался открытым (kill switch) — трафик заблокирован,
+                // сообщаем отличимое от disconnected состояние.
+                setState(if (keptTunAsSink) "blocked" else resultState)
             } else {
                 // Clear credentials so startVpn picks up fresh ones from configFile
                 _socksCredentials.set(SocksCredentials(0, "", ""))
             }
-            log("info", "stopVpn: done (state=${if (reconnecting) "reconnecting" else resultState})")
+            log("info", "stopVpn: done (state=${if (reconnecting) "reconnecting" else if (keptTunAsSink) "blocked" else resultState})")
         }
     }
 
@@ -1107,6 +1192,7 @@ class XrayVpnService : VpnService() {
         networkChangeHandler.post {
             if (userRequestedDisconnect.get() || !isRunning.get()) return@post
             log("info", "reconnectInternal: starting reconnect cycle")
+            reconnectAttempts.set(0)
             Thread {
                 // Hold a WakeLock for the entire reconnect cycle so the CPU can't sleep
                 // between stopVpn() releasing the main WakeLock and CONNECT_QUICK acquiring it.
@@ -1277,6 +1363,7 @@ class XrayVpnService : VpnService() {
 
     private fun setConnected(socksPort: Int, socksUser: String, socksPassword: String) {
         currentNativeState = "connected"
+        reconnectAttempts.set(0)
         val now = System.currentTimeMillis()
         connectedAtMs = now
         lastConnectedMs = now
@@ -1325,10 +1412,18 @@ class XrayVpnService : VpnService() {
         } catch (_: Exception) {}
     }
 
+    // Rotate instead of wiping: the previous session's log survives one connect,
+    // so a hang that forced the user to reconnect can still be diagnosed afterwards.
     private fun clearLogFile() {
         try {
             synchronized(LOG_FILE_LOCK) {
-                File(filesDir, LOG_FILE_NAME).writeText("")
+                val current = File(filesDir, LOG_FILE_NAME)
+                val prev = File(filesDir, LOG_PREV_FILE_NAME)
+                prev.delete()
+                if (current.exists() && current.length() > 0) {
+                    current.renameTo(prev)
+                }
+                current.writeText("")
             }
         } catch (_: Exception) {}
     }

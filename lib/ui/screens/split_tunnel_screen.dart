@@ -10,6 +10,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/breadcrumb_bar.dart';
 import '../widgets/hero_panel.dart';
+import '../widgets/settings_shared.dart';
 
 class SplitTunnelScreen extends ConsumerStatefulWidget {
   const SplitTunnelScreen({super.key});
@@ -95,6 +96,21 @@ class _SplitTunnelScreenState extends ConsumerState<SplitTunnelScreen> {
                 child: Text(modeLabel,
                     style: AppTheme.mono(size: 11, color: t.accent, letterSpacing: 1)),
               ),
+            ),
+            // ── Master toggle ─────────────────────────────────────
+            SetRowToggle(
+              t: t,
+              title: 'Сплит-туннелирование',
+              hint: settings?.splitTunnelingEnabled == true
+                  ? 'включено'
+                  : 'выключено — весь трафик через VPN',
+              value: settings?.splitTunnelingEnabled ?? false,
+              onChange: (v) {
+                if (settings != null) {
+                  ref.read(settingsProvider.notifier)
+                      .save(settings.copyWith(splitTunnelingEnabled: v));
+                }
+              },
             ),
             // ── Mode selector ─────────────────────────────────────
             Container(

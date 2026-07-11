@@ -4,7 +4,7 @@ import '../../core/models/vpn_config.dart';
 import '../../core/models/dns_config.dart';
 import '../../core/models/routing_settings.dart';
 import '../../core/constants/xray_defaults.dart';
-import '../../core/services/settings_service.dart' show DnsQueryStrategy;
+import '../../core/services/settings_service.dart' show DnsQueryStrategy, TlsFingerprint;
 
 class XrayConfigBuilder {
   static const _ruServicesDomains = [
@@ -128,7 +128,7 @@ class XrayConfigBuilder {
         },
       ],
       'outbounds': [
-        _buildOutbound(config),
+        _buildOutbound(config, options.tlsFingerprint),
         {'tag': 'direct', 'protocol': 'freedom'},
         {'tag': 'dns-out', 'protocol': 'dns'},
         {'tag': 'block', 'protocol': 'blackhole'},
@@ -344,20 +344,20 @@ class XrayConfigBuilder {
     };
   }
 
-  static Map<String, dynamic> _buildOutbound(VpnConfig config) {
+  static Map<String, dynamic> _buildOutbound(VpnConfig config, TlsFingerprint fp) {
     if (config.protocol == VpnProtocol.hysteria2) {
       return {
         'tag': 'proxy',
         'protocol': 'hysteria',
         'settings': _buildOutboundSettings(config),
-        'streamSettings': _buildStreamSettings(config),
+        'streamSettings': _buildStreamSettings(config, fp),
       };
     }
     return {
       'tag': 'proxy',
       'protocol': config.protocol.name,
       'settings': _buildOutboundSettings(config),
-      'streamSettings': _buildStreamSettings(config),
+      'streamSettings': _buildStreamSettings(config, fp),
     };
   }
 
@@ -444,7 +444,9 @@ class XrayConfigBuilder {
     }
   }
 
-  static Map<String, dynamic> _buildStreamSettings(VpnConfig config) {
+  static Map<String, dynamic> _buildStreamSettings(VpnConfig config, TlsFingerprint fp) {
+    // Глобальный override из настроек приложения; defaultFp — значение из конфига.
+    final fingerprint = fp.xrayValue ?? config.fingerprint;
     if (config.protocol == VpnProtocol.hysteria2) {
       return {
         'network': 'hysteria',
@@ -475,7 +477,7 @@ class XrayConfigBuilder {
       if (config.security == VpnSecurity.reality)
         'realitySettings': {
           'serverName': config.sni ?? '',
-          'fingerprint': config.fingerprint ?? 'chrome',
+          'fingerprint': fingerprint ?? 'chrome',
           'publicKey': config.publicKey ?? '',
           'shortId': config.shortId ?? '',
           'spiderX': config.spiderX ?? '',
@@ -487,8 +489,8 @@ class XrayConfigBuilder {
         'tlsSettings': {
           'serverName': config.sni ?? '',
           'allowInsecure': false,
-          if (config.fingerprint != null && config.fingerprint!.isNotEmpty)
-            'fingerprint': config.fingerprint,
+          if (fingerprint != null && fingerprint.isNotEmpty)
+            'fingerprint': fingerprint,
           if (config.alpn != null && config.alpn!.isNotEmpty)
             'alpn': config.alpn!.split(',').map((s) => s.trim()).toList(),
           if (config.ech != null && config.ech!.isNotEmpty)
@@ -542,16 +544,27 @@ class XrayConfigBuilder {
   }
 
   /// Merge app settings into a pre-built raw xray config from a managed subscription.
-  /// App settings take priority: inbounds, dns, log are replaced; app routing rules
-  /// are prepended (with higher priority than server rules).
+  ///
+  /// Unlike [build], we preserve the server's outbound topology (load balancers,
+  /// observatory, custom outbound tags). Only port/credentials, DNS, log and
+  /// safe bypass rules (→ direct) are overlaid.
   static String mergeWithRaw(String rawConfig, VpnEngineOptions options) {
     try {
       final cfg = jsonDecode(rawConfig) as Map<String, dynamic>;
 
-      // Replace inbounds with app's (port, credentials, sniffing)
+      // Preserve the original socks inbound tag so server routing rules
+      // (inboundTag: ["socks", "http"]) keep matching after we replace the inbound.
+      final originalInbounds = List<dynamic>.from(cfg['inbounds'] as List? ?? []);
+      final socksTag = originalInbounds
+          .whereType<Map<String, dynamic>>()
+          .where((i) => i['protocol'] == 'socks')
+          .map((i) => i['tag'] as String?)
+          .firstWhere((t) => t != null && t.isNotEmpty, orElse: () => null)
+          ?? 'socks';
+
       cfg['inbounds'] = [
         {
-          'tag': 'socks-in',
+          'tag': socksTag,
           'protocol': 'socks',
           'port': options.socksPort,
           'listen': XrayDefaults.socksListen,
@@ -573,43 +586,32 @@ class XrayConfigBuilder {
         },
       ];
 
-      // Replace dns with app's (adblock, DNS server, DNS mode)
-      cfg['dns'] = _buildDnsBlock(options);
-
-      // Replace log level
+      // DNS block is intentionally NOT replaced: managed configs carry their own DNS
+      // routing configured for their outbound topology. Overriding it breaks dns-module
+      // routing (no 'proxy' outbound exists in these configs) and causes DNS leaks.
+      // User's custom DNS server and adblock settings do not apply to managed configs.
       cfg['log'] = {'loglevel': options.logLevel.name};
 
-      // Ensure dns-out outbound exists (needed for DNS proxy mode rule)
-      if (options.dnsMode == DnsMode.proxy) {
-        final outbounds = List<dynamic>.from(cfg['outbounds'] as List? ?? []);
-        if (!outbounds.any((o) => (o as Map?)?['tag'] == 'dns-out')) {
-          outbounds.add({'tag': 'dns-out', 'protocol': 'dns'});
-          cfg['outbounds'] = outbounds;
-        }
-      }
+      _clampObservatoryInterval(cfg, options.obsProbeIntervalSec);
+      _neutralizeDirectFallback(cfg);
 
-      // Build app routing rules to prepend (app has priority over server rules)
       final appRules = <Map<String, dynamic>>[];
 
-      // blockQuic is enforced at the TUN level (tun2socks ICMP Port Unreachable),
-      // not in xray routing — see the comment in build() for the rationale.
+      // Adblock for managed configs: DNS-based blocking is unavailable (the DNS
+      // block belongs to the server), so block ad domains via a routing rule to
+      // the injected blackhole. Requires sniffing (routeOnly) for domain matching.
+      if (options.routing.adBlockEnabled) {
+        _ensureBlackholeOutbound(cfg);
+        appRules.add({
+          'type': 'field',
+          'domain': [XrayDefaults.adBlockGeosite, 'geosite:win-spy'],
+          'outboundTag': blackholeTag,
+        });
+      }
 
-      if (options.dnsMode == DnsMode.proxy) {
-        appRules.add({
-          'type': 'field',
-          'inboundTag': ['dns-module'],
-          'outboundTag': options.dnsServer.type == DnsType.udp
-              ? 'proxy'
-              : 'direct',
-        });
-        appRules.add({
-          'type': 'field',
-          'inboundTag': ['socks-in'],
-          'port': '53',
-          'network': 'udp,tcp',
-          'outboundTag': 'dns-out',
-        });
-      } else if (options.dnsMode == DnsMode.direct) {
+      // In direct DNS mode, intercept port 53 so it bypasses the tunnel.
+      // In proxy DNS mode we leave DNS handling to the server config entirely.
+      if (options.dnsMode == DnsMode.direct) {
         appRules.add({
           'type': 'field',
           'port': '53',
@@ -618,13 +620,17 @@ class XrayConfigBuilder {
         });
       }
 
-      // Bypass/only rules from app settings — only safe if direction is not global
+      // Only inject rules that route to 'direct' — safe regardless of server outbound names.
+      // onlySelected rules (→ 'proxy') are skipped: the server's own catch-all handles routing.
       final routing = options.routing;
-      if (routing.isActive) {
+      if (routing.direction == RoutingDirection.bypass) {
         appRules.addAll(_buildGeoRules(routing));
+      } else if (routing.bypassLocal) {
+        appRules.add({'type': 'field', 'ip': ['geoip:private'], 'outboundTag': 'direct'});
       }
 
-      // Prepend app rules to the server's existing rules
+      // No catch-all rule — the server's routing handles the remainder.
+
       if (appRules.isNotEmpty) {
         final serverRouting = cfg['routing'] as Map<String, dynamic>? ?? {};
         final serverRules = List<dynamic>.from(
@@ -639,6 +645,105 @@ class XrayConfigBuilder {
       return jsonEncode(cfg);
     } catch (_) {
       return rawConfig;
+    }
+  }
+
+  /// Tag of the blackhole outbound injected into managed configs (fallback
+  /// neutralization, adblock). Injected once by [_ensureBlackholeOutbound].
+  static const blackholeTag = 'teapod-blackhole';
+
+  /// Balancers in managed configs may declare `fallbackTag: "direct"` — when the
+  /// leastLoad strategy has no qualified nodes (all marked dead, or the first
+  /// seconds after start before observatory produced any probe results), xray
+  /// would silently route user traffic OUTSIDE the VPN via the freedom outbound.
+  /// That is a security leak: rewrite such fallbacks to the first proxy outbound
+  /// matching the balancer's selector (fails via the VPN, works instantly on
+  /// startup), or to a blackhole when no such outbound exists.
+  static void _neutralizeDirectFallback(Map<String, dynamic> cfg) {
+    final routing = cfg['routing'];
+    if (routing is! Map<String, dynamic>) return;
+    final balancers = routing['balancers'];
+    if (balancers is! List) return;
+
+    final outbounds = (cfg['outbounds'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    final freedomTags = outbounds
+        .where((o) => o['protocol'] == 'freedom')
+        .map((o) => o['tag'] as String?)
+        .whereType<String>()
+        .toSet();
+
+    for (final b in balancers.whereType<Map<String, dynamic>>()) {
+      final fb = b['fallbackTag'];
+      if (fb is! String || !freedomTags.contains(fb)) continue;
+      final proxy = _firstSelectorOutbound(outbounds, b['selector']);
+      if (proxy != null) {
+        b['fallbackTag'] = proxy;
+      } else {
+        _ensureBlackholeOutbound(cfg);
+        b['fallbackTag'] = blackholeTag;
+      }
+    }
+  }
+
+  /// First outbound tag matching a balancer selector (xray selectors are tag
+  /// prefixes), skipping non-proxy protocols.
+  static String? _firstSelectorOutbound(
+    List<Map<String, dynamic>> outbounds,
+    dynamic selector,
+  ) {
+    if (selector is! List) return null;
+    const nonProxy = {'freedom', 'blackhole', 'dns', 'loopback'};
+    final prefixes = selector.whereType<String>().toList();
+    for (final o in outbounds) {
+      final tag = o['tag'];
+      if (tag is! String || nonProxy.contains(o['protocol'])) continue;
+      if (prefixes.any(tag.startsWith)) return tag;
+    }
+    return null;
+  }
+
+  static void _ensureBlackholeOutbound(Map<String, dynamic> cfg) {
+    final outbounds = cfg['outbounds'] as List<dynamic>? ?? (cfg['outbounds'] = <dynamic>[]);
+    final exists = outbounds
+        .whereType<Map<String, dynamic>>()
+        .any((o) => o['tag'] == blackholeTag);
+    if (!exists) {
+      outbounds.add({'tag': blackholeTag, 'protocol': 'blackhole', 'settings': {}});
+    }
+  }
+
+  /// Managed configs often ship aggressive observatory settings (e.g. probeInterval
+  /// 30s with 20+ outbounds). On mobile that means a burst of concurrent TLS probes
+  /// every interval: it saturates the LTE radio, drains battery and triggers
+  /// server-side rate limiting that resets in-flight user connections. Clamp the
+  /// probe interval to at least [minSec] (0 = keep the server's value).
+  static void _clampObservatoryInterval(Map<String, dynamic> cfg, int minSec) {
+    if (minSec <= 0) return;
+    for (final key in ['observatory', 'burstObservatory']) {
+      final obs = cfg[key];
+      if (obs is! Map<String, dynamic>) continue;
+      final raw = obs['probeInterval'];
+      if (raw is String && _intervalToSeconds(raw) < minSec) {
+        obs['probeInterval'] = '${minSec}s';
+      }
+    }
+  }
+
+  /// Parses xray duration strings ("30s", "5m", "1h"). Unknown formats → max int
+  /// so we never touch values we cannot read.
+  static int _intervalToSeconds(String v) {
+    final m = RegExp(r'^(\d+)(s|m|h)?$').firstMatch(v.trim());
+    if (m == null) return 1 << 30;
+    final n = int.parse(m.group(1)!);
+    switch (m.group(2)) {
+      case 'h':
+        return n * 3600;
+      case 'm':
+        return n * 60;
+      default:
+        return n;
     }
   }
 }

@@ -4,7 +4,8 @@ import '../models/dns_config.dart';
 import '../models/routing_settings.dart';
 import '../services/settings_service.dart';
 
-enum VpnState { disconnected, connecting, connected, disconnecting, error }
+/// blocked — kill switch удерживает TUN-sink после обрыва: трафик заблокирован.
+enum VpnState { disconnected, connecting, connected, disconnecting, error, blocked }
 
 abstract class VpnEngine {
   String get protocolName;
@@ -37,6 +38,9 @@ class VpnEngineOptions {
   final int mtu;
   final DnsQueryStrategy dnsQueryStrategy;
   final bool blockQuic;
+  final bool ipv6Enabled;
+  final int obsProbeIntervalSec;
+  final TlsFingerprint tlsFingerprint;
 
   const VpnEngineOptions({
     required this.socksPort,
@@ -62,5 +66,8 @@ class VpnEngineOptions {
     this.mtu = 1500,
     this.dnsQueryStrategy = DnsQueryStrategy.ipv4Only,
     this.blockQuic = false,
+    this.ipv6Enabled = false,
+    this.obsProbeIntervalSec = 600,
+    this.tlsFingerprint = TlsFingerprint.defaultFp,
   });
 }

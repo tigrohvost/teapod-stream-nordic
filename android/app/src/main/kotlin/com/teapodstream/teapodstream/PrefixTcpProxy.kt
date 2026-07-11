@@ -17,6 +17,10 @@ class PrefixTcpProxy(
     private val targetHost: String,
     private val targetPort: Int,
     private val prefix: ByteArray,
+    // Loopback is reachable by every app on the device; the caller supplies a UID
+    // check (getConnectionOwnerUid == own UID) so foreign apps can't relay traffic
+    // to the SS server through us. null = allow all (tests).
+    private val clientAllowed: ((Socket) -> Boolean)? = null,
 ) {
     private val serverSocket = ServerSocket(0) // random available port
     val localPort: Int = serverSocket.localPort
@@ -29,6 +33,11 @@ class PrefixTcpProxy(
             while (running) {
                 try {
                     val client = serverSocket.accept()
+                    if (clientAllowed?.invoke(client) == false) {
+                        android.util.Log.w("PrefixTcpProxy", "rejected connection from foreign app")
+                        try { client.close() } catch (_: Exception) {}
+                        continue
+                    }
                     executor.submit { handleClient(client) }
                 } catch (e: IOException) {
                     if (running) {

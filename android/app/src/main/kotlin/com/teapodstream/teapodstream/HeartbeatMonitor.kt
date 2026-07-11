@@ -281,6 +281,15 @@ internal class HeartbeatMonitor(private val deps: Deps) {
                     val failureCount = failures.incrementAndGet()
                     deps.log("warning", "Heartbeat failed ($failureCount): ${e.message}")
                     if (failureCount >= MAX_FAILURES) {
+                        // Probe rides through the routing balancer and can land on a dead
+                        // detour while real traffic flows fine — a false positive. If the
+                        // TUN saw downstream data within the last probe interval, keep the
+                        // session and just reset the counter.
+                        if (isTunRxFresh()) {
+                            deps.log("warning", "Heartbeat failing but TUN traffic is alive, skipping reconnect")
+                            failures.set(0)
+                            continue
+                        }
                         deps.log("warning", "Heartbeat failed $failureCount times, reconnecting")
                         deps.requestReconnect()
                         break
@@ -300,6 +309,11 @@ internal class HeartbeatMonitor(private val deps: Deps) {
                         }
                     }
                     if (failures.get() >= MAX_FAILURES) {
+                        if (isTunRxFresh()) {
+                            deps.log("warning", "Heartbeat failing but TUN traffic is alive, skipping reconnect")
+                            failures.set(0)
+                            continue
+                        }
                         deps.log("warning", "Heartbeat retries exhausted, reconnecting")
                         deps.requestReconnect()
                         break
@@ -307,6 +321,14 @@ internal class HeartbeatMonitor(private val deps: Deps) {
                 }
             }
         }.also { it.isDaemon = true; it.start() }
+    }
+
+    // True when tun2socks wrote data to the TUN within the last heartbeat interval —
+    // the tunnel is demonstrably passing traffic even if the probe itself fails.
+    private fun isTunRxFresh(): Boolean {
+        if (!deps.tunModeActive) return false
+        val lastRx = deps.tunLastRxActivityMs()
+        return lastRx > 0 && System.currentTimeMillis() - lastRx < INTERVAL_MS
     }
 
     fun stop() {
