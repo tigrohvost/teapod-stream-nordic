@@ -31,10 +31,12 @@ class DownloadProgress {
 }
 
 class UpdateService {
+  // Fork releases: the Nordic build is signed with its own key, so updates
+  // must come from the fork's repository, never from upstream.
   static const _githubApiLatest =
-      'https://api.github.com/repos/Wendor/teapod-stream/releases/latest';
+      'https://api.github.com/repos/tigrohvost/teapod-stream-nordic/releases/latest';
   static const _githubApiList =
-      'https://api.github.com/repos/Wendor/teapod-stream/releases?per_page=10';
+      'https://api.github.com/repos/tigrohvost/teapod-stream-nordic/releases?per_page=10';
 
   HttpClient _makeClient({int? socksPort, String? user, String? password}) {
     final client = HttpClient();

@@ -94,8 +94,9 @@ class RoutingSettings {
   );
 
   String get summary {
-    if (direction == RoutingDirection.global && !adBlockEnabled)
+    if (direction == RoutingDirection.global && !adBlockEnabled) {
       return 'Глобальный';
+    }
     final parts = <String>[];
     if (geoEnabled && geoCodes.isNotEmpty) {
       parts.add(geoCodes.take(2).join(', ') + (geoCodes.length > 2 ? '…' : ''));

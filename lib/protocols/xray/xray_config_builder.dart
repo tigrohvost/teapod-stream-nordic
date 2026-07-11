@@ -217,8 +217,9 @@ class XrayConfigBuilder {
 
     if (!routing.geoEnabled &&
         !routing.domainEnabled &&
-        !routing.geositeEnabled)
+        !routing.geositeEnabled) {
       return rules;
+    }
 
     final selectedOut = routing.direction == RoutingDirection.bypass
         ? 'direct'

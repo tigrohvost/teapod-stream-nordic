@@ -502,9 +502,10 @@ class _SettingsBodyState extends State<_SettingsBody> {
           _KVRowTap(
             t: t,
             k: 'source',
-            v: 'github.com/Wendor/teapod-stream',
+            v: 'github.com/tigrohvost/teapod-stream-nordic',
             onTap: () async {
-              final uri = Uri.parse('https://github.com/Wendor/teapod-stream');
+              final uri = Uri.parse(
+                  'https://github.com/tigrohvost/teapod-stream-nordic');
               if (await canLaunchUrl(uri)) launchUrl(uri, mode: LaunchMode.externalApplication);
             },
           ),

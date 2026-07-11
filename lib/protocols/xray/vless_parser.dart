@@ -19,8 +19,9 @@ class VlessParser {
     if (uri.startsWith('vmess://')) return _parseVmess(uri);
     if (uri.startsWith('trojan://')) return _parseTrojan(uri);
     if (uri.startsWith('ss://')) return _parseShadowsocks(uri);
-    if (uri.startsWith('hy2://') || uri.startsWith('hysteria2://'))
+    if (uri.startsWith('hy2://') || uri.startsWith('hysteria2://')) {
       return _parseHysteria2(uri);
+    }
     return null;
   }
 
