@@ -471,6 +471,19 @@ class VpnNotifier extends Notifier<VpnState2> {
     }
   }
 
+  /// Stops UI-driven polling while the app is backgrounded: the numbers are
+  /// invisible, but each tick costs two MethodChannel round-trips (one of them
+  /// serialising the whole 300-point history on the platform thread).
+  void onAppPaused() {
+    _statsPoller?.cancel();
+  }
+
+  /// Resumes polling (and resyncs state) when the app returns to foreground.
+  Future<void> onAppResumed() async {
+    await syncNativeState();
+    if (state.isConnected) _startStatsPolling();
+  }
+
   /// Syncs Flutter state from native when the app resumes from background.
   /// EventChannel replay on `onListen` handles most cases; this is a fallback.
   Future<void> syncNativeState() async {

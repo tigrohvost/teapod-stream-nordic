@@ -319,7 +319,21 @@ class _PowerCoreState extends State<_PowerCore>
     _spin = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1100),
-    )..repeat();
+    );
+    // The arc is only in the tree while busy, but a repeating controller keeps
+    // the ticker (and frame production) alive regardless — run it only when
+    // there is something to spin.
+    if (widget.isBusy) _spin.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PowerCore oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isBusy && !_spin.isAnimating) {
+      _spin.repeat();
+    } else if (!widget.isBusy && _spin.isAnimating) {
+      _spin.stop();
+    }
   }
 
   @override

@@ -121,7 +121,9 @@ class _AppShellState extends ConsumerState<_AppShell>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      ref.read(vpnProvider.notifier).syncNativeState();
+      ref.read(vpnProvider.notifier).onAppResumed();
+    } else if (state == AppLifecycleState.paused) {
+      ref.read(vpnProvider.notifier).onAppPaused();
     }
   }
 
