@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_constants.dart';
 import '../models/vpn_log_entry.dart';
@@ -35,15 +37,25 @@ class _CircularBuffer {
 
 class LogService extends Notifier<List<VpnLogEntry>> {
   late final _CircularBuffer _buffer;
+  Timer? _flushTimer;
 
   @override
   List<VpnLogEntry> build() {
     _buffer = _CircularBuffer(AppConstants.maxLogEntries);
+    ref.onDispose(() => _flushTimer?.cancel());
     return [];
   }
 
   void add(VpnLogEntry entry) {
     _buffer.add(entry);
+    // xray emits dozens of lines per second during a connect cycle; a state
+    // update per line means an O(capacity) list copy and a listener rebuild
+    // per line. Coalesce to at most a few emissions per second.
+    _flushTimer ??= Timer(const Duration(milliseconds: 200), _flush);
+  }
+
+  void _flush() {
+    _flushTimer = null;
     state = _buffer.toList();
   }
 
@@ -64,11 +76,15 @@ class LogService extends Notifier<List<VpnLogEntry>> {
     for (final e in entries) {
       _buffer.add(e);
     }
+    _flushTimer?.cancel();
+    _flushTimer = null;
     state = _buffer.toList();
   }
 
   void clear() {
     _buffer.clear();
+    _flushTimer?.cancel();
+    _flushTimer = null;
     state = [];
   }
 }

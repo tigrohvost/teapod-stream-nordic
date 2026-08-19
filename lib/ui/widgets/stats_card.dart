@@ -398,5 +398,7 @@ class _SpeedChartPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_SpeedChartPainter old) => history.length != old.history.length;
+  // The history is capped, so its length stops changing once full — compare
+  // identity instead: every stats tick delivers a freshly built list.
+  bool shouldRepaint(_SpeedChartPainter old) => !identical(history, old.history);
 }

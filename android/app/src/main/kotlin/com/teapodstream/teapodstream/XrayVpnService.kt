@@ -105,6 +105,9 @@ class XrayVpnService : VpnService() {
 
         const val LOG_FILE_NAME = "vpn_log.txt"
         const val LOG_PREV_FILE_NAME = "vpn_log.prev.txt"
+        // A long session with verbose logging must not grow the file without
+        // bound; past this size the current log rotates into the prev slot.
+        const val MAX_LOG_FILE_BYTES = 512L * 1024
         val LOG_FILE_LOCK = Any()
 
         private const val NOTIFICATION_CHANNEL_ID = "vpn_service"
@@ -179,6 +182,9 @@ class XrayVpnService : VpnService() {
     @Volatile private var blockQuicEnabled = false
     private var proxyOnlyMode = false
     private val networkChangeHandler = Handler(Looper.getMainLooper())
+    // Last speed line posted to the connected notification; null forces the next
+    // stats tick to post (reset on every state change).
+    @Volatile private var lastSpeedNotificationText: String? = null
     private var pendingNetworkRunnable: Runnable? = null
     private val reconnectAttempts = AtomicInteger(0)
     @Volatile private var notificationChannelsReady = false
@@ -1252,6 +1258,9 @@ class XrayVpnService : VpnService() {
         else
             PendingIntent.FLAG_UPDATE_CURRENT
 
+    private fun speedText(uploadSpeed: Long, downloadSpeed: Long): String =
+        "\u2191 ${formatSpeed(uploadSpeed)}  \u2193 ${formatSpeed(downloadSpeed)}"
+
     private fun buildConnectedNotification(uploadSpeed: Long, downloadSpeed: Long): Notification {
         val flags = pendingFlags()
         val stopIntent = PendingIntent.getService(this, 0,
@@ -1259,7 +1268,7 @@ class XrayVpnService : VpnService() {
         val openIntent = PendingIntent.getActivity(this, 0,
             packageManager.getLaunchIntentForPackage(packageName)
                 ?.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), flags)
-        val speedText = "↑ ${formatSpeed(uploadSpeed)}  ↓ ${formatSpeed(downloadSpeed)}"
+        val speedText = speedText(uploadSpeed, downloadSpeed)
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("TeapodStream VPN")
             .setContentText(speedText)
@@ -1364,6 +1373,7 @@ class XrayVpnService : VpnService() {
 
     private fun setState(state: String) {
         currentNativeState = state
+        lastSpeedNotificationText = null
         applyNotificationState(state)
         VpnEventStreamHandler.sendStateEvent(state)
         sendBroadcast(Intent("com.teapodstream.STATE_CHANGED").apply { putExtra("state", state) })
@@ -1398,6 +1408,12 @@ class XrayVpnService : VpnService() {
 
     private fun updateNotification(uploadSpeed: Long, downloadSpeed: Long) {
         if (!showNotification) return
+        // The stats loop calls this every second; re-posting an identical
+        // notification (an idle tunnel shows "0 B/s" forever) is pure binder and
+        // battery churn. Post only when the visible text actually changes.
+        val text = speedText(uploadSpeed, downloadSpeed)
+        if (text == lastSpeedNotificationText) return
+        lastSpeedNotificationText = text
         applyNotificationState("connected", uploadSpeed, downloadSpeed)
     }
 
@@ -1413,7 +1429,13 @@ class XrayVpnService : VpnService() {
         try {
             val line = "${System.currentTimeMillis()}|$level|${message.replace("\n", " ")}\n"
             synchronized(LOG_FILE_LOCK) {
-                java.io.FileWriter(File(filesDir, LOG_FILE_NAME), true).use { it.write(line) }
+                val current = File(filesDir, LOG_FILE_NAME)
+                if (current.length() > MAX_LOG_FILE_BYTES) {
+                    val prev = File(filesDir, LOG_PREV_FILE_NAME)
+                    prev.delete()
+                    current.renameTo(prev)
+                }
+                java.io.FileWriter(current, true).use { it.write(line) }
             }
         } catch (_: Exception) {}
     }
