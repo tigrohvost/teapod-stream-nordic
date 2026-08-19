@@ -171,14 +171,16 @@ jobs:
           flutter build apk --release --split-per-abi --no-pub \
             --obfuscate --split-debug-info=build/app/outputs/symbols
 
+      # Asset names carry no version so that
+      # /releases/latest/download/teapod-stream-<abi>.apk stays a permanent
+      # link. The version lives in the tag, the release title and versionName.
       - name: Rename APKs
         run: |
           DIR=build/app/outputs/flutter-apk
-          VERSION="${{ steps.meta.outputs.version }}"
           for ABI in arm64-v8a armeabi-v7a x86_64; do
             SRC="$DIR/app-$ABI-release.apk"
             if [[ -f "$SRC" ]]; then
-              mv "$SRC" "$DIR/teapod-stream-$ABI-release-$VERSION.apk"
+              mv "$SRC" "$DIR/teapod-stream-$ABI.apk"
             fi
           done
           ls -lh "$DIR"
@@ -187,7 +189,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: teapod-stream-${{ steps.meta.outputs.version }}-apk
-          path: build/app/outputs/flutter-apk/teapod-stream-*-release-*.apk
+          path: build/app/outputs/flutter-apk/teapod-stream-*.apk
           if-no-files-found: error
           retention-days: 90
 
@@ -206,7 +208,13 @@ jobs:
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
           VERSION="${{ steps.meta.outputs.version }}"
-          APKS=(build/app/outputs/flutter-apk/teapod-stream-*-release-"$VERSION".apk)
+          APKS=()
+          for ABI in arm64-v8a armeabi-v7a x86_64; do
+            APK="build/app/outputs/flutter-apk/teapod-stream-$ABI.apk"
+            if [[ -f "$APK" ]]; then
+              APKS+=("$APK")
+            fi
+          done
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "${APKS[@]}" --clobber
           else

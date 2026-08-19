@@ -46,13 +46,13 @@
 
 **[→ Последний релиз](https://github.com/tigrohvost/teapod-stream-nordic/releases/latest)** — там всегда лежит свежий подписанный APK, собранный GitHub Actions.
 
-Прямые ссылки на текущую версию `1.6.1`:
+Прямые ссылки — всегда отдают APK из последнего релиза:
 
 | Устройство | APK |
 | --- | --- |
-| Почти любой современный Android-телефон (`arm64-v8a`) | [teapod-stream-arm64-v8a-release-1.6.1.apk](https://github.com/tigrohvost/teapod-stream-nordic/releases/download/v1.6.1/teapod-stream-arm64-v8a-release-1.6.1.apk) |
-| Старые 32-битные устройства (`armeabi-v7a`) | [teapod-stream-armeabi-v7a-release-1.6.1.apk](https://github.com/tigrohvost/teapod-stream-nordic/releases/download/v1.6.1/teapod-stream-armeabi-v7a-release-1.6.1.apk) |
-| Эмуляторы и Android-x86 (`x86_64`) | [teapod-stream-x86_64-release-1.6.1.apk](https://github.com/tigrohvost/teapod-stream-nordic/releases/download/v1.6.1/teapod-stream-x86_64-release-1.6.1.apk) |
+| Почти любой современный Android-телефон (`arm64-v8a`) | [teapod-stream-arm64-v8a.apk](https://github.com/tigrohvost/teapod-stream-nordic/releases/latest/download/teapod-stream-arm64-v8a.apk) |
+| Старые 32-битные устройства (`armeabi-v7a`) | [teapod-stream-armeabi-v7a.apk](https://github.com/tigrohvost/teapod-stream-nordic/releases/latest/download/teapod-stream-armeabi-v7a.apk) |
+| Эмуляторы и Android-x86 (`x86_64`) | [teapod-stream-x86_64.apk](https://github.com/tigrohvost/teapod-stream-nordic/releases/latest/download/teapod-stream-x86_64.apk) |
 
 Не уверены в архитектуре — берите `arm64-v8a`. Дальше приложение обновляется само: `Настройки → Обновления` тянет новый релиз отсюда же.
 
@@ -220,7 +220,7 @@ Workflow: [`.github/workflows/build.yml`](.github/workflows/build.yml).
 Что делает:
 
 - `analyze` — `flutter analyze` и `flutter test` на каждый push и pull request;
-- `build` — release APK (split per ABI, с обфускацией), сам скачивает `teapod-core.aar` из последнего релиза [Wendor/teapod-core](https://github.com/Wendor/teapod-core) и geodata, ставит NDK `28.2.13676358` и CMake `3.22.1`.
+- `build` — release APK (split per ABI, с обфускацией) с именами без версии (`teapod-stream-<abi>.apk`), чтобы ссылки `/releases/latest/download/...` не протухали; сам скачивает `teapod-core.aar` из последнего релиза [Wendor/teapod-core](https://github.com/Wendor/teapod-core) и geodata, ставит NDK `28.2.13676358` и CMake `3.22.1`.
 
 Когда запускается:
 
