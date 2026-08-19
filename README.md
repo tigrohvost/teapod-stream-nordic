@@ -3,6 +3,7 @@
 > Оригинальный проект: [Wendor/teapod-stream](https://github.com/Wendor/teapod-stream)
 
 [![Build APK](https://github.com/tigrohvost/teapod-stream-nordic/actions/workflows/build.yml/badge.svg)](https://github.com/tigrohvost/teapod-stream-nordic/actions/workflows/build.yml)
+[![Последний релиз](https://img.shields.io/github/v/release/tigrohvost/teapod-stream-nordic?style=for-the-badge&labelColor=2E3440&color=A3BE8C&label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK)](https://github.com/tigrohvost/teapod-stream-nordic/releases/latest)
 [![Fork: teapod-stream](https://img.shields.io/badge/upstream-Wendor%2Fteapod--stream-88C0D0?style=for-the-badge&labelColor=2E3440)](https://github.com/Wendor/teapod-stream)
 [![Flutter 3.11+](https://img.shields.io/badge/Flutter-3.11%2B-81A1C1?style=for-the-badge&labelColor=2E3440&logo=flutter)](https://flutter.dev/)
 [![Android 10+](https://img.shields.io/badge/Android-10%2B-A3BE8C?style=for-the-badge&labelColor=2E3440&logo=android)](https://developer.android.com/)
@@ -40,6 +41,22 @@
 | Импорт по URL, QR и deeplink | Быстрое добавление конфигов и подписок | `есть` |
 | Проверка скорости, трафика и IP | Визуальный контроль состояния соединения | `есть` |
 | Встроенная Nord-тема | Более чистый и цельный внешний вид | `есть` |
+
+## Скачать
+
+**[→ Последний релиз](https://github.com/tigrohvost/teapod-stream-nordic/releases/latest)** — там всегда лежит свежий подписанный APK, собранный GitHub Actions.
+
+Прямые ссылки на текущую версию `1.6.1`:
+
+| Устройство | APK |
+| --- | --- |
+| Почти любой современный Android-телефон (`arm64-v8a`) | [teapod-stream-arm64-v8a-release-1.6.1.apk](https://github.com/tigrohvost/teapod-stream-nordic/releases/download/v1.6.1/teapod-stream-arm64-v8a-release-1.6.1.apk) |
+| Старые 32-битные устройства (`armeabi-v7a`) | [teapod-stream-armeabi-v7a-release-1.6.1.apk](https://github.com/tigrohvost/teapod-stream-nordic/releases/download/v1.6.1/teapod-stream-armeabi-v7a-release-1.6.1.apk) |
+| Эмуляторы и Android-x86 (`x86_64`) | [teapod-stream-x86_64-release-1.6.1.apk](https://github.com/tigrohvost/teapod-stream-nordic/releases/download/v1.6.1/teapod-stream-x86_64-release-1.6.1.apk) |
+
+Не уверены в архитектуре — берите `arm64-v8a`. Дальше приложение обновляется само: `Настройки → Обновления` тянет новый релиз отсюда же.
+
+Все релизы подписаны одним ключом (SHA-256 `05:A8:E6:93:0D:30:2C:FE:D4:81:7B:23:93:0E:6D:EA:C7:7B:39:9D:BA:A9:B5:32:18:D0:8A:DF:97:C1:A4:07`), поэтому новая версия ставится поверх старой без удаления данных.
 
 ## Быстрый старт для обычного пользователя
 
