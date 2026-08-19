@@ -16,9 +16,23 @@ on:
         description: 'Mark that release as a pre-release'
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      publish_release:
+        type: boolean
+        default: false
+      prerelease:
+        type: boolean
+        default: false
+      ref:
+        description: 'Ref to build; defaults to the caller commit'
+        type: string
+        default: ''
 
+# A publishing run gets its own group so an unrelated push to master cannot
+# cancel it.
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.ref }}-${{ inputs.ref }}
   cancel-in-progress: true
 
 env:
@@ -32,6 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: subosito/flutter-action@v2
         with:
@@ -50,6 +66,7 @@ jobs:
 
   build:
     name: Release APK
+    needs: analyze
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -57,6 +74,8 @@ jobs:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Resolve version and release mode
         id: meta
@@ -76,7 +95,7 @@ jobs:
             else
               echo "prerelease=false" >> "$GITHUB_OUTPUT"
             fi
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_release }}" == "true" ]]; then
+          elif [[ "${{ inputs.publish_release }}" == "true" ]]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
             echo "prerelease=${{ inputs.prerelease }}" >> "$GITHUB_OUTPUT"
@@ -219,6 +238,9 @@ jobs:
             gh release upload "$TAG" "${APKS[@]}" --clobber
           else
             FLAGS=(--title "TeapodStream Nordic $VERSION" --generate-notes --target "$GITHUB_SHA")
+            # --notes is prepended to the generated notes: record which core
+            # build this release carries.
+            FLAGS+=(--notes "Ядро teapod-core \`${{ steps.core.outputs.tag }}\`.")
             if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
               FLAGS+=(--prerelease)
             fi
