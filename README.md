@@ -266,7 +266,7 @@ Workflow: [`.github/workflows/watch-core.yml`](.github/workflows/watch-core.yml)
 | --- | --- |
 | `ANDROID_KEYSTORE_BASE64` | keystore `.jks` в base64 |
 | `ANDROID_KEYSTORE_PASSWORD` | `storePassword` из `android/key.properties` |
-| `ANDROID_KEY_ALIAS` | `keyAlias` |
+| `ANDROID_KEY_ALIAS` | `keyAlias` (лучше положить в `Variables`, а не в `Secrets`: это не секрет, а маскировка секретов прячет это слово во всех логах) |
 | `ANDROID_KEY_PASSWORD` | `keyPassword` |
 
 ```bash
