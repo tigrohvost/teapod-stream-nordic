@@ -177,7 +177,9 @@ rename_apks() {
     for abi in arm64-v8a armeabi-v7a x86_64; do
       local src="$dir/app-$abi-release.apk"
       if [[ -f "$src" ]]; then
-        local dst="$dir/teapod-stream-$abi-release-$VERSION.apk"
+        # Без версии в имени: ссылка вида
+        # /releases/latest/download/teapod-stream-<abi>.apk не протухает.
+        local dst="$dir/teapod-stream-$abi.apk"
         mv "$src" "$dst"
         ok "$dst"
       fi
@@ -192,7 +194,7 @@ rename_apks() {
       fi
     done
   elif [[ -f "$dir/app-release.apk" ]]; then
-    local dst="$dir/teapod-stream-universal-release-$VERSION.apk"
+    local dst="$dir/teapod-stream-universal.apk"
     mv "$dir/app-release.apk" "$dst"
     ok "$dst"
   elif [[ -f "$dir/app-debug.apk" ]]; then
@@ -207,9 +209,14 @@ push_release() {
   local dir="build/app/outputs/flutter-apk"
   local tag="v$VERSION"
 
-  # Find APK files
-  local apks=("$dir"/teapod-stream-*-release-"$VERSION".apk)
-  if [[ ! -f "${apks[0]}" ]]; then
+  # Find APK files (release-сборки лежат без версии в имени)
+  local apks=()
+  for name in "${ALL_ABIS[@]}" universal; do
+    if [[ -f "$dir/teapod-stream-$name.apk" ]]; then
+      apks+=("$dir/teapod-stream-$name.apk")
+    fi
+  done
+  if [[ ${#apks[@]} -eq 0 ]]; then
     err "APK не найдены! Сначала выполните: ./build.sh release"
   fi
 
@@ -256,7 +263,9 @@ case "${1:-help}" in
     ensure_pub
 
     dir="build/app/outputs/flutter-apk"
-    rm -f "$dir"/app-*-release.apk
+    # Имена релизных APK не содержат версию, поэтому чистим и их: иначе
+    # уцелевший файл от прошлой сборки может уехать в релиз как свежий.
+    rm -f "$dir"/app-*-release.apk "$dir"/teapod-stream-*.apk
 
     flutter build apk --release --split-per-abi --no-pub \
       --obfuscate --split-debug-info=build/app/outputs/symbols
