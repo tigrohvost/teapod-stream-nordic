@@ -73,7 +73,7 @@ class UpdateService {
       final tagName = (releaseJson['tag_name'] as String? ?? '')
           .replaceFirst(RegExp(r'^v'), '');
       if (tagName.isEmpty) return null;
-      if (!force && _compareVersions(tagName, currentVersion) <= 0) return null;
+      if (!force && compareAppVersions(tagName, currentVersion) <= 0) return null;
       final changelog = releaseJson['body'] as String?;
       final assets = releaseJson['assets'] as List<dynamic>? ?? [];
       for (final asset in assets) {
@@ -179,15 +179,72 @@ class UpdateService {
     }
   }
 
-  /// Returns positive if a > b, negative if a < b, 0 if equal.
-  int _compareVersions(String a, String b) {
-    final ap = a.split('.').map((s) => int.tryParse(s) ?? 0).toList();
-    final bp = b.split('.').map((s) => int.tryParse(s) ?? 0).toList();
-    for (int i = 0; i < 3; i++) {
-      final av = i < ap.length ? ap[i] : 0;
-      final bv = i < bp.length ? bp[i] : 0;
-      if (av != bv) return av - bv;
-    }
-    return 0;
+}
+
+/// Compares release versions the way the tags are shaped: `1.6.2`, with an
+/// optional pre-release suffix (`1.6.2-beta1`) and an optional leading `v`.
+///
+/// The suffix has to be split off before the numbers are parsed: `2-beta1`
+/// parses as 0, which would place every beta below the release it leads to and
+/// hide it from the updater. Semver ordering applies — a pre-release sits below
+/// its release, so `1.6.1 < 1.6.2-beta1 < 1.6.2`.
+///
+/// Returns positive if [a] is newer than [b], negative if older, 0 if equal.
+int compareAppVersions(String a, String b) {
+  final av = _Version.parse(a);
+  final bv = _Version.parse(b);
+
+  for (int i = 0; i < 3; i++) {
+    final x = i < av.core.length ? av.core[i] : 0;
+    final y = i < bv.core.length ? bv.core[i] : 0;
+    if (x != y) return x - y;
+  }
+
+  // A release outranks any pre-release of the same core version.
+  if (av.pre.isEmpty && bv.pre.isEmpty) return 0;
+  if (av.pre.isEmpty) return 1;
+  if (bv.pre.isEmpty) return -1;
+
+  for (int i = 0; i < av.pre.length && i < bv.pre.length; i++) {
+    final result = _compareIdentifiers(av.pre[i], bv.pre[i]);
+    if (result != 0) return result;
+  }
+  return av.pre.length - bv.pre.length;
+}
+
+/// Numeric identifiers rank below alphanumeric ones, otherwise compare in
+/// order. `beta10` and `beta9` are single identifiers and compare as text —
+/// write `beta.10` to get numeric ordering.
+int _compareIdentifiers(String a, String b) {
+  final an = int.tryParse(a);
+  final bn = int.tryParse(b);
+  if (an != null && bn != null) return an - bn;
+  if (an != null) return -1;
+  if (bn != null) return 1;
+  return a.compareTo(b);
+}
+
+class _Version {
+  final List<int> core;
+  final List<String> pre;
+
+  const _Version(this.core, this.pre);
+
+  static _Version parse(String raw) {
+    var text = raw.trim();
+    if (text.startsWith('v') || text.startsWith('V')) text = text.substring(1);
+
+    // Build metadata (`+10602`) carries no ordering.
+    final plus = text.indexOf('+');
+    if (plus != -1) text = text.substring(0, plus);
+
+    final dash = text.indexOf('-');
+    final core = dash == -1 ? text : text.substring(0, dash);
+    final pre = dash == -1 ? '' : text.substring(dash + 1);
+
+    return _Version(
+      core.split('.').map((s) => int.tryParse(s) ?? 0).toList(),
+      pre.isEmpty ? const [] : pre.split('.'),
+    );
   }
 }
