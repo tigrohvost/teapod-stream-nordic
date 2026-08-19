@@ -82,7 +82,7 @@ class UpdateNotifier extends Notifier<UpdateState> {
       }
       final path = await _apkPath(update.version, abi);
       await _cleanOldApks(keepPath: path);
-      if (_isNewer(update.version, currentVersion)) {
+      if (compareAppVersions(update.version, currentVersion) > 0) {
         final resumable = File(path).existsSync() ? File(path).lengthSync() : 0;
         state = UpdateAvailable(update, resumableBytes: resumable);
       } else {
@@ -149,17 +149,6 @@ class UpdateNotifier extends Notifier<UpdateState> {
     } on PlatformException catch (e) {
       state = UpdateError(e.message ?? 'Ошибка установки');
     }
-  }
-
-  bool _isNewer(String a, String b) {
-    final ap = a.split('.').map((s) => int.tryParse(s) ?? 0).toList();
-    final bp = b.split('.').map((s) => int.tryParse(s) ?? 0).toList();
-    for (int i = 0; i < 3; i++) {
-      final av = i < ap.length ? ap[i] : 0;
-      final bv = i < bp.length ? bp[i] : 0;
-      if (av != bv) return av > bv;
-    }
-    return false;
   }
 
   Future<String> _apkPath(String version, String abi) async {

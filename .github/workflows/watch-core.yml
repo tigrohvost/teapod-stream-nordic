@@ -24,8 +24,9 @@ jobs:
       tag: ${{ steps.check.outputs.tag }}
       version: ${{ steps.check.outputs.version }}
       core: ${{ steps.check.outputs.core }}
+      commit: ${{ steps.check.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: master
 
@@ -83,6 +84,7 @@ jobs:
           echo "bumped=true" >> "$GITHUB_OUTPUT"
           echo "tag=refs/tags/v$NEW" >> "$GITHUB_OUTPUT"
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "::notice::teapod-core $CORE -> releasing $NEW"
 
   # Pushing a tag with GITHUB_TOKEN does not start another workflow, so the
@@ -98,3 +100,40 @@ jobs:
       publish_release: true
       ref: ${{ needs.check.outputs.tag }}
     secrets: inherit
+
+  # The bump and the tag are pushed before the build runs, so a failed build
+  # would otherwise leave master on a version that has no release and a tag
+  # that points at nothing published. Undo both and let the next run retry.
+  rollback:
+    name: Roll back the failed release
+    needs: [check, release]
+    if: always() && needs.check.outputs.bumped == 'true' && needs.release.result != 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Report the failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="teapod-core ${{ needs.check.outputs.core }}: релиз ${{ needs.check.outputs.version }} не собрался"
+          FOUND=$(gh issue list --state open --search "$TITLE in:title" --json number -q '.[0].number')
+          if [[ -z "$FOUND" ]]; then
+            gh issue create --title "$TITLE" --body "Автоматический релиз на ядро \`${{ needs.check.outputs.core }}\` не собрался: [прогон](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+          Бамп версии откачен, тег \`v${{ needs.check.outputs.version }}\` удалён. Следующая проверка попробует снова через 6 часов."
+          fi
+
+      - name: Undo the bump and drop the tag
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git push origin --delete "v${{ needs.check.outputs.version }}" || true
+          git revert --no-edit "${{ needs.check.outputs.commit }}"
+          git push origin HEAD:master
