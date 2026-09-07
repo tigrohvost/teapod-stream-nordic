@@ -1,7 +1,7 @@
 name: Watch teapod-core
 
-# teapod-core ships as a prebuilt AAR that the build downloads from its latest
-# release, so a new core never reaches users on its own. This watcher bumps the
+# teapod-core ships as a prebuilt AAR pinned by teapod-core-version.txt,
+# so a new core never reaches users on its own. This watcher bumps the
 # patch version and publishes a release whenever the core moves.
 
 on:
@@ -12,6 +12,9 @@ on:
 concurrency:
   group: watch-core
   cancel-in-progress: false
+
+env:
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   check:

@@ -31,11 +31,15 @@ on:
 
 # A publishing run gets its own group so an unrelated push to master cannot
 # cancel it.
+permissions:
+  contents: read
+
 concurrency:
-  group: build-${{ github.ref }}-${{ inputs.ref }}
-  cancel-in-progress: true
+  group: build-${{ inputs.ref || github.ref }}-${{ inputs.publish_release || startsWith(github.ref, 'refs/tags/v') }}
+  cancel-in-progress: ${{ !inputs.publish_release && !startsWith(github.ref, 'refs/tags/v') }}
 
 env:
+  GH_REPO: ${{ github.repository }}
   FLUTTER_VERSION: '3.41.9'
   NDK_VERSION: '28.2.13676358'
   CMAKE_VERSION: '3.22.1'
@@ -44,10 +48,16 @@ jobs:
   analyze:
     name: Analyze & test
     runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Record the tested source commit
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
@@ -60,9 +70,9 @@ jobs:
       - name: Create placeholder asset directory
         run: mkdir -p assets/binaries && touch assets/binaries/.gitkeep
 
-      - run: flutter pub get
-      - run: flutter analyze
-      - run: flutter test
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub
 
   build:
     name: Release APK
@@ -77,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.analyze.outputs.source_sha }}
 
       - name: Resolve version and release mode
         id: meta
@@ -131,12 +141,17 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           "$SDKMANAGER" "ndk;$NDK_VERSION" "cmake;$CMAKE_VERSION"
 
-      - name: Resolve latest teapod-core release
+      - name: Resolve pinned teapod-core release
         id: core
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG=$(gh release view -R Wendor/teapod-core --json tagName -q .tagName)
+          TAG=$(tr -d '\r\n' < .github/teapod-core-version.txt)
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::Invalid pinned teapod-core release: $TAG"
+            exit 1
+          fi
+          gh release view "$TAG" -R Wendor/teapod-core > /dev/null
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Cache teapod-core AAR
@@ -190,12 +205,16 @@ jobs:
         if: env.HAS_KEYSTORE != 'true'
         run: echo "::warning::No release keystore secret — the APKs will be signed with the Android debug key."
 
-      - run: flutter pub get
+      - run: flutter pub get --enforce-lockfile
 
       - name: Build release APKs
         run: |
           flutter build apk --release --split-per-abi --no-pub \
             --obfuscate --split-debug-info=build/app/outputs/symbols
+
+      - name: Test Android connection and notification policies
+        working-directory: android
+        run: ./gradlew :app:testReleaseUnitTest
 
       # Asset names carry no version so that
       # /releases/latest/download/teapod-stream-<abi>.apk stays a permanent
@@ -210,6 +229,14 @@ jobs:
             fi
           done
           ls -lh "$DIR"
+
+      - name: Verify APK versions, signatures and bundled assets
+        run: |
+          FLAGS=()
+          if [[ "$HAS_KEYSTORE" == 'true' ]]; then
+            FLAGS+=(--require-release-signature)
+          fi
+          python3 tools/verify_release_apks.py --source-sha "$(git rev-parse HEAD)" "${FLAGS[@]}"
 
       # Release APKs are obfuscated, so a crash from a published build is only
       # readable with these symbols — artifacts expire, releases do not.
@@ -228,7 +255,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: teapod-stream-${{ steps.meta.outputs.version }}-apk
-          path: build/app/outputs/flutter-apk/teapod-stream-*.apk
+          path: |
+            build/app/outputs/flutter-apk/teapod-stream-*.apk
+            build/app/outputs/flutter-apk/release-manifest.json
+            build/app/outputs/flutter-apk/SHA256SUMS
           if-no-files-found: error
           retention-days: 90
 
@@ -247,7 +277,17 @@ jobs:
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
           VERSION="${{ steps.meta.outputs.version }}"
-          ASSETS=()
+          SOURCE_SHA=$(git rev-parse HEAD)
+          # Reusable workflows retain the caller's GITHUB_SHA. The release
+          # must point at the checked out and tested commit instead.
+          if [[ -n "$(git ls-remote origin "refs/tags/$TAG")" ]]; then
+            git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+            if [[ "$(git rev-parse "$TAG^{commit}")" != "$SOURCE_SHA" ]]; then
+              echo "::error::Release tag $TAG does not point at the built source"
+              exit 1
+            fi
+          fi
+          ASSETS=(build/app/outputs/flutter-apk/release-manifest.json build/app/outputs/flutter-apk/SHA256SUMS)
           for ABI in arm64-v8a armeabi-v7a x86_64; do
             APK="build/app/outputs/flutter-apk/teapod-stream-$ABI.apk"
             if [[ -f "$APK" ]]; then
@@ -261,7 +301,7 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "${ASSETS[@]}" --clobber
           else
-            FLAGS=(--title "TeapodStream Nordic $VERSION" --generate-notes --target "$GITHUB_SHA")
+            FLAGS=(--title "TeapodStream Nordic $VERSION" --generate-notes --target "$SOURCE_SHA")
             # --notes is prepended to the generated notes. The core is a
             # prebuilt binary pulled at build time, so pin down which one this
             # release actually shipped.
@@ -271,3 +311,8 @@ jobs:
             fi
             gh release create "$TAG" "${FLAGS[@]}" "${ASSETS[@]}"
           fi
+
+      - name: Remove temporary signing files
+        if: always()
+        run: |
+          rm -f android/key.properties "$RUNNER_TEMP/release.jks"

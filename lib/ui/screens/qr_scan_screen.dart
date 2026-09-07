@@ -119,7 +119,6 @@ class _ScanOverlayPainter extends CustomPainter {
     final left = (size.width - scanSize) / 2;
     final top = (size.height - scanSize) / 2;
 
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), paint);
     final cutoutPath = Path()
       ..addRect(Rect.fromLTWH(left, top, scanSize, scanSize))
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));

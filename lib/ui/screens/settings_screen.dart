@@ -112,10 +112,14 @@ class _SetHeaderStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        spacing: 12,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Text('teapod.stream // config',
               style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
@@ -183,8 +187,8 @@ class _SetHeroPanel extends StatelessWidget {
                 const SizedBox(width: 12),
                 // Lock indicator
                 Container(
-                  width: 54,
-                  height: 54,
+                  width: 64,
+                  constraints: const BoxConstraints(minHeight: 64),
                   decoration: BoxDecoration(
                     border: Border.all(color: borderColor),
                   ),
@@ -197,7 +201,9 @@ class _SetHeroPanel extends StatelessWidget {
                             child: _LockCorner(color: _gold, isTop: false)),
                       ],
                       Center(
-                        child: Column(
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             _LockIcon(color: lockColor, open: !locked),
@@ -206,6 +212,7 @@ class _SetHeroPanel extends StatelessWidget {
                                 style: AppTheme.mono(
                                     size: 8, color: lockColor, letterSpacing: 1)),
                           ],
+                        ),
                         ),
                       ),
                     ],
@@ -639,8 +646,11 @@ class _AppearanceRows extends ConsumerWidget {
         Container(
           padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
           decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 10,
             children: [
               Text('Тема', style: AppTheme.sans(size: 14, color: t.text)),
               SetSegSquare(
@@ -662,8 +672,11 @@ class _AppearanceRows extends ConsumerWidget {
         Container(
           padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
           decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 10,
             children: [
               Text('Размер шрифта', style: AppTheme.sans(size: 14, color: t.text)),
               if (settings != null)
@@ -767,8 +780,9 @@ class _UpdateTile extends ConsumerWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Скачивается v${info.version}',
-                      style: AppTheme.sans(size: 14, color: t.text)),
+                  Expanded(child: Text('Скачивается v${info.version}',
+                      style: AppTheme.sans(size: 14, color: t.text))),
+                  const SizedBox(width: 8),
                   GestureDetector(
                     onTap: () => ref.read(updateProvider.notifier).cancelDownload(),
                     child: Container(
@@ -782,7 +796,7 @@ class _UpdateTile extends ConsumerWidget {
               ),
               const SizedBox(height: 8),
               LinearProgressIndicator(
-                value: total > 0 ? downloaded / total : null,
+                value: total > 0 ? (downloaded / total).clamp(0.0, 1.0) : null,
                 backgroundColor: t.line,
                 color: t.accent,
                 minHeight: 2,
@@ -797,9 +811,9 @@ class _UpdateTile extends ConsumerWidget {
             ],
           ),
         ),
-      UpdateDownloaded(:final info, :final filePath) => _UpdateRow(
+      UpdateDownloaded(:final info, :final filePath, :final installMessage) => _UpdateRow(
           t: t,
-          label: 'v${info.version} готова к установке',
+          label: installMessage ?? 'v${info.version} готова к установке',
           action: _SqBtn(
             t: t, label: 'УСТАНОВИТЬ', filled: true,
             onTap: () => ref.read(updateProvider.notifier).installApk(filePath),

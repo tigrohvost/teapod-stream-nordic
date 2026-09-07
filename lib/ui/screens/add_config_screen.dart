@@ -25,8 +25,9 @@ class _AddConfigScreenState extends ConsumerState<AddConfigScreen> {
   String? _clipboardSuggestion;
 
   static final _uriRe = RegExp(
-      r'^(vless|vmess|trojan|ss|hy2|hysteria2|teapod|https?)://',
-      caseSensitive: false);
+    r'^(vless|vmess|trojan|ss|hy2|hysteria2|teapod|https?)://',
+    caseSensitive: false,
+  );
 
   @override
   void initState() {
@@ -55,7 +56,8 @@ class _AddConfigScreenState extends ConsumerState<AddConfigScreen> {
 
     return Scaffold(
       body: SafeArea(
-        child: Column(
+        child: ListView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           children: [
             // ── Header strip ──────────────────────────────────────
             Container(
@@ -142,7 +144,7 @@ class _AddConfigScreenState extends ConsumerState<AddConfigScreen> {
               ),
             ),
             // ── Body ─────────────────────────────────────────────
-            Expanded(
+            SizedBox(
               child: _loading
                   ? Center(
                       child: CircularProgressIndicator(
@@ -150,146 +152,118 @@ class _AddConfigScreenState extends ConsumerState<AddConfigScreen> {
                         strokeWidth: 1.5,
                       ),
                     )
-                  : ListView(
+                  : Padding(
                       padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-                      children: [
-                        // Input field
-                        Container(
-                          decoration: BoxDecoration(
-                            border: Border.all(color: t.line),
-                          ),
-                          child: TextField(
-                            controller: _uriController,
-                            maxLines: 6,
-                            style: AppTheme.mono(size: 12, color: t.text),
-                            decoration: InputDecoration(
-                              hintText:
-                                  'vless://uuid@host:port?...\nvmess://base64\ntrojan://pass@host:port\nhttps://example.com/sub',
-                              hintStyle: AppTheme.mono(
-                                size: 11,
-                                color: t.textMuted,
-                              ),
-                              contentPadding: const EdgeInsets.all(14),
-                              isDense: true,
-                              border: InputBorder.none,
-                            ),
-                          ),
-                        ),
-                        if (_clipboardSuggestion != null) ...[
-                          const SizedBox(height: 10),
-                          GestureDetector(
-                            onTap: () {
-                              final text = _clipboardSuggestion!;
-                              setState(() {
-                                _uriController.text = text;
-                                _clipboardSuggestion = null;
-                              });
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration:
-                                  BoxDecoration(border: Border.all(color: t.accent)),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.paste_rounded, size: 13, color: t.accent),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      'из буфера: ${_clipboardSuggestion!.length > 48 ? '${_clipboardSuggestion!.substring(0, 48)}…' : _clipboardSuggestion!}',
-                                      style: AppTheme.mono(
-                                          size: 10, color: t.accent, letterSpacing: 0.5),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                        if (_error != null) ...[
-                          const SizedBox(height: 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Input field
                           Container(
-                            padding: const EdgeInsets.all(10),
-                            color: t.danger.withAlpha(0x1A),
-                            child: Text(
-                              _error!,
-                              style: AppTheme.mono(
-                                size: 11,
-                                color: t.danger,
-                                letterSpacing: 0.5,
+                            decoration: BoxDecoration(
+                              border: Border.all(color: t.line),
+                            ),
+                            child: TextField(
+                              controller: _uriController,
+                              autocorrect: false,
+                              enableSuggestions: false,
+                              keyboardType: TextInputType.url,
+                              maxLines: 6,
+                              style: AppTheme.mono(size: 12, color: t.text),
+                              decoration: InputDecoration(
+                                hintText:
+                                    'vless://uuid@host:port?...\nvmess://base64\ntrojan://pass@host:port\nhttps://example.com/sub',
+                                hintStyle: AppTheme.mono(
+                                  size: 11,
+                                  color: t.textMuted,
+                                ),
+                                contentPadding: const EdgeInsets.all(14),
+                                isDense: true,
+                                border: InputBorder.none,
                               ),
                             ),
                           ),
-                        ],
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: _loading ? null : _pasteFromClipboard,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 13,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: t.line),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.paste_rounded,
-                                        size: 14,
-                                        color: t.textDim,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        'ВСТАВИТЬ',
-                                        style: AppTheme.mono(
-                                          size: 11,
-                                          color: t.textDim,
-                                          letterSpacing: 1,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+                          if (_clipboardSuggestion != null) ...[
+                            const SizedBox(height: 10),
+                            GestureDetector(
+                              onTap: () {
+                                final text = _clipboardSuggestion!;
+                                setState(() {
+                                  _uriController.text = text;
+                                  _clipboardSuggestion = null;
+                                });
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: t.accent),
                                 ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: _loading ? null : _import,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 13,
-                                  ),
-                                  color: t.accent,
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.check_rounded,
-                                        size: 14,
-                                        color: t.bg,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        'ДОБАВИТЬ',
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.paste_rounded,
+                                      size: 13,
+                                      color: t.accent,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        'Вставить ссылку из буфера',
                                         style: AppTheme.mono(
-                                          size: 11,
-                                          color: t.bg,
-                                          letterSpacing: 1,
+                                          size: 10,
+                                          color: t.accent,
+                                          letterSpacing: 0.5,
                                         ),
+                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                    ],
-                                  ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ),
                           ],
-                        ),
-                      ],
+                          if (_error != null) ...[
+                            const SizedBox(height: 10),
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              color: t.danger.withAlpha(0x1A),
+                              child: Text(
+                                _error!,
+                                style: AppTheme.mono(
+                                  size: 11,
+                                  color: t.danger,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 16),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: _loading
+                                    ? null
+                                    : _pasteFromClipboard,
+                                icon: const Icon(Icons.paste_rounded, size: 18),
+                                label: const Text('ВСТАВИТЬ'),
+                                style: OutlinedButton.styleFrom(
+                                  minimumSize: const Size(140, 48),
+                                  shape: const RoundedRectangleBorder(),
+                                ),
+                              ),
+                              ElevatedButton.icon(
+                                onPressed: _loading ? null : _import,
+                                icon: const Icon(Icons.check_rounded, size: 18),
+                                label: const Text('ДОБАВИТЬ'),
+                                style: ElevatedButton.styleFrom(
+                                  minimumSize: const Size(140, 48),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
             ),
           ],
@@ -303,7 +277,7 @@ class _AddConfigScreenState extends ConsumerState<AddConfigScreen> {
       context,
       MaterialPageRoute(builder: (_) => const QrScanScreen()),
     ).then((value) {
-      if (value != null && value is String) {
+      if (mounted && value != null && value is String) {
         setState(() => _uriController.text = value);
         _processUri(value);
       }

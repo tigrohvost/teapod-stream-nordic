@@ -315,13 +315,16 @@ class SetSegSquare extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(border: Border.all(color: t.line)),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Wrap(
         children: opts.asMap().entries.map((e) {
           final idx = e.key;
           final (val, lab) = e.value;
           final active = value == val;
-          return GestureDetector(
+          return Semantics(
+            button: true,
+            selected: active,
+            enabled: !locked,
+            child: GestureDetector(
             onTap: locked ? () => showReadonlySnack(context) : () => onChanged(val),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -338,6 +341,7 @@ class SetSegSquare extends StatelessWidget {
                       size: 11,
                       color: active ? t.accent : t.textDim,
                       letterSpacing: 0.5)),
+            ),
             ),
           );
         }).toList(),

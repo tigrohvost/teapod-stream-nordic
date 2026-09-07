@@ -104,37 +104,33 @@ class _HeaderStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 6, 20, 6),
+      width: double.infinity,
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.line, width: 1)),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        spacing: 12,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Text('teapod.stream // $version',
               style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Text('sys.state [$stateCode]',
                   style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
               const SizedBox(width: 12),
-              Semantics(
-                label: 'логи',
-                button: true,
-                child: GestureDetector(
-                  onTap: () => Navigator.push(
+              IconButton(
+                  tooltip: 'Журнал подключения',
+                  onPressed: () => Navigator.push(
                     context,
                     MaterialPageRoute(
                         builder: (_) => const LogsScreen(breadcrumbParent: 'home')),
                   ),
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(border: Border.all(color: t.line)),
-                    child: Icon(Icons.receipt_long_outlined, size: 14, color: t.textDim),
-                  ),
+                  icon: Icon(Icons.receipt_long_outlined, size: 20, color: t.textDim),
                 ),
-              ),
             ],
           ),
         ],
@@ -228,15 +224,18 @@ class _StateInfo extends ConsumerWidget {
     final ipAsync         = ref.watch(ipInfoProvider);
     final hasConfig       = ref.watch(effectiveConfigProvider) != null;
 
-    final stateWord = isBlocked
+    final hasError = vpnState.error != null && !isConn && !vpnState.isBusy && !isBlocked;
+    final stateWord = hasError ? 'ОШИБКА' : isBlocked
         ? 'BLOCKED'
         : isConn
             ? 'ONLINE'
             : (isConnecting ? 'HANDSHAKE' : (isDisconnecting ? 'SHUTDOWN' : 'OFFLINE'));
-    final stateColor = isBlocked ? t.danger : (isConn ? t.accent : t.textDim);
+    final stateColor = isBlocked || hasError ? t.danger : (isConn ? t.accent : t.textDim);
 
     String subtitle;
-    if (isBlocked) {
+    if (hasError) {
+      subtitle = 'Не удалось подключиться. Проверьте сервер и откройте журнал.';
+    } else if (isBlocked) {
       subtitle = 'kill switch · трафик заблокирован';
     } else if (isConn) {
       final ipStr = ipAsync.maybeWhen(data: (d) => d?.ip, orElse: () => null) ?? '—';
@@ -267,6 +266,7 @@ class _StateInfo extends ConsumerWidget {
         ),
         const SizedBox(height: 6),
         Text(subtitle,
+            textAlign: TextAlign.center,
             style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5)),
         if (isBlocked) ...[
           const SizedBox(height: 10),
@@ -349,7 +349,7 @@ class _PowerCoreState extends State<_PowerCore>
     final busy    = widget.isBusy;
     final blocked = widget.isBlocked;
     final actionLabel = !widget.enabled
-        ? 'нет конфига'
+        ? 'добавить конфигурацию'
         : blocked
             ? 'переподключить'
             : conn
@@ -363,8 +363,9 @@ class _PowerCoreState extends State<_PowerCore>
     return Semantics(
       label: actionLabel,
       button: true,
+      enabled: !busy,
       child: GestureDetector(
-      onTap: widget.onTap,
+      onTap: busy ? null : widget.onTap,
       child: SizedBox(
         width: outerSize,
         height: outerSize,

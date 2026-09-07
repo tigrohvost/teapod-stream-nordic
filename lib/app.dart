@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ui/theme/app_theme.dart';
+import 'ui/theme/app_text_scaler.dart';
 import 'ui/theme/app_colors.dart';
 import 'ui/screens/home_screen.dart';
 import 'ui/screens/configs_screen.dart';
@@ -57,7 +58,7 @@ class _TeapodMaterialApp extends ConsumerWidget {
       themeMode: themeMode,
       builder: (ctx, child) => MediaQuery(
         data: MediaQuery.of(ctx).copyWith(
-          textScaler: TextScaler.linear(fontScale),
+          textScaler: AppTextScaler(MediaQuery.textScalerOf(ctx), minimum: fontScale),
         ),
         child: child!,
       ),
@@ -288,6 +289,7 @@ class _ConsoleTabBar extends ConsumerWidget {
                       const SizedBox(height: 4),
                       Text(
                         item.label.toUpperCase(),
+                        textAlign: TextAlign.center,
                         style: AppTheme.mono(
                           size: 10,
                           color: active ? t.accent : t.textMuted,

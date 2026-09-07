@@ -770,14 +770,19 @@ class _CfgHeaderStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final totalStr = total.toString().padLeft(2, '0');
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        spacing: 12,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Text('teapod.stream // configs',
               style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               if (isPinging)
                 SizedBox(

@@ -36,7 +36,8 @@ class UpdateDownloading extends UpdateState {
 class UpdateDownloaded extends UpdateState {
   final UpdateInfo info;
   final String filePath;
-  UpdateDownloaded(this.info, this.filePath);
+  final String? installMessage;
+  UpdateDownloaded(this.info, this.filePath, {this.installMessage});
 }
 
 class UpdateError extends UpdateState {
@@ -46,9 +47,14 @@ class UpdateError extends UpdateState {
 }
 
 class UpdateNotifier extends Notifier<UpdateState> {
-  final _service = UpdateService();
+  UpdateNotifier({UpdateService? service})
+    : _service = service ?? UpdateService();
+
+  final UpdateService _service;
   StreamSubscription<DownloadProgress>? _dlSub;
   String? _currentApkPath;
+  int _checkId = 0;
+  int _downloadId = 0;
 
   static const _channel = MethodChannel(AppConstants.methodChannel);
 
@@ -59,13 +65,18 @@ class UpdateNotifier extends Notifier<UpdateState> {
   }
 
   Future<void> checkForUpdate() async {
+    if (state is UpdateDownloading) return;
+    final checkId = ++_checkId;
     state = UpdateChecking();
     try {
       final pkgInfo = await PackageInfo.fromPlatform();
       final currentVersion = pkgInfo.version;
       final abi = await _channel.invokeMethod<String>('getAbi') ?? 'arm64-v8a';
+      if (!ref.mounted || checkId != _checkId) return;
       final vpn = ref.read(vpnProvider);
-      final settings = ref.read(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
+      final settings = ref
+          .read(settingsProvider)
+          .maybeWhen(data: (d) => d, orElse: () => null);
       final channel = settings?.updateChannel ?? UpdateChannel.stable;
       final update = await _service.checkForUpdate(
         currentVersion,
@@ -76,12 +87,15 @@ class UpdateNotifier extends Notifier<UpdateState> {
         socksPassword: vpn.activeSocksPassword,
         force: true,
       );
+      if (!ref.mounted || checkId != _checkId) return;
       if (update == null) {
         state = UpdateError('Не удалось получить данные о релизе');
         return;
       }
       final path = await _apkPath(update.version, abi);
+      if (!ref.mounted || checkId != _checkId) return;
       await _cleanOldApks(keepPath: path);
+      if (!ref.mounted || checkId != _checkId) return;
       if (compareAppVersions(update.version, currentVersion) > 0) {
         final resumable = File(path).existsSync() ? File(path).lengthSync() : 0;
         state = UpdateAvailable(update, resumableBytes: resumable);
@@ -89,65 +103,111 @@ class UpdateNotifier extends Notifier<UpdateState> {
         state = UpdateUpToDate(update);
       }
     } catch (e) {
-      state = UpdateError('Ошибка проверки: $e');
+      if (ref.mounted && checkId == _checkId) {
+        state = UpdateError('Ошибка проверки: $e');
+      }
     }
   }
 
   Future<void> reinstall(UpdateInfo info) async {
-    final abi = await _channel.invokeMethod<String>('getAbi') ?? 'arm64-v8a';
-    final path = await _apkPath(info.version, abi);
-    if (File(path).existsSync()) await File(path).delete();
-    await startDownload(info);
+    await startDownload(info, restart: true);
   }
 
-  Future<void> startDownload(UpdateInfo info) async {
-    final abi = await _channel.invokeMethod<String>('getAbi') ?? 'arm64-v8a';
-    final path = await _apkPath(info.version, abi);
-    _currentApkPath = path;
-
-    state = UpdateDownloading(info,
-        downloaded: File(path).existsSync() ? File(path).lengthSync() : 0,
-        total: info.totalBytes ?? -1);
-
-    _dlSub = _service.downloadApk(
-      info.downloadUrl,
-      path,
-    ).listen(
-      (progress) {
-        if (progress.done) {
-          state = UpdateDownloaded(info, path);
-          _dlSub = null;
-        } else {
-          state = UpdateDownloading(info,
-              downloaded: progress.downloaded, total: progress.total);
-        }
-      },
-      onError: (e) {
-        state = UpdateError('Ошибка загрузки: $e', retryInfo: info);
-        _dlSub = null;
-      },
+  Future<void> startDownload(UpdateInfo info, {bool restart = false}) async {
+    if (state is UpdateDownloading) return;
+    ++_checkId;
+    final downloadId = ++_downloadId;
+    state = UpdateDownloading(
+      info,
+      downloaded: 0,
+      total: info.totalBytes ?? -1,
     );
+    _currentApkPath = null;
+    try {
+      final abi = await _channel.invokeMethod<String>('getAbi') ?? 'arm64-v8a';
+      final path = await _apkPath(info.version, abi);
+      if (!ref.mounted || downloadId != _downloadId) return;
+      _currentApkPath = path;
+      if (restart && await File(path).exists()) await File(path).delete();
+      if (!ref.mounted || downloadId != _downloadId) return;
+      final vpn = ref.read(vpnProvider);
+      _dlSub = _service
+          .downloadApk(
+            info.downloadUrl,
+            path,
+            socksPort: vpn.isConnected ? vpn.activeSocksPort : null,
+            socksUser: vpn.activeSocksUser,
+            socksPassword: vpn.activeSocksPassword,
+            expectedBytes: info.totalBytes,
+            expectedSha256: info.sha256Digest,
+          )
+          .listen(
+            (progress) {
+              if (!ref.mounted || downloadId != _downloadId) return;
+              if (progress.done) {
+                state = UpdateDownloaded(info, path);
+                _dlSub = null;
+              } else {
+                state = UpdateDownloading(
+                  info,
+                  downloaded: progress.downloaded,
+                  total: progress.total,
+                );
+              }
+            },
+            onError: (e) {
+              if (!ref.mounted || downloadId != _downloadId) return;
+              state = UpdateError('Ошибка загрузки: $e', retryInfo: info);
+              _dlSub = null;
+            },
+          );
+    } catch (e) {
+      if (ref.mounted && downloadId == _downloadId) {
+        state = UpdateError('Ошибка загрузки: $e', retryInfo: info);
+      }
+    }
   }
 
   Future<void> cancelDownload() async {
+    ++_downloadId;
     await _dlSub?.cancel();
     _dlSub = null;
+    if (!ref.mounted) return;
     final cur = state;
     if (cur is UpdateDownloading) {
       final path = _currentApkPath;
-      final resumable =
-          path != null && File(path).existsSync() ? File(path).lengthSync() : 0;
+      final resumable = path != null && File(path).existsSync()
+          ? File(path).lengthSync()
+          : 0;
       state = UpdateAvailable(cur.info, resumableBytes: resumable);
     }
   }
 
   Future<void> installApk(String filePath) async {
+    final ready = state;
+    if (ready is! UpdateDownloaded || ready.filePath != filePath) return;
     try {
       await _channel.invokeMethod<void>('installApk', {'filePath': filePath});
-      await _cleanOldApks(keepPath: filePath);
-      state = UpdateIdle();
+      // Opening the installer is not confirmation of installation. Keep the
+      // verified file available if the user cancels or returns from settings.
+      if (ref.mounted) state = UpdateDownloaded(ready.info, filePath);
     } on PlatformException catch (e) {
-      state = UpdateError(e.message ?? 'Ошибка установки');
+      if (!ref.mounted) return;
+      if (e.code == 'FILE_NOT_FOUND') {
+        state = UpdateError(
+          'APK не найден. Скачайте обновление снова.',
+          retryInfo: ready.info,
+        );
+      } else {
+        state = UpdateDownloaded(
+          ready.info,
+          filePath,
+          installMessage: e.code == 'PERMISSION_REQUIRED'
+              ? 'Разрешите установку из этого источника, вернитесь и нажмите «Установить».'
+              : (e.message ??
+                    'Не удалось открыть установщик. Повторите попытку.'),
+        );
+      }
     }
   }
 
@@ -159,7 +219,8 @@ class UpdateNotifier extends Notifier<UpdateState> {
   Future<void> _cleanOldApks({String? keepPath}) async {
     final dir = await getApplicationSupportDirectory();
     for (final f in dir.listSync().whereType<File>()) {
-      if (f.path.contains('teapod-update-') && f.path.endsWith('.apk')) {
+      if (f.uri.pathSegments.last.startsWith('teapod-update-') &&
+          f.path.endsWith('.apk')) {
         if (keepPath == null || f.path != keepPath) {
           await f.delete();
         }
@@ -168,5 +229,6 @@ class UpdateNotifier extends Notifier<UpdateState> {
   }
 }
 
-final updateProvider =
-    NotifierProvider<UpdateNotifier, UpdateState>(UpdateNotifier.new);
+final updateProvider = NotifierProvider<UpdateNotifier, UpdateState>(
+  UpdateNotifier.new,
+);

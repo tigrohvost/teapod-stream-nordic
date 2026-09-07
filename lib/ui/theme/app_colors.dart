@@ -27,7 +27,8 @@ class AppColors {
   static const lineSoftDark = nord2;
   static const textDark = nord6;
   static const textDimDark = nord5;
-  static const textMutedDark = nord3;
+  // Nord3 is a border color (1.69:1 on Nord0), too dim for labels.
+  static const textMutedDark = Color(0xFFB2BED1);
 
   // ── Light palette ─────────────────────────────────────────────
   static const bgLight = nord6;

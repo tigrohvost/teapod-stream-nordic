@@ -118,10 +118,14 @@ class _RoutingBody extends StatelessWidget {
       children: [
         // ── Console header strip ────────────────────────────────
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
           decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+        spacing: 12,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text('teapod.stream // route',
                   style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),

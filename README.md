@@ -5,7 +5,7 @@
 [![Build APK](https://github.com/tigrohvost/teapod-stream-nordic/actions/workflows/build.yml/badge.svg)](https://github.com/tigrohvost/teapod-stream-nordic/actions/workflows/build.yml)
 [![Последний релиз](https://img.shields.io/github/v/release/tigrohvost/teapod-stream-nordic?style=for-the-badge&labelColor=2E3440&color=A3BE8C&label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK)](https://github.com/tigrohvost/teapod-stream-nordic/releases/latest)
 [![Fork: teapod-stream](https://img.shields.io/badge/upstream-Wendor%2Fteapod--stream-88C0D0?style=for-the-badge&labelColor=2E3440)](https://github.com/Wendor/teapod-stream)
-[![Flutter 3.11+](https://img.shields.io/badge/Flutter-3.11%2B-81A1C1?style=for-the-badge&labelColor=2E3440&logo=flutter)](https://flutter.dev/)
+[![Flutter 3.41.9](https://img.shields.io/badge/Flutter-3.41.9-81A1C1?style=for-the-badge&labelColor=2E3440&logo=flutter)](https://flutter.dev/)
 [![Android 10+](https://img.shields.io/badge/Android-10%2B-A3BE8C?style=for-the-badge&labelColor=2E3440&logo=android)](https://developer.android.com/)
 [![Xray Core](https://img.shields.io/badge/Xray-core-B48EAD?style=for-the-badge&labelColor=2E3440)](https://github.com/XTLS/Xray-core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-EBCB8B?style=for-the-badge&labelColor=2E3440)](./LICENSE)
@@ -148,6 +148,8 @@
 
 ### Интерфейс
 
+- системный размер текста, переносы на узких экранах и прокручиваемая форма импорта при открытой клавиатуре;
+- более контрастные подписи в тёмной теме; Inter Tight и JetBrains Mono включены в APK и доступны без сети;
 - Nord-цветовая схема и более цельные визуальные акценты;
 - кастомная круглая кнопка с изображением опоссума на главном экране;
 - локальные улучшения читаемости UI и отдельных пользовательских сценариев;
@@ -155,6 +157,7 @@
 
 ### Безопасность и приватность
 
+- Обновление проверяет размер APK и SHA-256 из метаданных GitHub до установки; ошибочный ответ докачки не считается готовым файлом. После выдачи разрешения Android скачанный APK остаётся доступен для повторной установки.
 - **Удалён экспортируемый broadcast-ресивер `VpnCommandReceiver`** (`com.teapodstream.CONNECT` / `.DISCONNECT`). В upstream любое приложение на устройстве может включать и выключать VPN без подтверждения пользователя; в форке эта поверхность атаки убрана (ценой потери интеграции с Tasker/MacroDroid).
 - **Имя пользователя SOCKS5 не пишется в логи** — в журнале остаётся только факт наличия авторизации (`auth=true/false`), а не сами учётные данные.
 - Встроенное автообновление скачивает релизы из этого репозитория, а не из upstream: APK форка подписаны собственным ключом, и «обновление» на upstream-сборку не встало бы поверх установленного приложения.
@@ -182,7 +185,7 @@
 
 - Flutter SDK `3.11+`
 - Dart SDK `^3.11.4`
-- Java `21+`
+- Java `17` (как в CI)
 - Android SDK
 - Android NDK `28.2.13676358`
 - CMake `3.22.1`
@@ -224,7 +227,9 @@ Workflow: [`.github/workflows/build.yml`](.github/workflows/build.yml).
 Что делает:
 
 - `analyze` — `flutter analyze` и `flutter test` на каждый push и pull request;
-- `build` — release APK (split per ABI, с обфускацией) с именами без версии (`teapod-stream-<abi>.apk`), чтобы ссылки `/releases/latest/download/...` не протухали; сам скачивает `teapod-core.aar` из последнего релиза [Wendor/teapod-core](https://github.com/Wendor/teapod-core) и geodata, ставит NDK `28.2.13676358` и CMake `3.22.1`.
+- `build` — release APK (split per ABI, с обфускацией) с именами без версии (`teapod-stream-<abi>.apk`), чтобы ссылки `/releases/latest/download/...` не протухали; скачивает `teapod-core.aar` из релиза [Wendor/teapod-core](https://github.com/Wendor/teapod-core), закреплённого в `.github/teapod-core-version.txt`, и geodata, ставит NDK `28.2.13676358` и CMake `3.22.1`.
+- анализ и сборка используют один и тот же коммит и `pubspec.lock`; после сборки выполняются JVM-тесты VPN и проверка каждого APK: подпись, package ID, версия, ABI, наличие ядра, geodata и шрифтов;
+- вместе с APK сохраняются `SHA256SUMS` и `release-manifest.json`: коммит исходников, версия ядра, сертификат и хеши файлов. Тег релиза должен указывать на собранный коммит. Публикация проверяет прежний сертификат подписи для обновления без удаления данных.
 
 Когда запускается:
 
@@ -253,7 +258,7 @@ Workflow: [`.github/workflows/watch-core.yml`](.github/workflows/watch-core.yml)
 - первый запуск с пустым `teapod-core-version.txt` только записывает текущее ядро, релиз не выпускает;
 - патч упирается в 99 из-за схемы `versionCode` — дальше нужен ручной бамп minor;
 - GitHub отключает `schedule` в репозиториях без активности 60 дней, тогда достаточно один раз нажать `Run workflow`;
-- сборка публикуется только после зелёных `flutter analyze` и `flutter test`;
+- сборка публикуется только после зелёных `flutter analyze`, `flutter test`, JVM-тестов и проверки APK;
 - если сборка всё же упала — бамп версии откатывается, тег удаляется, заводится issue, следующая проверка пробует снова.
 
 ### Секреты для подписи

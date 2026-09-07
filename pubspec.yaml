@@ -1,7 +1,7 @@
 name: teapodstream
 description: "VPN client supporting xray protocol with TUN interface"
 publish_to: 'none'
-version: 1.6.3+10603
+version: 1.6.4+10604
 
 environment:
   sdk: ^3.11.4
@@ -25,6 +25,7 @@ dependencies:
 
   # Networking
   http: ^1.2.2
+  crypto: ^3.0.7
 
   # Utilities
   uuid: ^4.5.1
@@ -60,3 +61,4 @@ flutter:
   assets:
     - assets/binaries/
     - assets/brave_opossum.png
+    - assets/fonts/
