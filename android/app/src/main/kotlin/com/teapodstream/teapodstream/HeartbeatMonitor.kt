@@ -20,7 +20,13 @@ import java.util.concurrent.atomic.AtomicInteger
  * All interaction with the service and the Go core goes through [Deps], so the
  * monitor can be unit-tested with fakes.
  */
-internal class HeartbeatMonitor(private val deps: Deps) {
+internal class HeartbeatMonitor(
+    private val deps: Deps,
+    // Timings are injectable only so tests can run the loop in milliseconds.
+    private val intervalMs: Long = INTERVAL_MS,
+    private val warmupTimeoutMs: Long = WARMUP_TIMEOUT_MS,
+    private val retryDelayMs: Long = RETRY_DELAY_MS,
+) {
 
     /** Everything the monitor needs from the outside world. */
     interface Deps {
@@ -36,7 +42,19 @@ internal class HeartbeatMonitor(private val deps: Deps) {
         fun tunLastRxActivityMs(): Long
         fun tunStatsLine(): String
         fun hasDirectInternet(): Boolean
-        fun requestReconnect()
+        /**
+         * @param afterProbeFailure true when the tunnel was declared dead by failing
+         *   end-to-end probes (as opposed to a local tun2socks problem); the service
+         *   counts these to back off while the server stays unreachable.
+         */
+        fun requestReconnect(afterProbeFailure: Boolean = false)
+        /** Called after every successful end-to-end probe. */
+        fun onProbeSuccess()
+        /**
+         * How long a probe-failure reconnect is deferred, keeping the current session
+         * up and probing meanwhile. 0 = reconnect right away.
+         */
+        fun reconnectBackoffMs(): Long
         fun log(level: String, message: String)
     }
 
@@ -51,15 +69,37 @@ internal class HeartbeatMonitor(private val deps: Deps) {
         // self-adjusts to actual network speed instead of relying on a fixed timer. Hard ceiling:
         // if no probe succeeds within WARMUP_TIMEOUT_MS → something is genuinely broken.
         const val WARMUP_TIMEOUT_MS = 30_000L
+        // Pause before each of the two quick re-probes after a single failure.
+        const val RETRY_DELAY_MS = 3_000L
         // If tun2socks has more than this many active proxy goroutines the gVisor TCP
         // state machine is leaking connections. Trigger a reconnect to reset it.
         const val TUN_CONN_LEAK_THRESHOLD = 200L
         // If no data has reached the TUN interface for this long while ≥2 connections
-        // are active, tun2socks goroutines are stuck (proxy connections held alive by
-        // keepalives but real data not flowing). SOCKS5 heartbeat won't catch this.
-        const val TUN_STALL_TIMEOUT_MS = 120_000L
+        // are active, tun2socks goroutines are stuck. lastRx moves on any TUN write
+        // (ACKs included), so a quiet TUN usually just means idle apps — the timeout
+        // is kept above xray's connIdle (XrayDefaults.connIdleTimeout, 300 s): by then
+        // xray has closed genuinely idle connections, and whatever is still counted
+        // is a stuck entry rather than an idle app.
+        const val TUN_STALL_TIMEOUT_MS = 360_000L
+        // Screen-on check: after this much TUN silence the session is probed once
+        // end-to-end (and only reconnected if the probe fails).
+        const val WAKE_PROBE_IDLE_MS = 120_000L
         const val MAX_FAILURES = 3
         const val PROBE_DEST_HOST = "cp.cloudflare.com"
+        private const val RECONNECT_BACKOFF_BASE_MS = 15_000L
+        private const val RECONNECT_BACKOFF_MAX_MS = 300_000L
+
+        /**
+         * Delay before the next probe-failure reconnect, given how many such reconnects
+         * in a row never got a single successful probe: 0, 15 s, 30 s, 60 s … capped at
+         * 5 min. Without it an unreachable server made the monitor rebuild the tunnel
+         * every ~60 s forever.
+         */
+        fun backoffForStreak(streak: Int): Long {
+            if (streak <= 0) return 0L
+            val shift = (streak - 1).coerceAtMost(5)
+            return (RECONNECT_BACKOFF_BASE_MS shl shift).coerceAtMost(RECONNECT_BACKOFF_MAX_MS)
+        }
 
         /**
          * SOCKS5 greeting + optional username/password auth + CONNECT to
@@ -169,15 +209,35 @@ internal class HeartbeatMonitor(private val deps: Deps) {
             var noInternetStreak = 0
             var successCount = 0
             var lastStallWarnAt = 0L
+            // When a probe-failure reconnect is being deferred (backoff), the time it
+            // becomes due. Cleared by any successful probe.
+            var reconnectDueAt = 0L
+
+            // Returns true when the reconnect was requested and the loop must exit;
+            // false while it is deferred and the session is kept up.
+            fun reconnectAfterProbeFailure(reason: String): Boolean {
+                val backoff = deps.reconnectBackoffMs()
+                val now = System.currentTimeMillis()
+                if (backoff <= 0L || (reconnectDueAt != 0L && now >= reconnectDueAt)) {
+                    deps.log("warning", reason)
+                    deps.requestReconnect(afterProbeFailure = true)
+                    return true
+                }
+                if (reconnectDueAt == 0L) {
+                    reconnectDueAt = now + backoff
+                    deps.log("warning", "$reason; server unreachable since the last reconnect, next attempt in ${backoff / 1000}s")
+                }
+                return false
+            }
 
             while (!Thread.currentThread().isInterrupted && deps.running) {
                 try {
-                    Thread.sleep(INTERVAL_MS)
+                    Thread.sleep(intervalMs)
                     if (!deps.running) break
                     // Start deadline from first actual probe — not from thread creation,
                     // which may be long before xray is ready after a slow reconnect.
                     if (!warmupDone && warmupDeadline == 0L) {
-                        warmupDeadline = System.currentTimeMillis() + WARMUP_TIMEOUT_MS
+                        warmupDeadline = System.currentTimeMillis() + warmupTimeoutMs
                     }
                     val port = deps.socksPort
                     if (port <= 0) continue
@@ -208,6 +268,7 @@ internal class HeartbeatMonitor(private val deps: Deps) {
                     warmupDone = true
                     failures.set(0)
                     noInternetStreak = 0
+                    reconnectDueAt = 0L
                     successCount++
                     if (successCount % 5 == 0) {
                         val activeConns = if (deps.tunModeActive) deps.tunActiveConnections() else 0L
@@ -262,7 +323,7 @@ internal class HeartbeatMonitor(private val deps: Deps) {
                     // guaranteed stale (QUIC/TCP connection to the server was dead while we
                     // had no route). Skip the normal 3-failure wait and reconnect immediately.
                     if (noInternetStreak >= 3) {
-                        val absenceSec = noInternetStreak * (INTERVAL_MS / 1000)
+                        val absenceSec = noInternetStreak * (intervalMs / 1000)
                         noInternetStreak = 0
                         deps.log("warning", "Tunnel stale after ${absenceSec}s network absence, reconnecting")
                         deps.requestReconnect()
@@ -274,9 +335,8 @@ internal class HeartbeatMonitor(private val deps: Deps) {
                             deps.log("debug", "Heartbeat warmup probe failed: ${e.message}")
                             continue
                         }
-                        deps.log("warning", "Heartbeat warmup timed out (30 s), reconnecting")
-                        deps.requestReconnect()
-                        break
+                        if (reconnectAfterProbeFailure("Heartbeat warmup timed out (30 s), reconnecting")) break
+                        continue
                     }
                     val failureCount = failures.incrementAndGet()
                     deps.log("warning", "Heartbeat failed ($failureCount): ${e.message}")
@@ -290,17 +350,17 @@ internal class HeartbeatMonitor(private val deps: Deps) {
                             failures.set(0)
                             continue
                         }
-                        deps.log("warning", "Heartbeat failed $failureCount times, reconnecting")
-                        deps.requestReconnect()
-                        break
+                        if (reconnectAfterProbeFailure("Heartbeat failed $failureCount times, reconnecting")) break
+                        continue
                     }
                     var immediateRetries = 0
                     while (immediateRetries < 2 && !Thread.currentThread().isInterrupted) {
                         try {
-                            Thread.sleep(3000)
+                            Thread.sleep(retryDelayMs)
                             probeOverSocket(deps.socksPort)
                             warmupDone = true
                             failures.set(0)
+                            reconnectDueAt = 0L
                             break
                         } catch (_: InterruptedException) {
                             break
@@ -314,9 +374,7 @@ internal class HeartbeatMonitor(private val deps: Deps) {
                             failures.set(0)
                             continue
                         }
-                        deps.log("warning", "Heartbeat retries exhausted, reconnecting")
-                        deps.requestReconnect()
-                        break
+                        if (reconnectAfterProbeFailure("Heartbeat retries exhausted, reconnecting")) break
                     }
                 }
             }
@@ -328,7 +386,7 @@ internal class HeartbeatMonitor(private val deps: Deps) {
     private fun isTunRxFresh(): Boolean {
         if (!deps.tunModeActive) return false
         val lastRx = deps.tunLastRxActivityMs()
-        return lastRx > 0 && System.currentTimeMillis() - lastRx < INTERVAL_MS
+        return lastRx > 0 && System.currentTimeMillis() - lastRx < intervalMs
     }
 
     fun stop() {
@@ -336,6 +394,21 @@ internal class HeartbeatMonitor(private val deps: Deps) {
         thread?.interrupt()
         thread = null
         failures.set(0)
+    }
+
+    /**
+     * One end-to-end probe outside the loop (e.g. when the screen turns on).
+     * Blocks for up to the socket timeout — never call it on the main thread.
+     */
+    fun probeOnce(): Boolean {
+        val port = deps.socksPort
+        if (port <= 0) return false
+        return try {
+            probeOverSocket(port)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /** Connects to the local SOCKS proxy and runs [probeSocks5] over the socket. */
@@ -347,6 +420,7 @@ internal class HeartbeatMonitor(private val deps: Deps) {
             val (user, password) = deps.socksAuth()
             probeSocks5(socket.getInputStream(), socket.getOutputStream(), user, password)
             failures.set(0)
+            deps.onProbeSuccess()
             deps.log("debug", "Heartbeat OK")
         } catch (e: ProbeException) {
             deps.log("warning", "Heartbeat check failed at [${e.stage}]: ${e.detail}")

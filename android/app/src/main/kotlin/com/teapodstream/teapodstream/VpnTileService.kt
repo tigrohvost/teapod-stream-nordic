@@ -53,7 +53,10 @@ class VpnTileService : TileService() {
     override fun onClick() {
         super.onClick()
         val currentState = XrayVpnService.getNativeState()
-        val isDisconnect = currentState == "connected" || currentState == "connecting"
+        // "reconnecting" too: a tap must be able to stop a native reconnect cycle,
+        // not queue another connect on top of it.
+        val isDisconnect = currentState == "connected" || currentState == "connecting" ||
+            currentState == "reconnecting"
 
         setIntermediateState(isDisconnect)
 
@@ -84,6 +87,11 @@ class VpnTileService : TileService() {
             "connecting", "disconnecting" -> {
                 tile.state = Tile.STATE_UNAVAILABLE
                 setSubtitle(if (vpnState == "connecting") "Подключение…" else "Отключение…")
+            }
+            "reconnecting" -> {
+                // Stays clickable: tapping cancels the reconnect (see onClick).
+                tile.state = Tile.STATE_ACTIVE
+                setSubtitle("Переподключение…")
             }
             "blocked" -> {
                 tile.state = Tile.STATE_INACTIVE

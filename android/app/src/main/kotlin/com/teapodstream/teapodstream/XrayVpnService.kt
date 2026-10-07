@@ -127,6 +127,9 @@ class XrayVpnService : VpnService() {
         // silently leaving the VPN off (and, with kill switch, traffic leaking).
         private const val MAX_RECONNECT_ATTEMPTS = 3
         private const val RECONNECT_RETRY_BASE_MS = 5_000L
+        // Second screen-on probe, so one probe lost to a radio still waking up
+        // doesn't cost a full reconnect.
+        private const val WAKE_PROBE_RETRY_MS = 3_000L
 
         @Volatile private var totalUpload: Long = 0
         @Volatile private var totalDownload: Long = 0
@@ -175,7 +178,6 @@ class XrayVpnService : VpnService() {
     @Volatile private var lastConnectedMs: Long = 0L
     private var prefixProxy: PrefixTcpProxy? = null
     @Volatile private var showNotification = true
-    private var wakeLock: PowerManager.WakeLock? = null
     private var screenReceiver: android.content.BroadcastReceiver? = null
     private var killSwitchEnabled = false
     @Volatile private var allowIcmpEnabled = true
@@ -187,6 +189,12 @@ class XrayVpnService : VpnService() {
     @Volatile private var lastSpeedNotificationText: String? = null
     private var pendingNetworkRunnable: Runnable? = null
     private val reconnectAttempts = AtomicInteger(0)
+    // Heartbeat reconnects in a row that never saw a successful probe (server
+    // unreachable while the network is fine). Drives HeartbeatMonitor's backoff;
+    // reset by any successful probe or an explicit connect.
+    private val unhealthyReconnects = AtomicInteger(0)
+    // Set while a screen-on probe runs, so quick screen toggles can't stack probes.
+    private val wakeProbeInFlight = AtomicBoolean(false)
     @Volatile private var notificationChannelsReady = false
     private val heartbeat = HeartbeatMonitor(object : HeartbeatMonitor.Deps {
         override val running: Boolean get() = isRunning.get()
@@ -199,7 +207,12 @@ class XrayVpnService : VpnService() {
         override fun tunLastRxActivityMs() = Teapodcore.getTunLastRxActivityMs()
         override fun tunStatsLine(): String = Teapodcore.getTunStatsLine()
         override fun hasDirectInternet() = this@XrayVpnService.hasDirectInternet()
-        override fun requestReconnect() = reconnectInternal()
+        override fun requestReconnect(afterProbeFailure: Boolean) {
+            if (afterProbeFailure) unhealthyReconnects.incrementAndGet()
+            reconnectInternal()
+        }
+        override fun onProbeSuccess() = unhealthyReconnects.set(0)
+        override fun reconnectBackoffMs() = HeartbeatMonitor.backoffForStreak(unhealthyReconnects.get())
         override fun log(level: String, message: String) = this@XrayVpnService.log(level, message)
     })
 
@@ -276,6 +289,17 @@ class XrayVpnService : VpnService() {
                 return START_STICKY
             }
             ACTION_CONNECT -> {
+                if (isRunning.get()) {
+                    // Connect for a session that is already up — typically the UI
+                    // auto-connecting before the EventChannel replay told it the service
+                    // runs. Persisting these params would desync them from the running
+                    // xray_config.json, and the next native reconnect would start
+                    // tun2socks on a SOCKS port xray never listens on.
+                    ensureForeground()
+                    log("info", "CONNECT ignored: VPN already running")
+                    replayStateToUi()
+                    return START_STICKY
+                }
                 showNotification = intent.getBooleanExtra(EXTRA_SHOW_NOTIFICATION, true)
                 val xrayConfig = intent.getStringExtra(EXTRA_XRAY_CONFIG) ?: ""
                 val socksPort = intent.getIntExtra(EXTRA_SOCKS_PORT, 10808)
@@ -291,18 +315,20 @@ class XrayVpnService : VpnService() {
                 val blockQuic = intent.getBooleanExtra(EXTRA_BLOCK_QUIC, false)
                 val ipv6Enabled = intent.getBooleanExtra(EXTRA_IPV6, false)
                 val mtu = intent.getIntExtra(EXTRA_MTU, 1500).coerceIn(576, 9000)
-                // Persist non-sensitive params for CONNECT_QUICK reconnect (no credentials)
-                ConnectionParams(socksPort, excludedPackages, includedPackages,
+                // Non-sensitive params for CONNECT_QUICK reconnect (no credentials).
+                // Saved by startVpn only once it owns the session, together with
+                // xray_config.json, so the two can never describe different sessions.
+                val params = ConnectionParams(socksPort, excludedPackages, includedPackages,
                     vpnMode, ssPrefix, proxyOnly, showNotification, killSwitch, allowIcmp, blockQuic, ipv6Enabled, mtu)
-                    .save(filesDir, ::log)
                 userRequestedDisconnect.set(false)
                 reconnectAttempts.set(0)
+                unhealthyReconnects.set(0)
                 try { File(filesDir, "user_disconnected.flag").delete() } catch (_: Exception) {}
                 ensureForeground()
                 Thread {
                     startVpn(xrayConfig, socksPort, socksUser, socksPassword,
                         excludedPackages, includedPackages, vpnMode, ssPrefix, proxyOnly, killSwitch,
-                        allowIcmp, blockQuic, ipv6Enabled, mtu = mtu)
+                        allowIcmp, blockQuic, ipv6Enabled, mtu = mtu, paramsToPersist = params)
                 }.start()
                 return START_STICKY
             }
@@ -322,6 +348,9 @@ class XrayVpnService : VpnService() {
                 if (params != null && configFile.exists()) {
                     val needsPermission = !params.proxyOnly && VpnService.prepare(this) != null
                     if (needsPermission) {
+                        // A native reconnect has already announced "reconnecting";
+                        // without this the UI would wait on it forever.
+                        setState(idleState())
                         openApp()
                     } else {
                         userRequestedDisconnect.set(false)
@@ -361,6 +390,7 @@ class XrayVpnService : VpnService() {
                         }.start()
                     }
                 } else {
+                    setState(idleState())
                     openApp()
                 }
                 return START_STICKY
@@ -452,8 +482,14 @@ class XrayVpnService : VpnService() {
         ipv6Enabled: Boolean = false,
         mtu: Int = 1500,
         isReconnect: Boolean = false,
+        paramsToPersist: ConnectionParams? = null,
     ) {
-        if (!isRunning.compareAndSet(false, true)) return
+        if (!isRunning.compareAndSet(false, true)) {
+            log("info", "startVpn skipped: VPN already running")
+            replayStateToUi()
+            return
+        }
+        paramsToPersist?.save(filesDir, ::log)
         // Keep the previous TUN (kill-switch sink left by a reconnect) open until the
         // new one is established: establish() atomically replaces the interface, so
         // app traffic is blackholed by the old TUN instead of leaking while xray starts.
@@ -469,6 +505,7 @@ class XrayVpnService : VpnService() {
         setState(if (isReconnect) "reconnecting" else "connecting")
         log("info", "Starting VPN (MTU: $tunMtu)")
 
+        var tun2socksStarted = false
         try {
             // Enable prefix proxy only when the ss:// URL contains ?prefix=.
             val finalConfig = if (ssPrefix != null) {
@@ -477,8 +514,11 @@ class XrayVpnService : VpnService() {
                 xrayConfig
             }
 
+            // Save the config as received, not finalConfig: CONNECT_QUICK re-applies
+            // ssPrefix on load, and a saved copy already pointing at this session's
+            // 127.0.0.1:<port> prefix proxy would chain the next one to a dead port.
             val configFile = File(filesDir, "xray_config.json")
-            configFile.writeText(finalConfig)
+            configFile.writeText(xrayConfig)
             prepareBinaries(this)
 
             // Set up xray asset path before starting
@@ -490,10 +530,10 @@ class XrayVpnService : VpnService() {
                 try { previousTun?.close() } catch (_: Exception) {}
 
                 startXrayAndWait(finalConfig)
+                ensureNotStoppedDuringStart()
 
                 log("info", "xray started (proxy-only, SOCKS on port $socksPort)")
                 startStatsMonitoring()
-                acquireWakeLock()
                 setConnected(socksPort, socksUser, socksPassword)
                 heartbeat.start(isReconnect)
                 log("info", "Proxy-only mode active")
@@ -559,6 +599,7 @@ class XrayVpnService : VpnService() {
 
                 // 1. Start xray-core (in-process library, not subprocess)
                 startXrayAndWait(finalConfig)
+                ensureNotStoppedDuringStart()
                 log("info", "xray started")
 
                 // 2. Resolve UIDs for split tunneling (tun2socks validator level)
@@ -578,17 +619,34 @@ class XrayVpnService : VpnService() {
                     validator
                 )
                 if (tunErr.isNotEmpty()) throw IllegalStateException("tun2socks: $tunErr")
+                tun2socksStarted = true
+                ensureNotStoppedDuringStart()
 
                 log("info", "tun2socks started successfully")
 
                 startStatsMonitoring()
                 registerNetworkCallback()
-                acquireWakeLock()
                 setConnected(socksPort, socksUser, socksPassword)
                 heartbeat.start(isReconnect)
                 log("info", "VPN connected successfully")
             }
         } catch (e: Exception) {
+            if (e is StartCancelledException) {
+                // The stop (explicit: a disconnect or a revoke — reconnect triggers
+                // aren't armed yet) already ran stopVpn; it may have passed before the
+                // TUN below was established, so drop whatever this attempt created.
+                log("info", "Start cancelled: VPN was stopped while starting")
+                // A tun2socks engine left running would also make the next start
+                // fail with "already started".
+                if (tun2socksStarted) {
+                    Thread { try { Teapodcore.stopTun2Socks() } catch (_: Exception) {} }
+                        .apply { isDaemon = true; start(); join(STOP_THREAD_TIMEOUT_MS) }
+                }
+                try { tunInterface?.close() } catch (_: Exception) {}
+                tunInterface = null
+                try { previousTun?.close() } catch (_: Exception) {}
+                return
+            }
             log("error", "Start failed: ${e.message}")
             // If no new TUN was established, restore the old kill-switch sink so
             // stopVpn keeps blocking traffic; otherwise the old fd is obsolete.
@@ -632,6 +690,31 @@ class XrayVpnService : VpnService() {
 
         if (!latch.await(30, TimeUnit.SECONDS)) throw IllegalStateException("xray start timeout (30s)")
         if (failed.get()) throw IllegalStateException("xray failed to start")
+    }
+
+    /**
+     * A disconnect that lands while xray is starting runs stopVpn concurrently; its
+     * StopXray also fires the start callback ("Core stopped", status 0), which looks
+     * like success. Bail out instead of bringing tun2socks up for a dead session.
+     */
+    private fun ensureNotStoppedDuringStart() {
+        if (!isRunning.get()) throw StartCancelledException()
+    }
+
+    private class StartCancelledException : IllegalStateException("stopped while starting")
+
+    /** State to report while no session runs: a kept kill-switch sink still blocks traffic. */
+    private fun idleState(): String =
+        if (!isRunning.get() && tunInterface != null) "blocked" else "disconnected"
+
+    /** Re-sends the current state so the UI can drop a stale connect attempt. */
+    private fun replayStateToUi() {
+        val state = currentNativeState
+        if (state == "connected") {
+            VpnEventStreamHandler.sendConnectedEvent(activeSocksPort, activeSocksUser, activeSocksPassword)
+        } else {
+            VpnEventStreamHandler.sendStateEvent(state)
+        }
     }
 
     /**
@@ -782,17 +865,6 @@ class XrayVpnService : VpnService() {
         stopSelf()
     }
 
-    private fun acquireWakeLock() {
-        try {
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
-            wakeLock?.release()
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TeapodStream:VpnWakeLock")
-            wakeLock?.acquire()
-        } catch (e: Exception) {
-            log("warning", "Failed to acquire wake lock: ${e.message}")
-        }
-    }
-
     /** Закрывает TUN-sink kill switch'а, если сервис уже остановлен. */
     private fun closeTunSink() {
         if (isRunning.get()) return
@@ -813,9 +885,6 @@ class XrayVpnService : VpnService() {
         lastConnectedMs = 0L
         pendingNetworkRunnable?.let { networkChangeHandler.removeCallbacks(it) }
         pendingNetworkRunnable = null
-
-        try { wakeLock?.release() } catch (_: Exception) {}
-        wakeLock = null
 
         var keptTunAsSink = false
         try {
@@ -923,6 +992,9 @@ class XrayVpnService : VpnService() {
             } else {
                 // Clear credentials so startVpn picks up fresh ones from configFile
                 _socksCredentials.set(SocksCredentials(0, "", ""))
+                // The reconnect can wait up to 30 s for the network; without this the
+                // UI and the tile kept showing "connected" over a torn-down tunnel.
+                setState("reconnecting")
             }
             log("info", "stopVpn: done (state=${if (reconnecting) "reconnecting" else if (keptTunAsSink) "blocked" else resultState})")
         }
@@ -963,16 +1035,44 @@ class XrayVpnService : VpnService() {
     }
 
     private fun checkTunStallOnWake() {
-        if (!tunModeActive || !isRunning.get()) return
+        // Only for an established session: during startVpn the probe can't pass yet.
+        if (!tunModeActive || !isRunning.get() || currentNativeState != "connected") return
         val lastRx = Teapodcore.getTunLastRxActivityMs()
         if (lastRx <= 0) return
         val idleSec = (System.currentTimeMillis() - lastRx) / 1000
-        if (idleSec < HeartbeatMonitor.TUN_STALL_TIMEOUT_MS / 1000) return
-        // Don't require activeConns >= 2: after Doze, connections drain to 0 naturally
-        // but the tunnel session (xray upstream) may be stale for new connections.
-        val activeConns = Teapodcore.tunActiveConnections()
-        log("warning", "TUN stall on wake: no data for ${idleSec}s (conns=$activeConns), reconnecting")
-        reconnectInternal()
+        if (idleSec < HeartbeatMonitor.WAKE_PROBE_IDLE_MS / 1000) return
+        // After Doze the xray upstream may be stale for new connections — but a quiet
+        // TUN mostly means nobody used the phone. Reconnecting on every such unlock
+        // cut all open connections right as the user picked the phone up (~3/4 of
+        // all reconnects in a day of field logs), so check the tunnel end-to-end
+        // first and reconnect only when it is actually dead.
+        if (!wakeProbeInFlight.compareAndSet(false, true)) return
+        Thread {
+            try {
+                if (heartbeat.probeOnce()) {
+                    log("info", "Wake check: tunnel alive after ${idleSec}s idle, keeping session")
+                    return@Thread
+                }
+                if (!isRunning.get()) return@Thread
+                if (!hasDirectInternet()) {
+                    // The network is still coming back; the network callback and the
+                    // heartbeat take over once it does.
+                    log("info", "Wake check: probe failed without direct internet, deferring to network callback")
+                    return@Thread
+                }
+                Thread.sleep(WAKE_PROBE_RETRY_MS)
+                if (!isRunning.get()) return@Thread
+                if (heartbeat.probeOnce()) {
+                    log("info", "Wake check: tunnel alive on retry, keeping session")
+                    return@Thread
+                }
+                log("warning", "TUN stale on wake: no data for ${idleSec}s and probes failed, reconnecting")
+                reconnectInternal()
+            } catch (_: InterruptedException) {
+            } finally {
+                wakeProbeInFlight.set(false)
+            }
+        }.also { it.isDaemon = true; it.start() }
     }
 
     private fun startStatsMonitoring() {
@@ -1048,7 +1148,9 @@ class XrayVpnService : VpnService() {
                     // app-level freezes (Telegram, etc.) because the SOCKS5 heartbeat cannot
                     // observe per-connection gVisor state. Closing them now forces apps to
                     // reconnect through a clean path when the network comes back.
-                    if (tunModeActive && isRunning.get()) {
+                    // Only for the network the tunnel actually runs over: losing a secondary
+                    // one (mobile data while on Wi-Fi) must not kill healthy connections.
+                    if (tunModeActive && isRunning.get() && network == lastUnderlyingNetwork) {
                         val closed = Teapodcore.forceTunCloseAllConnections()
                         if (closed > 0) log("debug", "Network lost: force-closed $closed TUN connections")
                     }
@@ -1333,19 +1435,26 @@ class XrayVpnService : VpnService() {
         notificationChannelsReady = true
     }
 
+    /** null for states that keep whatever notification is currently shown. */
+    private fun buildNotificationFor(
+        state: String,
+        uploadSpeed: Long = 0,
+        downloadSpeed: Long = 0,
+    ): Notification? = when (VpnNotificationPolicy.variantFor(state, showNotification)) {
+        VpnNotificationVariant.MINIMAL -> buildMinimalNotification()
+        VpnNotificationVariant.CONNECTING -> buildIntermediateNotification(isConnecting = true)
+        VpnNotificationVariant.DISCONNECTING -> buildIntermediateNotification(isConnecting = false)
+        VpnNotificationVariant.CONNECTED -> buildConnectedNotification(uploadSpeed, downloadSpeed)
+        VpnNotificationVariant.DISCONNECTED -> buildDisconnectedNotification()
+        VpnNotificationVariant.KEEP_CURRENT -> null
+    }
+
     private fun applyNotificationState(
         state: String,
         uploadSpeed: Long = 0,
         downloadSpeed: Long = 0,
     ) {
-        val notification = when (VpnNotificationPolicy.variantFor(state, showNotification)) {
-            VpnNotificationVariant.MINIMAL -> buildMinimalNotification()
-            VpnNotificationVariant.CONNECTING -> buildIntermediateNotification(isConnecting = true)
-            VpnNotificationVariant.DISCONNECTING -> buildIntermediateNotification(isConnecting = false)
-            VpnNotificationVariant.CONNECTED -> buildConnectedNotification(uploadSpeed, downloadSpeed)
-            VpnNotificationVariant.DISCONNECTED -> buildDisconnectedNotification()
-            VpnNotificationVariant.KEEP_CURRENT -> return
-        }
+        val notification = buildNotificationFor(state, uploadSpeed, downloadSpeed) ?: return
         try {
             val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             ensureNotificationChannels(manager)
@@ -1359,7 +1468,12 @@ class XrayVpnService : VpnService() {
     private fun ensureForeground() {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         ensureNotificationChannels(manager)
-        val notification = if (showNotification) buildDisconnectedNotification() else buildMinimalNotification()
+        // Match the live state: a CONNECT/CONNECT_QUICK that hits a running session
+        // used to swap the "connected" notification for "Отключено", and an idle
+        // tunnel never re-posted it (the speed text doesn't change at 0 B/s).
+        lastSpeedNotificationText = null
+        val notification = buildNotificationFor(currentNativeState)
+            ?: if (showNotification) buildDisconnectedNotification() else buildMinimalNotification()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)

@@ -77,6 +77,7 @@ class MainActivity : FlutterActivity() {
                         val allowIcmp = call.argument<Boolean>("allowIcmp") ?: true
                         val blockQuic = call.argument<Boolean>("blockQuic") ?: false
                         val ipv6Enabled = call.argument<Boolean>("ipv6Enabled") ?: false
+                        val mtu = call.argument<Int>("mtu") ?: 1500
 
                         if (proxyOnly) {
                             // Proxy-only: no TUN tunnel, no VPN permission needed
@@ -85,7 +86,7 @@ class MainActivity : FlutterActivity() {
                                 excludedPackages, includedPackages, vpnMode,
                                 ssPrefix, proxyOnly = true, showNotification = showNotification,
                                 killSwitch = killSwitch, allowIcmp = allowIcmp,
-                                blockQuic = blockQuic, ipv6Enabled = ipv6Enabled
+                                blockQuic = blockQuic, ipv6Enabled = ipv6Enabled, mtu = mtu
                             )
                             result.success(null)
                         } else {
@@ -95,7 +96,7 @@ class MainActivity : FlutterActivity() {
                                     excludedPackages, includedPackages, vpnMode,
                                     ssPrefix, proxyOnly = false, showNotification = showNotification,
                                     killSwitch = killSwitch, allowIcmp = allowIcmp,
-                                    blockQuic = blockQuic, ipv6Enabled = ipv6Enabled
+                                    blockQuic = blockQuic, ipv6Enabled = ipv6Enabled, mtu = mtu
                                 )
                                 result.success(null)
                             }
@@ -351,6 +352,7 @@ class MainActivity : FlutterActivity() {
         allowIcmp: Boolean = false,
         blockQuic: Boolean = false,
         ipv6Enabled: Boolean = false,
+        mtu: Int = 1500,
     ) {
         requestBatteryOptimizationExemption()
         val intent = Intent(this, XrayVpnService::class.java).apply {
@@ -369,6 +371,7 @@ class MainActivity : FlutterActivity() {
             putExtra(XrayVpnService.EXTRA_ALLOW_ICMP, allowIcmp)
             putExtra(XrayVpnService.EXTRA_BLOCK_QUIC, blockQuic)
             putExtra(XrayVpnService.EXTRA_IPV6, ipv6Enabled)
+            putExtra(XrayVpnService.EXTRA_MTU, mtu)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)

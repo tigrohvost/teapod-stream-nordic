@@ -100,6 +100,28 @@ class HeartbeatMonitorTest {
     }
 
     @Test
+    fun `first probe-failure reconnect is immediate`() {
+        assertEquals(0L, HeartbeatMonitor.backoffForStreak(0))
+        assertEquals(0L, HeartbeatMonitor.backoffForStreak(-1))
+    }
+
+    @Test
+    fun `reconnect backoff doubles per failed session and caps at five minutes`() {
+        val delays = (1..8).map { HeartbeatMonitor.backoffForStreak(it) }
+        assertEquals(
+            listOf(15_000L, 30_000L, 60_000L, 120_000L, 240_000L, 300_000L, 300_000L, 300_000L),
+            delays,
+        )
+    }
+
+    @Test
+    fun `stall timeout stays above xray connIdle`() {
+        // xray closes connections idle for connIdle (300 s, XrayDefaults); a lower stall
+        // timeout would reconnect over merely idle apps.
+        assertTrue(HeartbeatMonitor.TUN_STALL_TIMEOUT_MS > 300_000L)
+    }
+
+    @Test
     fun `non-204 http response reports http_response stage`() {
         val inp = reply(
             byteArrayOf(5, 0),
