@@ -280,6 +280,26 @@ class _StateInfo extends ConsumerWidget {
             ),
           ),
         ],
+        // The power button is disabled while busy; without this a native
+        // reconnect cycle (up to 30 s waiting for the network, then retries)
+        // could not be stopped from the app.
+        if (isConnecting) ...[
+          const SizedBox(height: 10),
+          Semantics(
+            button: true,
+            label: 'отменить подключение',
+            excludeSemantics: true,
+            child: GestureDetector(
+              onTap: () => ref.read(vpnProvider.notifier).disconnect(),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                decoration: BoxDecoration(border: Border.all(color: t.line)),
+                child: Text('ОТМЕНА',
+                    style: AppTheme.mono(size: 9, color: t.textDim, letterSpacing: 1.5)),
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }

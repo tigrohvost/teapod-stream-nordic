@@ -94,16 +94,21 @@ class XrayEngine implements VpnEngine {
   }
 
   /// Get current VPN state with SOCKS credentials (for sync on app start).
-  Future<
-    ({
-      VpnState state,
-      int socksPort,
-      String socksUser,
-      String socksPassword,
-      int connectedAtMs,
-    })
-  >
-  getVpnState() async {
+  /// Reports `disconnected` when the service can't be queried.
+  Future<NativeVpnState> getVpnState() async =>
+      await queryVpnState() ??
+      (
+        state: VpnState.disconnected,
+        rawState: 'disconnected',
+        socksPort: 0,
+        socksUser: '',
+        socksPassword: '',
+        connectedAtMs: 0,
+      );
+
+  /// Like [getVpnState], but null when the query itself failed — so callers
+  /// don't mistake a channel error for a disconnect.
+  Future<NativeVpnState?> queryVpnState() async {
     try {
       final result = await _channel.invokeMethod<Map<Object?, Object?>>(
         'getState',
@@ -112,6 +117,7 @@ class XrayEngine implements VpnEngine {
         final stateStr = result['state'] as String? ?? 'disconnected';
         return (
           state: _parseState(stateStr),
+          rawState: stateStr,
           socksPort: result['socksPort'] as int? ?? 0,
           socksUser: result['socksUser'] as String? ?? '',
           socksPassword: result['socksPassword'] as String? ?? '',
@@ -119,13 +125,7 @@ class XrayEngine implements VpnEngine {
         );
       }
     } catch (_) {}
-    return (
-      state: VpnState.disconnected,
-      socksPort: 0,
-      socksUser: '',
-      socksPassword: '',
-      connectedAtMs: 0,
-    );
+    return null;
   }
 
   /// JSON snapshot of tun2socks state (counters, per-connection activity).
@@ -229,10 +229,22 @@ class XrayEngine implements VpnEngine {
 
   VpnState _parseState(String s) => switch (s) {
     'connecting' => VpnState.connecting,
+    'reconnecting' => VpnState.connecting,
     'connected' => VpnState.connected,
     'disconnecting' => VpnState.disconnecting,
     'disconnected' => VpnState.disconnected,
     'error' => VpnState.error,
+    'blocked' => VpnState.blocked,
     _ => VpnState.disconnected,
   };
 }
+
+/// Native service state as returned by the `getState` method call.
+typedef NativeVpnState = ({
+  VpnState state,
+  String rawState,
+  int socksPort,
+  String socksUser,
+  String socksPassword,
+  int connectedAtMs,
+});

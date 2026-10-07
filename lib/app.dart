@@ -83,8 +83,6 @@ class _AppShellState extends ConsumerState<_AppShell>
   StreamSubscription? _deeplinkSubscription;
   Timer? _updateCheckTimer;
 
-  static const _eventChannel = EventChannel('com.teapodstream/vpn/events');
-
   static const _pages = [
     HomeScreen(),
     ConfigsScreen(),
@@ -106,9 +104,7 @@ class _AppShellState extends ConsumerState<_AppShell>
       _scheduleUpdateCheck();
     });
 
-    _deeplinkSubscription = _eventChannel
-        .receiveBroadcastStream()
-        .listen(_handleEvent);
+    _deeplinkSubscription = vpnEvents.listen(_handleEvent);
   }
 
   @override
@@ -144,8 +140,12 @@ class _AppShellState extends ConsumerState<_AppShell>
     if (!mounted || !settings.autoConnect) return;
     final configState = await ref.read(configProvider.future);
     if (!mounted || configState.activeConfig == null) return;
+    // Ask the service first: on a cold UI start over a running session the
+    // EventChannel replay may not have arrived yet.
+    await ref.read(vpnProvider.notifier).syncNativeState();
+    if (!mounted) return;
     final vpnState = ref.read(vpnProvider);
-    if (!vpnState.isConnected && !vpnState.isConnecting) {
+    if (!vpnState.isConnected && !vpnState.isBusy) {
       await ref.read(vpnProvider.notifier).connect();
     }
   }

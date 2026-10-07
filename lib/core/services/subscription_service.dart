@@ -90,7 +90,9 @@ class SubscriptionService {
     String? userAgent,
   }) async {
     final uri = Uri.parse(url);
-    final httpClient = HttpClient();
+    // Without a connect timeout an unreachable host (refresh runs outside the
+    // tunnel) held up startup sync for the OS TCP timeout — minutes.
+    final httpClient = HttpClient()..connectionTimeout = const Duration(seconds: 15);
 
     UntrustedCertificateException? certError;
 
@@ -127,7 +129,10 @@ class SubscriptionService {
       }
 
       responseHeaders = response.headers;
-      body = await response.transform(utf8.decoder).join();
+      body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 30));
     } on HandshakeException {
       if (certError != null) throw certError!;
       rethrow;

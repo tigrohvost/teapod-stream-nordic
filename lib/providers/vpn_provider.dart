@@ -66,10 +66,15 @@ class VpnState2 {
   }
 }
 
+/// The one subscription to the native event channel, shared by every listener.
+/// Each receiveBroadcastStream() call installs its own platform handler and
+/// replaces the previous one, so a second call (app.dart's deeplink listener)
+/// silently took the events away from the other.
+final Stream<dynamic> vpnEvents =
+    const EventChannel('${AppConstants.methodChannel}/events').receiveBroadcastStream();
+
 class VpnNotifier extends Notifier<VpnState2> {
   late final XrayEngine _engine;
-  static const _eventChannel =
-      EventChannel('${AppConstants.methodChannel}/events');
 
   StreamSubscription<dynamic>? _eventSub;
   Timer? _connectTimeout;
@@ -84,7 +89,7 @@ class VpnNotifier extends Notifier<VpnState2> {
   VpnState2 build() {
     _engine = XrayEngine();
 
-    _eventSub = _eventChannel.receiveBroadcastStream().listen(
+    _eventSub = vpnEvents.listen(
       (dynamic event) {
         if (event is Map) {
           _handleEvent(Map<String, dynamic>.from(event));
@@ -109,8 +114,12 @@ class VpnNotifier extends Notifier<VpnState2> {
     _subRefreshTimer = Timer.periodic(const Duration(hours: 1), (_) async {
       final settings = ref.read(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
       if (settings?.subAutoRefresh != true) return;
-      await ref.read(configProvider.notifier)
-          .refreshStaleSubscriptions(intervalHours: settings!.subAutoRefreshHours);
+      try {
+        await ref.read(configProvider.notifier)
+            .refreshStaleSubscriptions(intervalHours: settings!.subAutoRefreshHours);
+      } catch (e) {
+        ref.read(logServiceProvider.notifier).addError('Subscription refresh failed: $e');
+      }
     });
 
     // Sync state on init (for case when VPN is already running from tile/notification)
@@ -118,8 +127,14 @@ class VpnNotifier extends Notifier<VpnState2> {
       // Auto-refresh stale subscriptions on startup
       final settings = ref.read(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
       if (settings?.subAutoRefresh == true) {
-        await ref.read(configProvider.notifier)
-            .refreshStaleSubscriptions(intervalHours: settings!.subAutoRefreshHours);
+        // A failed refresh must not skip the state restore below — that left the
+        // UI blind to a running session and the reconnect banner dead.
+        try {
+          await ref.read(configProvider.notifier)
+              .refreshStaleSubscriptions(intervalHours: settings!.subAutoRefreshHours);
+        } catch (e) {
+          ref.read(logServiceProvider.notifier).addError('Subscription refresh failed: $e');
+        }
       }
 
       // Restore log history (previous + current session files) even when
@@ -353,6 +368,20 @@ class VpnNotifier extends Notifier<VpnState2> {
     // Notification permission for foreground service (Android 13+) — best-effort
     await Permission.notification.request();
 
+    // Cancelled meanwhile, or the EventChannel replay delivered the real state.
+    if (state.connectionState != VpnState.connecting) return;
+    // A UI started over a live session (tile, boot, always-on, recreated
+    // activity) must adopt it: the service ignores a second connect, and the
+    // fresh SOCKS credentials generated below would describe nothing.
+    final native = await _engine.queryVpnState();
+    if (state.connectionState != VpnState.connecting) return;
+    if (native != null && native.state == VpnState.connected && native.socksPort > 0) {
+      _connectTimeout?.cancel();
+      _connectTimeout = null;
+      _adoptConnected(native);
+      return;
+    }
+
     final configState =
         ref.read(configProvider).maybeWhen(data: (d) => d, orElse: () => null);
     final config = _resolveEffectiveConfig(configState);
@@ -484,17 +513,39 @@ class VpnNotifier extends Notifier<VpnState2> {
     if (state.isConnected) _startStatsPolling();
   }
 
-  /// Syncs Flutter state from native when the app resumes from background.
-  /// EventChannel replay on `onListen` handles most cases; this is a fallback.
-  Future<void> syncNativeState() async {
-    // We now handle timeouts inside _onNativeState, so it's safe to sync everything.
+  /// Syncs Flutter state from the native service: on app start and resume, and
+  /// before auto-connect. EventChannel replay on `onListen` handles most cases;
+  /// this also catches a session that died without an event (the native
+  /// phantom-connection check in getNativeState). Returns the native state, or
+  /// null when it couldn't be read.
+  Future<VpnState?> syncNativeState() async {
+    final native = await _engine.queryVpnState();
+    if (native == null) return null;
+    if (native.state == VpnState.connected && native.socksPort > 0) {
+      _adoptConnected(native);
+    } else {
+      _onNativeState(native.state, isReconnect: native.rawState == 'reconnecting');
+    }
+    return native.state;
+  }
 
-    try {
-      const channel = MethodChannel(AppConstants.methodChannel);
-      final nativeState = await channel.invokeMethod<String>('getState');
-      if (nativeState == null) return;
-      _onNativeState(_parseState(nativeState));
-    } catch (_) {}
+  /// Takes over a session the service already runs, with its real credentials.
+  void _adoptConnected(NativeVpnState native) {
+    if (native.connectedAtMs > 0) {
+      _connectedAt ??= DateTime.fromMillisecondsSinceEpoch(native.connectedAtMs);
+    }
+    state = state.copyWith(
+      activeSocksPort: native.socksPort,
+      activeSocksUser: native.socksUser,
+      activeSocksPassword: native.socksPassword,
+    );
+    if (state.appliedFingerprint == null) {
+      // The exact settings at connect time are unknown; treat the current ones
+      // as applied (same as the startup restore).
+      final s = ref.read(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
+      if (s != null) state = state.copyWith(appliedFingerprint: connectionFingerprint(s));
+    }
+    _onNativeState(VpnState.connected);
   }
 
   Future<void> toggle() async {

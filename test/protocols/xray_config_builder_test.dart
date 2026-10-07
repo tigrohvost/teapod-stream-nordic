@@ -5,6 +5,7 @@ import 'package:teapodstream/protocols/xray/xray_config_builder.dart';
 import 'package:teapodstream/core/models/vpn_config.dart';
 import 'package:teapodstream/core/models/routing_settings.dart';
 import 'package:teapodstream/core/interfaces/vpn_engine.dart';
+import 'package:teapodstream/core/models/dns_config.dart';
 
 VpnConfig _vlessConfig({String address = '1.2.3.4', int port = 443}) =>
     VpnConfig(
@@ -152,6 +153,47 @@ void main() {
             .toList();
         expect(ips, contains('geoip:private'));
       });
+    });
+
+    group('dns block', () {
+      Map<String, dynamic> dnsFor(VpnEngineOptions o) =>
+          XrayConfigBuilder.build(_vlessConfig(), o)['dns'] as Map<String, dynamic>;
+      VpnEngineOptions withDns(DnsServerConfig server, {bool adBlock = false}) => VpnEngineOptions(
+            socksPort: 10808,
+            httpPort: 0,
+            socksUser: '',
+            socksPassword: '',
+            dnsServer: server,
+            routing: RoutingSettings(adBlockEnabled: adBlock),
+          );
+
+      test('DoT presets go out as DoH — xray has no tls:// nameserver', () {
+        final dns = dnsFor(withDns(DnsServerConfig.cloudflareDoT));
+        final addresses = (dns['servers'] as List).map((s) => (s as Map)['address']).toList();
+        expect(addresses, contains('https://cloudflare-dns.com/dns-query'));
+        expect(addresses.any((a) => '$a'.startsWith('tls://')), isFalse);
+        // The DoH hostname still needs the static bootstrap entry.
+        expect((dns['hosts'] as Map)['cloudflare-dns.com'], '1.1.1.1');
+      });
+
+      test('adblock answers NXDOMAIN via hosts, not a fake rcode:// server', () {
+        final dns = dnsFor(withDns(DnsServerConfig.cloudflare, adBlock: true));
+        expect((dns['hosts'] as Map)['geosite:category-ads-all'], '#3');
+        final addresses = (dns['servers'] as List).map((s) => '${(s as Map)['address']}').toList();
+        expect(addresses.any((a) => a.startsWith('rcode://')), isFalse);
+      });
+
+      test('adblock does not reference win-spy (missing from v2fly dlc.dat)', () {
+        final json = jsonEncode(XrayConfigBuilder.build(
+            _vlessConfig(), withDns(DnsServerConfig.cloudflare, adBlock: true)));
+        expect(json.contains('win-spy'), isFalse);
+      });
+    });
+
+    test('policy keeps idle connections for xray default connIdle', () {
+      final json = XrayConfigBuilder.build(_vlessConfig(), _defaultOptions());
+      final level0 = ((json['policy'] as Map)['levels'] as Map)['0'] as Map;
+      expect(level0['connIdle'], 300);
     });
 
     group('VLESS outbound', () {

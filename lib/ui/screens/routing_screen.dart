@@ -282,7 +282,7 @@ class _RoutingBody extends StatelessWidget {
                 _RowToggle(
                   t: t,
                   title: 'Блокировка рекламы',
-                  hint: geoHint ?? 'geosite:category-ads-all + geosite:win-spy → block',
+                  hint: geoHint ?? 'geosite:category-ads-all → block',
                   value: routing.adBlockEnabled,
                   locked: geoMissing,
                   onChange: (v) => onUpdate(routing.copyWith(adBlockEnabled: v)),

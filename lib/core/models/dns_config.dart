@@ -46,10 +46,10 @@ class DnsServerConfig {
   static const List<Map<String, dynamic>> presets = [
     {'label': 'Cloudflare (UDP)', 'value': 'cf_udp'},
     {'label': 'Cloudflare (DoH)', 'value': 'cf_doh'},
-    {'label': 'Cloudflare (DoT)', 'value': 'cf_dot'},
+    {'label': 'Cloudflare (DoT → DoH)', 'value': 'cf_dot'},
     {'label': 'Google (UDP)', 'value': 'google_udp'},
     {'label': 'Google (DoH)', 'value': 'google_doh'},
-    {'label': 'Google (DoT)', 'value': 'google_dot'},
+    {'label': 'Google (DoT → DoH)', 'value': 'google_dot'},
     {'label': 'Quad9 (UDP)', 'value': 'quad9_udp'},
     {'label': 'Quad9 (DoH)', 'value': 'quad9_doh'},
     {'label': 'AdGuard (UDP)', 'value': 'adguard_udp'},
@@ -82,7 +82,8 @@ class DnsServerConfig {
     switch (type) {
       case DnsType.udp: return address;
       case DnsType.doh: return 'DoH: $address';
-      case DnsType.dot: return 'DoT: $address:$port';
+      // xray has no DoT client; XrayConfigBuilder sends these over DoH.
+      case DnsType.dot: return 'DoT→DoH: ${domain ?? address}';
     }
   }
 }

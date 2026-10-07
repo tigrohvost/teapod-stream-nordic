@@ -294,14 +294,6 @@ class XrayConfigBuilder {
     }
 
     // Proxy mode: DNS queries are intercepted and handled by xray's DNS module.
-    // Add adblock first - returns empty response for matched domains
-    if (routing.adBlockEnabled) {
-      servers.add({
-        'address': 'rcode://success',
-        'domains': [XrayDefaults.adBlockGeosite, 'geosite:win-spy'],
-      });
-    }
-
     // Add main DNS server
     switch (server.type) {
       case DnsType.udp:
@@ -311,15 +303,20 @@ class XrayConfigBuilder {
         servers.add({'address': server.address});
         break;
       case DnsType.dot:
-        // Use domain as TLS address (SNI) when available; fall back to IP.
-        servers.add({
-          'address': 'tls://${server.domain ?? server.address}',
-          'port': server.port,
-        });
+        // xray-core has no DNS-over-TLS client (no tls:// scheme): such an address
+        // was taken for a plain UDP server literally named "tls://…" and every query
+        // failed. The DoT providers serve the same resolver over DoH, so use that.
+        servers.add({'address': 'https://${server.domain ?? server.address}/dns-query'});
         break;
     }
 
     final hosts = <String, String>{};
+    // Adblock: answer NXDOMAIN locally. xray only knows "#<rcode>" for this —
+    // the former 'rcode://success' server was just an unreachable resolver that
+    // delayed ad lookups until the fallback answered them.
+    if (routing.adBlockEnabled) {
+      hosts[XrayDefaults.adBlockGeosite] = '#3';
+    }
     if (server.domain != null && server.fallbackIp != null) {
       hosts[server.domain!] = server.fallbackIp!;
     } else if (server.type == DnsType.doh || server.type == DnsType.dot) {
@@ -605,7 +602,7 @@ class XrayConfigBuilder {
         _ensureBlackholeOutbound(cfg);
         appRules.add({
           'type': 'field',
-          'domain': [XrayDefaults.adBlockGeosite, 'geosite:win-spy'],
+          'domain': [XrayDefaults.adBlockGeosite],
           'outboundTag': blackholeTag,
         });
       }

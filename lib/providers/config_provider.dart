@@ -217,12 +217,26 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
           .map((s) => s.id == subId ? updatedSub : s)
           .toList();
 
+      // A refresh regenerates every config id. Carry the selection over to the
+      // same server, or the hourly background refresh silently switched the user
+      // to the subscription's first entry (used by the next connect/auto-connect).
+      final activeNow =
+          (state.maybeWhen(data: (d) => d, orElse: () => null) ?? current).activeConfig;
+      final carriedActiveId = activeNow != null && activeNow.subscriptionId == subId
+          ? matchRefreshedConfig(activeNow, newConfigs)?.id
+          : null;
+
       state = AsyncData(current.copyWith(
         configs: newConfigsList,
         subscriptions: newSubs,
-        clearActive: current.activeConfigId != null &&
+        activeConfigId: carriedActiveId,
+        clearActive: carriedActiveId == null &&
+            current.activeConfigId != null &&
             !newConfigsList.any((c) => c.id == current.activeConfigId),
       ));
+      if (carriedActiveId != null) {
+        await storage.saveActiveConfigId(carriedActiveId);
+      }
     } else {
       // New subscription
       subId = 'sub_${DateTime.now().millisecondsSinceEpoch}';
@@ -300,9 +314,20 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
       return DateTime.now().difference(s.lastFetchedAt!) > threshold;
     }).toList();
     for (final sub in stale) {
-      await addSubscriptionFromUrl(sub.url);
+      // One unreachable subscription must not abort the others — nor the
+      // startup sync that awaits this.
+      try {
+        await addSubscriptionFromUrl(sub.url);
+      } catch (_) {}
     }
   }
+
+  /// The config in [fresh] that is the same server as [old] after a refresh:
+  /// same name and endpoint, else same name, else same endpoint.
+  static VpnConfig? matchRefreshedConfig(VpnConfig old, List<VpnConfig> fresh) =>
+      fresh.where((c) => c.name == old.name && c.address == old.address && c.port == old.port).firstOrNull ??
+      fresh.where((c) => c.name == old.name).firstOrNull ??
+      fresh.where((c) => c.address == old.address && c.port == old.port).firstOrNull;
 
   // ─── Import from ConnectionsBundle ───
 
