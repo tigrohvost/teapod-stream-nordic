@@ -357,28 +357,11 @@ class XrayVpnService : VpnService() {
                         try { File(filesDir, "user_disconnected.flag").delete() } catch (_: Exception) {}
                         setState("reconnecting")
                         val configText = configFile.readText()
-                        // Load SOCKS credentials from saved file (survives reconnect)
-                        var socksUser = ""
-                        var socksPassword = ""
-                        try {
-                            val credsFile = File(filesDir, "socks_creds.json")
-                            if (credsFile.exists()) {
-                                val json = org.json.JSONObject(credsFile.readText())
-                                socksUser = json.optString("user", "")
-                                socksPassword = json.optString("pass", "")
-                                log("debug", "CONNECT_QUICK: loaded creds from file (auth=${socksUser.isNotEmpty()})")
-                            } else {
-                                // Fallback: extract from config
-                                val (u, p) = extractSocksFromConfig(configText)
-                                socksUser = u
-                                socksPassword = p
-                            }
-                        } catch (e: Exception) {
-                            log("warning", "Failed to load socks_creds: ${e.message}")
-                            val (u, p) = extractSocksFromConfig(configText)
-                            socksUser = u
-                            socksPassword = p
-                        }
+                        // Take the credentials from the config xray is about to enforce.
+                        // A separate creds file could drift from it (always-on start with
+                        // empty creds), and every reconnect then re-saved the wrong pair,
+                        // locking tun2socks out of xray for good.
+                        val (socksUser, socksPassword) = extractSocksFromConfig(configText)
                         Thread {
                             startVpn(
                                 configText,
@@ -442,7 +425,9 @@ class XrayVpnService : VpnService() {
             val inbounds = org.json.JSONObject(configJson).getJSONArray("inbounds")
             for (i in 0 until inbounds.length()) {
                 val inbound = inbounds.getJSONObject(i)
-                if (inbound.optString("tag") == "socks-in") {
+                // Match by protocol, not tag: mergeWithRaw keeps the subscription's
+                // own socks tag (usually "socks") so its routing rules still match.
+                if (inbound.optString("protocol") == "socks") {
                     val accounts = inbound.optJSONObject("settings")
                         ?.optJSONArray("accounts") ?: continue
                     if (accounts.length() > 0) {
@@ -942,7 +927,7 @@ class XrayVpnService : VpnService() {
                 Thread.currentThread().interrupt()
             }
 
-            // Clean up saved credentials on explicit disconnect
+            // Remove the creds file older versions kept for CONNECT_QUICK
             if (explicit) {
                 try { File(filesDir, "socks_creds.json").delete() } catch (_: Exception) {}
             }
@@ -1500,18 +1485,6 @@ class XrayVpnService : VpnService() {
         connectedAtMs = now
         lastConnectedMs = now
         _socksCredentials.set(SocksCredentials(socksPort, socksUser, socksPassword))
-        // Save credentials to file for CONNECT_QUICK reconnect
-        try {
-            val credsFile = File(filesDir, "socks_creds.json")
-            val json = org.json.JSONObject().apply {
-                put("port", socksPort)
-                put("user", socksUser)
-                put("pass", socksPassword)
-            }
-            credsFile.writeText(json.toString())
-        } catch (e: Exception) {
-            log("warning", "Failed to save socks_creds: ${e.message}")
-        }
         applyNotificationState("connected")
         VpnEventStreamHandler.sendConnectedEvent(socksPort, socksUser, socksPassword)
         sendBroadcast(Intent("com.teapodstream.STATE_CHANGED").apply {
