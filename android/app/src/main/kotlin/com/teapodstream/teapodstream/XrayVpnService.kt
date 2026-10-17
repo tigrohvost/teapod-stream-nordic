@@ -1198,7 +1198,11 @@ class XrayVpnService : VpnService() {
             }
             if (!coordinator.isCurrent(owner) || userRequestedDisconnect.get()) return@reconnect
             try { startSnapshot(snapshot, coordinator.invalidate(), true) }
-            catch (_: Exception) { connectionError("RECONNECT_FAILED"); setState(idleState()) }
+            catch (e: Exception) {
+                // Keep the cause (EMPTY_ALLOWED_APPS, NATIVE_STOP_TIMEOUT, …) for the UI.
+                connectionError(if (e is ConnectionFailure) e.code else "RECONNECT_FAILED")
+                setState(idleState())
+            }
         }
     }
 
