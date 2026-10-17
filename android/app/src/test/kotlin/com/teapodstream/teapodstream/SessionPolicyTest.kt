@@ -129,6 +129,26 @@ class SessionPolicyTest {
         }
     }
 
+    @Test fun prefixServesFarMoreThanThirtyTwoConcurrentClients() {
+        ServerSocket(0, 200, InetAddress.getLoopbackAddress()).use { upstream ->
+            val held = java.util.Collections.synchronizedList(mutableListOf<Socket>())
+            Thread { try { while (true) held.add(upstream.accept()) } catch (_: Exception) {} }
+                .apply { isDaemon = true; start() }
+            val proxy = PrefixTcpProxy("127.0.0.1", upstream.localPort, byteArrayOf(1)) { true }
+            proxy.start()
+            val clients = List(100) { Socket("127.0.0.1", proxy.localPort).apply { getOutputStream().write(1) } }
+            try {
+                val deadline = System.currentTimeMillis() + 5000
+                while (held.size < 100 && System.currentTimeMillis() < deadline) Thread.sleep(20)
+                assertEquals("every long-lived client reaches the server", 100, held.size)
+            } finally {
+                clients.forEach { it.close() }
+                proxy.stop()
+                synchronized(held) { held.forEach { it.close() } }
+            }
+        }
+    }
+
     @Test fun prefixStopClosesIdleClientsAcrossOneHundredSessions() {
         repeat(100) {
             val accepted = CountDownLatch(1)

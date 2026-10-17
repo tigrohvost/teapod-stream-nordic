@@ -4,9 +4,9 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
+import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
@@ -15,17 +15,22 @@ class PrefixTcpProxy(
     private val targetHost: String,
     private val targetPort: Int,
     private val prefix: ByteArray,
-    private val maxClients: Int = 32,
+    // Shadowsocks has no mux here: every app TCP connection is one client, and a
+    // browser plus messengers easily hold more than a few dozen at once.
+    private val maxClients: Int = 256,
     private val firstBlockTimeoutMs: Int = 5000,
     private val clientAllowed: (Socket) -> Boolean,
 ) {
-    private val listener = ServerSocket(0, maxClients, InetAddress.getByName("127.0.0.1"))
+    private val listener = ServerSocket(0, 64, InetAddress.getByName("127.0.0.1"))
     val localPort: Int get() = listener.localPort
     private val sockets = ConcurrentHashMap.newKeySet<Socket>()
     private val slots = Semaphore(maxClients)
     @Volatile private var running = true
-    private val workers = ThreadPoolExecutor(maxClients * 2, maxClients * 2, 0, TimeUnit.MILLISECONDS,
-        ArrayBlockingQueue<Runnable>(maxClients * 2), { r -> Thread(r, "prefix-relay").apply { isDaemon = true } })
+    // Two threads per client (one per direction), created on demand and reclaimed
+    // after 30 s idle; the slot semaphore bounds them, the margin covers a relay
+    // whose upload task is still unwinding after its slot was released.
+    private val workers = ThreadPoolExecutor(0, maxClients * 2 + 16, 30, TimeUnit.SECONDS,
+        SynchronousQueue<Runnable>(), { r -> Thread(r, "prefix-relay").apply { isDaemon = true } })
     private var acceptThread: Thread? = null
 
     fun start() {
