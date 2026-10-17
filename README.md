@@ -175,7 +175,8 @@
 - отключён Jetifier: support-library зависимостей не осталось, а джетификация удваивала кэш Gradle-трансформаций (включая ~170 МБ Flutter-движка);
 - release-сборка подписывается ключом из `android/key.properties` (файл не хранится в репозитории);
 - `pubspec.lock` хранится в репозитории (upstream его игнорирует): сборка на CI должна получать те же версии зависимостей, что и локальная;
-- сборка и публикация релизов автоматизированы через GitHub Actions, включая автовыпуск на новое ядро `teapod-core`.
+- тулчейн, ядро `teapod-core` и geodata закреплены по версии и SHA-256 в `dependencies.lock.json`;
+- сборка и публикация релизов идут через GitHub Actions; новое ядро `teapod-core` только предлагается как кандидат и принимается вручную.
 
 Функциональность конфигов, подписок и протоколов идентична upstream: форк регулярно вливает изменения оригинала (текущая база — v1.6.0).
 
@@ -183,26 +184,45 @@
 
 ### Требования
 
-- Flutter SDK `3.11+`
-- Dart SDK `^3.11.4`
-- Java `17` (как в CI)
-- Android SDK
-- Android NDK `28.2.13676358`
-- CMake `3.22.1`
+Точные версии закреплены в [`dependencies.lock.json`](dependencies.lock.json); `build.sh` и CI сверяют с ним окружение и с другими версиями не работают.
+
+- Flutter SDK ровно `3.41.9` (Dart берётся из него) — в `PATH`
+- JDK `17`, например [Temurin](https://adoptium.net/temurin/releases/?version=17) — через `JAVA_HOME`
+- Android SDK (`ANDROID_HOME`), NDK `28.2.13676358`, CMake `3.22.1`
+- Python `3.11+` — для скриптов в `tools/`
 - Android `minSdk 29+`
 
 ### Быстрые команды
 
 ```bash
-# Скачать бинарные зависимости
+# Скачать ядро и geodata и проверить их по SHA-256
 ./build.sh binaries
 
 # Собрать debug APK
 ./build.sh debug
 
-# Собрать release APK (split per ABI)
+# Собрать release APK (split per ABI; нужен android/key.properties)
 ./build.sh release
+
+# Опубликовать релиз: CI соберёт ровно запушенный коммит
+./build.sh push        # или pushpre — pre-release
 ```
+
+Локальный `release` можно собирать и из незакоммиченного дерева, но такой APK помечается как «dirty» и не публикуется. Опубликовать можно только сборку CI из чистого запушенного коммита.
+
+### Закреплённые зависимости
+
+`dependencies.lock.json` — единственный источник версий: тулчейн (Flutter, JDK, NDK, CMake, Gradle, AGP, Kotlin) и бинарные входы с точным URL, размером и SHA-256 — `teapod-core.aar` из [Wendor/teapod-core](https://github.com/Wendor/teapod-core), `geoip.dat` и `geosite.dat` из [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat). `tools/dependencies.py` скачивает и проверяет их. Файл, не совпадающий с lock (например, после обновления), перекачивается заново, а не используется.
+
+Обновление:
+
+```bash
+python3 tools/dependencies.py bump-geodata             # последний релиз geodata
+python3 tools/dependencies.py bump-core --tag v1.1.16   # конкретное ядро
+./build.sh binaries                                     # скачать и проверить новые файлы
+```
+
+Дальше — тесты (для ядра ещё и проверка на устройстве) и коммит `dependencies.lock.json`.
 
 ### Где искать APK
 
@@ -226,8 +246,8 @@ Workflow: [`.github/workflows/build.yml`](.github/workflows/build.yml).
 
 Что делает:
 
-- `analyze` — `flutter analyze` и `flutter test` на каждый push и pull request;
-- `build` — release APK (split per ABI, с обфускацией) с именами без версии (`teapod-stream-<abi>.apk`), чтобы ссылки `/releases/latest/download/...` не протухали; скачивает `teapod-core.aar` из релиза [Wendor/teapod-core](https://github.com/Wendor/teapod-core), закреплённого в `.github/teapod-core-version.txt`, и geodata, ставит NDK `28.2.13676358` и CMake `3.22.1`.
+- `analyze` — `flutter analyze`, `flutter test` и тесты скриптов `tools/` на каждый push и pull request;
+- `build` — release APK (split per ABI, с обфускацией) с именами без версии (`teapod-stream-<abi>.apk`), чтобы ссылки `/releases/latest/download/...` не протухали; берёт тулчейн, `teapod-core.aar` и geodata ровно тех версий и хешей, что в `dependencies.lock.json`.
 - анализ и сборка используют один и тот же коммит и `pubspec.lock`; после сборки выполняются JVM-тесты VPN и проверка каждого APK: подпись, package ID, версия, ABI, наличие ядра, geodata и шрифтов;
 - вместе с APK сохраняются `SHA256SUMS` и `release-manifest.json`: коммит исходников, версия ядра, сертификат и хеши файлов. Тег релиза должен указывать на собранный коммит. Публикация проверяет прежний сертификат подписи для обновления без удаления данных.
 
@@ -241,25 +261,24 @@ Workflow: [`.github/workflows/build.yml`](.github/workflows/build.yml).
 
 Тег обязан совпадать с версией в `pubspec.yaml` (`v1.6.1` ↔ `version: 1.6.1+10601`), иначе сборка падает. Тег с дефисом (`v1.6.1-beta1`) публикуется как pre-release — такие сборки видит только канал `beta` во встроенном апдейтере.
 
-### Автоматический релиз на новое ядро
+Публикация идёт через черновик ([`tools/publish_release.py`](tools/publish_release.py)):
 
-Workflow: [`.github/workflows/watch-core.yml`](.github/workflows/watch-core.yml). Раз в 6 часов (и по кнопке `Run workflow`) сверяет последний релиз [Wendor/teapod-core](https://github.com/Wendor/teapod-core) с записанным в `.github/teapod-core-version.txt`.
+1. APK ещё раз проверяются: релизный сертификат, версия, чистое дерево, совпадение ядра и geodata с lock;
+2. создаётся draft-релиз на точный собранный коммит, в него догружаются недостающие файлы — APK, `SHA256SUMS`, `release-manifest.json` и воспроизводимый архив отладочных символов;
+3. релиз становится видимым только после того, как хеши всего загруженного набора совпали с собранными.
 
-Если ядро обновилось:
+Повторный запуск продолжает тот же черновик и ничего не перезаписывает. Если черновик собран из другого коммита или опубликованный релиз отличается по содержимому, публикация останавливается с ошибкой.
 
-1. патч-версия в `pubspec.yaml` растёт (`1.6.1+10601` → `1.6.2+10602`, `versionCode = major*10000 + minor*100 + patch`);
-2. бот коммитит бамп и новое ядро в `master` и ставит тег `v<версия>`;
-3. вызывает сборку, которая публикует релиз с APK; в описании релиза указано, на каком ядре он собран.
+### Новое ядро teapod-core
 
-Само ядро — бинарный AAR, код форка при этом не меняется, поэтому релиз выходит без ручного участия. Если такое не нужно — убери `schedule` из workflow, останется ручной запуск.
+Workflow: [`.github/workflows/watch-core.yml`](.github/workflows/watch-core.yml). Раз в 6 часов (и по кнопке `Run workflow`) сверяет последний релиз [Wendor/teapod-core](https://github.com/Wendor/teapod-core) с ядром в `dependencies.lock.json`.
+
+Новое ядро автоматически не принимается и не выпускается: в сводке запуска появляется кандидат, а `candidate-dependencies.lock.json` прикладывается artifact'ом `core-candidate`. Чтобы принять ядро, выполни `python3 tools/dependencies.py bump-core --tag <тег>`, прогони тесты, проверь на устройстве и выпусти релиз обычным путём.
 
 Нюансы:
 
-- первый запуск с пустым `teapod-core-version.txt` только записывает текущее ядро, релиз не выпускает;
-- патч упирается в 99 из-за схемы `versionCode` — дальше нужен ручной бамп minor;
-- GitHub отключает `schedule` в репозиториях без активности 60 дней, тогда достаточно один раз нажать `Run workflow`;
-- сборка публикуется только после зелёных `flutter analyze`, `flutter test`, JVM-тестов и проверки APK;
-- если сборка всё же упала — бамп версии откатывается, тег удаляется, заводится issue, следующая проверка пробует снова.
+- кандидат создаётся, только если GitHub публикует SHA-256 ассета;
+- GitHub отключает `schedule` в репозиториях без активности 60 дней, тогда достаточно один раз нажать `Run workflow`.
 
 ### Секреты для подписи
 
@@ -291,7 +310,7 @@ gh secret set ANDROID_KEY_PASSWORD
 - [Kotlin](https://kotlinlang.org/) — Android-слой
 - [Gradle](https://gradle.org/) — сборка Android-части
 - [CMake](https://cmake.org/) — сборка нативных компонентов
-- [Java 21](https://openjdk.org/) — toolchain проекта
+- [Java 17](https://openjdk.org/) — toolchain проекта
 
 ### Сетевые и VPN-компоненты
 
