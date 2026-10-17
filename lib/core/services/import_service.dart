@@ -17,12 +17,16 @@ class ImportPlan {
   /// Entries skipped inside fetched subscriptions; reported, not blocking.
   final int skippedSubscriptionEntries;
   final String? label;
+
+  /// A single pasted/scanned link becomes the active connection, as in v1.6.6.
+  final bool activate;
   const ImportPlan({
     required this.configs,
     required this.subscriptions,
     this.invalidItems = 0,
     this.skippedSubscriptionEntries = 0,
     this.label,
+    this.activate = false,
   });
 }
 
@@ -85,7 +89,10 @@ class ImportService {
     return (valid: valid, invalid: invalid, firstError: firstError);
   }
 
-  Future<ImportPlan> prepare(ConnectionsBundle bundle) async {
+  Future<ImportPlan> prepare(
+    ConnectionsBundle bundle, {
+    bool activateSingle = false,
+  }) async {
     // Also validate programmatically-created bundles before the first mutation.
     ConnectionsBundle.fromJson(bundle.toJson());
     final configs = <VpnConfig>[];
@@ -154,6 +161,7 @@ class ImportService {
       invalidItems: invalid,
       skippedSubscriptionEntries: skippedEntries,
       label: bundle.label,
+      activate: activateSingle && configs.length == 1 && subscriptions.isEmpty,
     );
   }
 
@@ -215,11 +223,23 @@ class ImportService {
         );
       }
     }
+    // A re-pasted duplicate selects the existing entry instead of a copy.
+    final selected = plan.activate
+        ? [...current.configs, ...added]
+              .where(
+                (c) =>
+                    c.connectionIdentity ==
+                    plan.configs.single.connectionIdentity,
+              )
+              .firstOrNull
+        : null;
     return (
       current.copyWith(
         configs: [...current.configs, ...added],
         subscriptions: subscriptions,
-        activeConfigId: current.activeConfigId ?? added.firstOrNull?.id,
+        activeConfigId:
+            selected?.id ?? current.activeConfigId ?? added.firstOrNull?.id,
+        clearActiveSub: selected != null,
       ),
       ImportConnectionsResult(
         addedConfigs: added.length,

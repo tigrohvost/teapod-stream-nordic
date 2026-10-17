@@ -395,10 +395,11 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
   Future<ImportPlan> prepareImport(
     ConnectionsBundle bundle, {
     bool allowSelfSigned = false,
+    bool activateSingle = false,
   }) => ImportService(
     validateConfig: ref.read(configValidationProvider),
     fetchSubscription: _fetcher(allowSelfSigned: allowSelfSigned),
-  ).prepare(bundle);
+  ).prepare(bundle, activateSingle: activateSingle);
 
   Future<ImportConnectionsResult> applyImport(ImportPlan plan) async {
     late ImportConnectionsResult result;
