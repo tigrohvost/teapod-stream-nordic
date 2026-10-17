@@ -122,7 +122,7 @@ class _SplitTunnelScreenState extends ConsumerState<SplitTunnelScreen> {
                   modeLabel,
                   style: AppTheme.mono(
                     size: 11,
-                    color: t.accent,
+                    color: t.accentText,
                     letterSpacing: 1,
                   ),
                 ),
@@ -194,7 +194,7 @@ class _SplitTunnelScreenState extends ConsumerState<SplitTunnelScreen> {
                                 style: AppTheme.mono(
                                   size: 11,
                                   color: settings?.vpnMode == mode
-                                      ? t.accent
+                                      ? t.accentText
                                       : t.textDim,
                                   letterSpacing: 0.5,
                                 ),

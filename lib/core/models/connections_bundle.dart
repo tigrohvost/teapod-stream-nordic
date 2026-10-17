@@ -4,6 +4,8 @@ import '../services/config_storage_service.dart' show Subscription;
 
 class ConnectionsBundle {
   static const int currentVersion = 1;
+  static const int maxBytes = 8 * 1024 * 1024;
+  static const int maxItems = 10000;
 
   final int version;
   final DateTime exportedAt;
@@ -29,22 +31,36 @@ class ConnectionsBundle {
     'version': version,
     'exportedAt': exportedAt.toIso8601String(),
     if (label != null) 'label': label,
-    'configs': configs.map((c) => c.toJson()).toList(),
-    'subscriptions': subscriptions.map((s) => s.toJson()).toList(),
+    'configs': [...configs.map((c) => c.toJson()), ...rawUris],
+    'subscriptions': [
+      ...subscriptions.map((s) => s.toJson()),
+      ...subscriptionUrls,
+    ],
   };
 
   Map<String, dynamic> toCompactJson() => {
     'version': version,
     'exportedAt': exportedAt.toIso8601String(),
     if (label != null) 'label': label,
-    'configs': configs
-        .where((c) => c.rawUri != null)
-        .map((c) => c.rawUri!)
-        .toList(),
-    'subscriptions': subscriptions.map((s) => s.url).toList(),
+    // Full objects preserve edits (pins, insecure flag, managed JSON) that the
+    // original URI cannot represent. Incoming compact strings stay supported.
+    'configs': [...configs.map((c) => c.toJson()), ...rawUris],
+    'subscriptions': [
+      ...subscriptions.map((s) => s.toJson()),
+      ...subscriptionUrls,
+    ],
   };
 
   factory ConnectionsBundle.fromJson(Map<String, dynamic> json) {
+    if (json['version'] != currentVersion) {
+      throw const FormatException('Неподдерживаемая версия набора');
+    }
+    if (utf8.encode(jsonEncode(json)).length > maxBytes ||
+        (json['configs'] as List? ?? []).length +
+                (json['subscriptions'] as List? ?? []).length >
+            maxItems) {
+      throw const FormatException('Слишком большой набор подключений');
+    }
     final rawUris = <String>[];
     final fullConfigs = <VpnConfig>[];
     for (final e in (json['configs'] as List<dynamic>? ?? [])) {
@@ -52,6 +68,8 @@ class ConnectionsBundle {
         rawUris.add(e);
       } else if (e is Map<String, dynamic>) {
         fullConfigs.add(VpnConfig.fromJson(e));
+      } else {
+        throw const FormatException('Неверный элемент набора');
       }
     }
 
@@ -62,6 +80,8 @@ class ConnectionsBundle {
         subUrls.add(e);
       } else if (e is Map<String, dynamic>) {
         fullSubs.add(Subscription.fromJson(e));
+      } else {
+        throw const FormatException('Неверный элемент подписки');
       }
     }
 
@@ -89,6 +109,9 @@ class ConnectionsBundle {
   }
 
   static ConnectionsBundle fromBase64(String b64) {
+    if (b64.length > (maxBytes * 4 ~/ 3) + 4) {
+      throw const FormatException('Слишком большой набор подключений');
+    }
     final padded = b64.padRight((b64.length + 3) ~/ 4 * 4, '=');
     final json = utf8.decode(base64Url.decode(padded));
     return ConnectionsBundle.fromJson(jsonDecode(json) as Map<String, dynamic>);

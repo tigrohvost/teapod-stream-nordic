@@ -14,11 +14,18 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
         .maybeWhen(data: (d) => d, orElse: () => null);
     if (profileState?.isReadonly == true) return;
 
-    await _service.save(settings);
-    state = AsyncData(settings);
+    await _service.save(
+      settings,
+      profileId: profileState?.activeProfileId,
+      base: state.value,
+    );
+    if (ref.read(profileProvider).value?.activeProfileId ==
+        profileState?.activeProfileId) {
+      state = AsyncData(await _service.load());
+    }
 
     // Keep profile snapshot in sync
-    ref.read(profileProvider.notifier).syncActiveSettings(settings);
+    await ref.read(profileProvider.notifier).reload();
   }
 
   Future<void> cleanGhostPackages(Set<String> installedPackages) async {

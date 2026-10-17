@@ -38,41 +38,47 @@ class SetRowToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Pressable(
-      onTap: locked ? () => showReadonlySnack(context) : () => onChange(!value),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: t.lineSoft)),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: AppTheme.sans(size: 14, color: t.text)),
-                  if (hint != null) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      hint!,
-                      style: AppTheme.mono(
-                        size: 10,
-                        color: t.textMuted,
-                        letterSpacing: 0.5,
+    return Semantics(
+      label: title,
+      hint: hint,
+      toggled: value,
+      enabled: !locked,
+      onTap: locked ? null : () => onChange(!value),
+      excludeSemantics: true,
+      child: Pressable(
+        onTap: locked
+            ? () => showReadonlySnack(context)
+            : () => onChange(!value),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: t.lineSoft)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: AppTheme.sans(size: 14, color: t.text)),
+                    if (hint != null) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        hint!,
+                        style: AppTheme.mono(
+                          size: 10,
+                          color: t.textMuted,
+                          letterSpacing: 0.5,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-            const SizedBox(width: 14),
-            SetSquareSwitch(
-              t: t,
-              value: value,
-              onChanged: locked ? null : (v) => onChange(v),
-            ),
-          ],
+              const SizedBox(width: 14),
+              SetSquareSwitch(t: t, value: value, onChanged: null),
+            ],
+          ),
         ),
       ),
     );
@@ -95,24 +101,28 @@ class SetSquareSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onChanged != null ? () => onChanged!(!value) : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        width: 44,
-        height: 22,
-        padding: const EdgeInsets.all(2),
-        decoration: BoxDecoration(
-          border: Border.all(color: value ? t.accent : t.line),
-          color: value ? t.accentSoft : Colors.transparent,
-        ),
-        child: Align(
-          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width: 14,
-            height: 14,
-            color: value ? t.accent : t.textMuted,
+    return Semantics(
+      toggled: value,
+      enabled: onChanged != null,
+      child: Pressable(
+        onTap: onChanged != null ? () => onChanged!(!value) : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 44,
+          height: 22,
+          padding: const EdgeInsets.all(2),
+          decoration: BoxDecoration(
+            border: Border.all(color: value ? t.accent : t.line),
+            color: value ? t.accentSoft : Colors.transparent,
+          ),
+          child: Align(
+            alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: 14,
+              height: 14,
+              color: value ? t.accent : t.textMuted,
+            ),
           ),
         ),
       ),
@@ -202,12 +212,27 @@ class SetInlineField extends StatelessWidget {
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.lineSoft)),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: AppTheme.sans(size: 14, color: t.text)),
-          child,
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final labelWidget = Text(
+            label,
+            style: AppTheme.sans(size: 14, color: t.text),
+          );
+          if (constraints.maxWidth < 360 ||
+              MediaQuery.textScalerOf(context).scale(14) > 18) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [labelWidget, const SizedBox(height: 10), child],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: labelWidget),
+              const SizedBox(width: 12),
+              child,
+            ],
+          );
+        },
       ),
     );
     if (!locked) return row;
@@ -365,7 +390,7 @@ class SetSegSquare extends StatelessWidget {
             button: true,
             selected: active,
             enabled: !locked,
-            child: GestureDetector(
+            child: Pressable(
               onTap: locked
                   ? () => showReadonlySnack(context)
                   : () => onChanged(val),
@@ -386,7 +411,7 @@ class SetSegSquare extends StatelessWidget {
                   lab,
                   style: AppTheme.mono(
                     size: 11,
-                    color: active ? t.accent : t.textDim,
+                    color: active ? t.accentText : t.textDim,
                     letterSpacing: 0.5,
                   ),
                 ),

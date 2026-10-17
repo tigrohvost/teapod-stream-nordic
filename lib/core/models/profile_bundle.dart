@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'profile.dart';
 import 'vpn_config.dart';
+import 'connections_bundle.dart';
 import '../services/config_storage_service.dart' show Subscription;
 
 class ProfileBundle {
@@ -32,18 +33,32 @@ class ProfileBundle {
     if (sourceUrl != null) 'sourceUrl': sourceUrl,
   };
 
-  factory ProfileBundle.fromJson(Map<String, dynamic> json) => ProfileBundle(
-    version: json['version'] as int? ?? 1,
-    exportedAt: DateTime.parse(json['exportedAt'] as String),
-    profile: Profile.fromJson(json['profile'] as Map<String, dynamic>),
-    configs: (json['configs'] as List<dynamic>?)
-        ?.map((e) => VpnConfig.fromJson(e as Map<String, dynamic>))
-        .toList(),
-    subscriptions: (json['subscriptions'] as List<dynamic>?)
-        ?.map((e) => Subscription.fromJson(e as Map<String, dynamic>))
-        .toList(),
-    sourceUrl: json['sourceUrl'] as String?,
-  );
+  factory ProfileBundle.fromJson(Map<String, dynamic> json) {
+    if (json['version'] != currentVersion) {
+      throw const FormatException('Неподдерживаемая версия профиля');
+    }
+    if (utf8.encode(jsonEncode(json)).length > ConnectionsBundle.maxBytes) {
+      throw const FormatException('Профиль слишком большой');
+    }
+    ConnectionsBundle.fromJson({
+      'version': currentVersion,
+      'exportedAt': json['exportedAt'],
+      'configs': json['configs'] ?? [],
+      'subscriptions': json['subscriptions'] ?? [],
+    });
+    return ProfileBundle(
+      version: json['version'] as int? ?? 1,
+      exportedAt: DateTime.parse(json['exportedAt'] as String),
+      profile: Profile.fromJson(json['profile'] as Map<String, dynamic>),
+      configs: (json['configs'] as List<dynamic>?)
+          ?.map((e) => VpnConfig.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      subscriptions: (json['subscriptions'] as List<dynamic>?)
+          ?.map((e) => Subscription.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      sourceUrl: json['sourceUrl'] as String?,
+    );
+  }
 
   String toBase64() {
     final bytes = utf8.encode(jsonEncode(toJson()));
@@ -51,6 +66,9 @@ class ProfileBundle {
   }
 
   static ProfileBundle fromBase64(String b64) {
+    if (b64.length > ConnectionsBundle.maxBytes * 4 ~/ 3 + 4) {
+      throw const FormatException('Профиль слишком большой');
+    }
     final padded = b64.padRight((b64.length + 3) ~/ 4 * 4, '=');
     final json = utf8.decode(base64Url.decode(padded));
     return ProfileBundle.fromJson(jsonDecode(json) as Map<String, dynamic>);

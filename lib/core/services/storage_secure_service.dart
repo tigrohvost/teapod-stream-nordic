@@ -17,6 +17,12 @@ class StorageSecureService {
   static const _deviceIdKey = 'device_id_v2';
   static const _deviceInfoKey = 'device_info_v2';
   static const _pinnedRefsKey = 'pinned_refs_v1';
+  static const _connectionsSnapshotKey = 'connections_snapshot_v1';
+
+  Future<String?> readConnectionsSnapshot() =>
+      _storage.read(key: _connectionsSnapshotKey);
+  Future<void> writeConnectionsSnapshot(String json) =>
+      _storage.write(key: _connectionsSnapshotKey, value: json);
 
   Future<String?> readProfilesRaw() => _storage.read(key: _profilesKey);
   Future<void> writeProfilesRaw(String json) =>

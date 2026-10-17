@@ -25,18 +25,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private var pendingResult: MethodChannel.Result? = null
-    private var pendingDeeplink: String? = null
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        handleIncomingIntent(intent)
         super.onCreate(savedInstanceState)
-        intent?.let { handleIncomingIntentForPending(it) }
-    }
-
-    private fun handleIncomingIntentForPending(intent: Intent?) {
-        val uri = intent?.data ?: return
-        if (uri.scheme == "teapod" && uri.host == "import") {
-            pendingDeeplink = uri.toString()
-        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -49,17 +41,45 @@ class MainActivity : FlutterActivity() {
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
             .setStreamHandler(VpnEventStreamHandler)
 
-        // Send pending deeplink if the app was launched via a link
-        pendingDeeplink?.let { uri ->
-            VpnEventStreamHandler.sendDeeplinkEvent(uri)
-            pendingDeeplink = null
-        }
-
         // Method channel for Flutter → native calls
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "getPendingDeeplinks" -> result.success(VpnEventStreamHandler.deeplinks.snapshot())
+                    "ackDeeplink" -> {
+                        call.argument<String>("eventId")?.let { VpnEventStreamHandler.deeplinks.acknowledge(it) }
+                        result.success(null)
+                    }
+                    "validateConfig" -> {
+                        if (call.argument<Int>("schemaVersion") != 1) {
+                            result.error("UNSUPPORTED_SCHEMA", "Unsupported connection contract", null)
+                            return@setMethodCallHandler
+                        }
+                        val config = call.argument<String>("xrayConfig") ?: ""
+                        XrayVpnService.coordinator.execute {
+                            try {
+                                AllowedApplications.validatePolicy(
+                                    call.argument<String>("vpnMode") ?: "allExcept",
+                                    call.argument<Boolean>("proxyOnly") ?: false,
+                                    call.argument<String>("ssPrefix"),
+                                    call.argument<List<String>>("includedPackages") ?: emptyList(),
+                                    android.os.Process.myUid()) { packageManager.getPackageUid(it, 0) }
+                                XrayVpnService.prepareBinaries(this)
+                                teapodcore.Teapodcore.initCoreEnv(NativeGeoStore.path(this), "")
+                                CoreConfigValidator.validate(config)
+                                runOnUiThread { result.success(null) }
+                            } catch (e: Exception) {
+                                val code = if (e is ConnectionFailure) e.code else "INVALID_CORE_CONFIG"
+                                runOnUiThread { result.error(code, "Конфигурация не прошла проверку ($code)", null) }
+                            }
+                        }
+                    }
                     "connect" -> {
+                        if (call.argument<Int>("schemaVersion") != 1) {
+                            result.error("UNSUPPORTED_SCHEMA", "Unsupported connection contract", null)
+                            return@setMethodCallHandler
+                        }
+                        val planInfo = call.argument<String>("planInfo") ?: "{}"
                         val xrayConfig = call.argument<String>("xrayConfig") ?: run {
                             result.error("INVALID_ARGS", "xrayConfig required", null)
                             return@setMethodCallHandler
@@ -86,7 +106,7 @@ class MainActivity : FlutterActivity() {
                                 excludedPackages, includedPackages, vpnMode,
                                 ssPrefix, proxyOnly = true, showNotification = showNotification,
                                 killSwitch = killSwitch, allowIcmp = allowIcmp,
-                                blockQuic = blockQuic, ipv6Enabled = ipv6Enabled, mtu = mtu
+                                blockQuic = blockQuic, ipv6Enabled = ipv6Enabled, mtu = mtu, planInfo = planInfo
                             )
                             result.success(null)
                         } else {
@@ -96,7 +116,7 @@ class MainActivity : FlutterActivity() {
                                     excludedPackages, includedPackages, vpnMode,
                                     ssPrefix, proxyOnly = false, showNotification = showNotification,
                                     killSwitch = killSwitch, allowIcmp = allowIcmp,
-                                    blockQuic = blockQuic, ipv6Enabled = ipv6Enabled, mtu = mtu
+                                    blockQuic = blockQuic, ipv6Enabled = ipv6Enabled, mtu = mtu, planInfo = planInfo
                                 )
                                 result.success(null)
                             }
@@ -186,7 +206,7 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "getState" -> {
-                        val state = XrayVpnService.getNativeState()
+                        val state = if (permissionRequestCode != null) "awaitingPermission" else XrayVpnService.getNativeState()
                         val socks = if (state == "connected") {
                             XrayVpnService.getSocksCredentials()
                         } else {
@@ -194,6 +214,10 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(mapOf(
                             "state" to state,
+                            "schemaVersion" to 1,
+                            "sessionId" to XrayVpnService.sessionId,
+                            "mode" to XrayVpnService.activeMode,
+                            "planInfo" to XrayVpnService.activePlanInfo,
                             "socksPort" to socks["port"],
                             "socksUser" to socks["user"],
                             "socksPassword" to socks["password"],
@@ -277,8 +301,20 @@ class MainActivity : FlutterActivity() {
     }
 
     private var pendingVpnAction: (() -> Unit)? = null
+    private var permissionGeneration = 0L
+    private var permissionRequestCode: Int? = null
+    private var nextPermissionRequestCode = VPN_PERMISSION_REQUEST
+
+    private fun cancelPendingPermission() {
+        permissionGeneration++
+        pendingVpnAction = null
+        permissionRequestCode = null
+        pendingResult?.error("CONNECT_CANCELLED", "Подключение отменено", null)
+        pendingResult = null
+    }
 
     override fun onDestroy() {
+        cancelPendingPermission()
         super.onDestroy()
         VpnEventStreamHandler.appContext = null
     }
@@ -291,37 +327,34 @@ class MainActivity : FlutterActivity() {
     private fun handleIncomingIntent(intent: Intent?) {
         val uri = intent?.data ?: return
         if (uri.scheme == "teapod" && uri.host == "import") {
-            VpnEventStreamHandler.sendDeeplinkEvent(uri.toString())
+            val id = intent.getStringExtra("teapod.import.eventId") ?: java.util.UUID.randomUUID().toString()
+            intent.putExtra("teapod.import.eventId", id)
+            VpnEventStreamHandler.sendDeeplinkEvent(uri.toString(), id)
         }
     }
 
     private fun requestVpnPermission(result: MethodChannel.Result, action: () -> Unit) {
-        val intent = VpnService.prepare(this)
-        if (intent != null) {
-            // Need to ask for permission
-            pendingResult = result
-            pendingVpnAction = action
-            startActivityForResult(intent, VPN_PERMISSION_REQUEST)
-        } else {
-            // Already have permission
-            action()
-        }
+        cancelPendingPermission()
+        val generation = permissionGeneration
+        val consent = VpnService.prepare(this)
+        if (consent == null) { action(); return }
+        pendingResult = result
+        pendingVpnAction = { if (generation == permissionGeneration) action() }
+        val code = nextPermissionRequestCode++
+        permissionRequestCode = code
+        VpnEventStreamHandler.sendStateEvent("awaitingPermission")
+        startActivityForResult(consent, code)
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == VPN_PERMISSION_REQUEST) {
-            if (resultCode == Activity.RESULT_OK) {
-                pendingVpnAction?.invoke()
-                pendingVpnAction = null
-                pendingResult = null
-            } else {
-                pendingResult?.error("VPN_PERMISSION_DENIED", "User denied VPN permission", null)
-                pendingResult = null
-                pendingVpnAction = null
-            }
-        }
+        if (requestCode != permissionRequestCode) return
+        val action = pendingVpnAction
+        val result = pendingResult
+        pendingVpnAction = null; pendingResult = null; permissionRequestCode = null
+        if (resultCode == Activity.RESULT_OK) action?.invoke()
+        else result?.error("VPN_PERMISSION_DENIED", "User denied VPN permission", null)
     }
 
     private fun requestBatteryOptimizationExemption() {
@@ -353,11 +386,14 @@ class MainActivity : FlutterActivity() {
         blockQuic: Boolean = false,
         ipv6Enabled: Boolean = false,
         mtu: Int = 1500,
+        planInfo: String = "{}",
     ) {
         requestBatteryOptimizationExemption()
         val intent = Intent(this, XrayVpnService::class.java).apply {
             action = XrayVpnService.ACTION_CONNECT
+            putExtra(XrayVpnService.EXTRA_REQUEST_ID, XrayVpnService.reserveConnectRequest())
             putExtra(XrayVpnService.EXTRA_XRAY_CONFIG, xrayConfig)
+            putExtra("planInfo", planInfo)
             putExtra(XrayVpnService.EXTRA_SOCKS_PORT, socksPort)
             putExtra(XrayVpnService.EXTRA_SOCKS_USER, socksUser)
             putExtra(XrayVpnService.EXTRA_SOCKS_PASSWORD, socksPassword)
@@ -381,18 +417,15 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun stopVpnService() {
-        val intent = Intent(this, XrayVpnService::class.java).apply {
-            action = XrayVpnService.ACTION_DISCONNECT
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
+        cancelPendingPermission()
+        XrayVpnService.disconnectActive()
+        if (XrayVpnService.getNativeState() == "disconnected") {
+            VpnEventStreamHandler.sendStateEvent("disconnected")
         }
     }
 
     private fun pingHost(address: String, port: Int): Int? {
-        return icmpPing(address) ?: tcpPing(address, port)
+        return tcpPing(address, port)
     }
 
     private fun icmpPing(address: String): Int? {

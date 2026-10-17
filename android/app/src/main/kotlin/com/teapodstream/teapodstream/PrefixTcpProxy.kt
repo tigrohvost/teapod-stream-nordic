@@ -1,112 +1,90 @@
 package com.teapodstream.teapodstream
 
-import java.io.IOException
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Semaphore
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
-/**
- * Local TCP proxy that prepends [prefix] bytes before forwarding traffic to [targetHost]:[targetPort].
- *
- * Used to support Outline Shadowsocks servers that require a custom prefix
- * (e.g. TLS ClientHello mimicry bytes) at the start of each TCP connection.
- *
- * Flow: Xray → 127.0.0.1:[localPort] → [prefix] + [targetHost]:[targetPort]
- */
+/** Bounded, loopback-only transport; only the core's own UID may use it. */
 class PrefixTcpProxy(
     private val targetHost: String,
     private val targetPort: Int,
     private val prefix: ByteArray,
-    // Loopback is reachable by every app on the device; the caller supplies a UID
-    // check (getConnectionOwnerUid == own UID) so foreign apps can't relay traffic
-    // to the SS server through us. null = allow all (tests).
-    private val clientAllowed: ((Socket) -> Boolean)? = null,
+    private val maxClients: Int = 32,
+    private val firstBlockTimeoutMs: Int = 5000,
+    private val clientAllowed: (Socket) -> Boolean,
 ) {
-    private val serverSocket = ServerSocket(0) // random available port
-    val localPort: Int = serverSocket.localPort
-
+    private val listener = ServerSocket(0, maxClients, InetAddress.getByName("127.0.0.1"))
+    val localPort: Int get() = listener.localPort
+    private val sockets = ConcurrentHashMap.newKeySet<Socket>()
+    private val slots = Semaphore(maxClients)
     @Volatile private var running = true
-    private val executor = Executors.newCachedThreadPool()
+    private val workers = ThreadPoolExecutor(maxClients * 2, maxClients * 2, 0, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue<Runnable>(maxClients * 2), { r -> Thread(r, "prefix-relay").apply { isDaemon = true } })
+    private var acceptThread: Thread? = null
 
     fun start() {
-        executor.submit {
+        check(acceptThread == null)
+        acceptThread = Thread {
             while (running) {
-                try {
-                    val client = serverSocket.accept()
-                    if (clientAllowed?.invoke(client) == false) {
-                        android.util.Log.w("PrefixTcpProxy", "rejected connection from foreign app")
-                        try { client.close() } catch (_: Exception) {}
-                        continue
-                    }
-                    executor.submit { handleClient(client) }
-                } catch (e: IOException) {
-                    if (running) {
-                        android.util.Log.w("PrefixTcpProxy", "accept error: ${e.message}")
-                    }
-                    break
+                val client = try { listener.accept() } catch (_: Exception) { break }
+                val allowed = try { clientAllowed(client) } catch (_: Exception) { false }
+                if (!running || !allowed || !slots.tryAcquire()) { client.close(); continue }
+                sockets.add(client)
+                try { workers.execute { relay(client) } } catch (_: Exception) {
+                    close(client); slots.release()
                 }
             }
-        }
+        }.apply { name = "prefix-accept"; isDaemon = true; start() }
     }
 
-    private fun handleClient(client: Socket) {
-        val tag = "PrefixProxy"
+    private fun relay(client: Socket) {
+        val upstream = Socket()
+        sockets.add(upstream)
         try {
-            // Read first chunk from Xray before connecting to the real server.
-            // This lets us send prefix + first SS bytes in a single write, which is
-            // critical for DPI evasion: the first TCP segment must look like a complete
-            // TLS ClientHello (prefix) immediately followed by the actual SS stream data.
-            val firstBuf = ByteArray(65536)
-            val firstN = client.inputStream.read(firstBuf)
-            if (firstN <= 0) return
-
-            android.util.Log.i(tag, "connecting to $targetHost:$targetPort (first chunk: $firstN bytes)")
-            val server = Socket(targetHost, targetPort)
-            android.util.Log.i(tag, "connected, sending ${prefix.size}+$firstN bytes combined")
-            try {
-                // Single write: prefix + first SS data → one TCP segment
-                val combined = ByteArray(prefix.size + firstN)
-                prefix.copyInto(combined)
-                firstBuf.copyInto(combined, prefix.size, 0, firstN)
-                server.outputStream.write(combined)
-                server.outputStream.flush()
-
-                val uploadThread = Thread {
-                    try {
-                        val n = client.inputStream.copyTo(server.outputStream)
-                        android.util.Log.i(tag, "upload done: $n bytes")
-                    } catch (e: Exception) {
-                        android.util.Log.i(tag, "upload error: ${e.message}")
-                    } finally {
-                        try { server.shutdownOutput() } catch (_: Exception) {}
-                    }
+            if (!running) return
+            client.soTimeout = firstBlockTimeoutMs
+            val first = ByteArray(65536)
+            val count = client.getInputStream().read(first)
+            if (count <= 0 || !running) return
+            client.soTimeout = 0
+            upstream.connect(InetSocketAddress(targetHost, targetPort), 5000)
+            upstream.getOutputStream().write(prefix + first.copyOf(count))
+            upstream.getOutputStream().flush()
+            val uploaded = java.util.concurrent.CountDownLatch(1)
+            workers.execute {
+                try { client.getInputStream().copyTo(upstream.getOutputStream()) }
+                catch (_: Exception) { close(upstream); close(client) }
+                finally {
+                    try { upstream.shutdownOutput() } catch (_: Exception) {}
+                    uploaded.countDown()
                 }
-                uploadThread.isDaemon = true
-                uploadThread.start()
-
-                try {
-                    val n = server.inputStream.copyTo(client.outputStream)
-                    android.util.Log.i(tag, "download done: $n bytes")
-                } catch (e: Exception) {
-                    android.util.Log.i(tag, "download error: ${e.message}")
-                } finally {
-                    try { client.shutdownOutput() } catch (_: Exception) {}
-                }
-
-                uploadThread.join(5000)
-            } finally {
-                try { server.close() } catch (_: Exception) {}
             }
-        } catch (e: Exception) {
-            android.util.Log.i("PrefixProxy", "handleClient error: ${e.message}")
-        } finally {
-            try { client.close() } catch (_: Exception) {}
-        }
+            upstream.getInputStream().copyTo(client.getOutputStream())
+            try { client.shutdownOutput() } catch (_: Exception) {}
+            uploaded.await() // Preserve TCP half-close; stop() closes sockets and interrupts this wait.
+        } catch (_: Exception) {
+            // Avoid endpoints or credentials in diagnostics.
+        } finally { close(upstream); close(client); slots.release() }
+    }
+
+    private fun close(socket: Socket) {
+        try { socket.close() } catch (_: Exception) {}
+        sockets.remove(socket)
     }
 
     fun stop() {
         running = false
-        try { serverSocket.close() } catch (_: Exception) {}
-        executor.shutdownNow()
+        listener.close()
+        sockets.toList().forEach(::close)
+        workers.shutdownNow()
+        acceptThread?.join(1000)
+        sockets.toList().forEach(::close)
+        workers.awaitTermination(2000, TimeUnit.MILLISECONDS)
     }
 }

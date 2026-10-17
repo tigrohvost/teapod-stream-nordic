@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'profile_storage_service.dart';
+import '../models/profile.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/vpn_log_entry.dart';
 import '../models/dns_config.dart';
@@ -98,6 +101,7 @@ class AppSettings {
   final bool showNotification;
   final bool killSwitchEnabled;
   final bool hwidEnabled;
+  final bool ipLookupEnabled;
   final RoutingSettings routing;
   final UpdateChannel updateChannel;
   final FontScale fontScale;
@@ -137,6 +141,7 @@ class AppSettings {
     this.showNotification = true,
     this.killSwitchEnabled = false,
     this.hwidEnabled = false,
+    this.ipLookupEnabled = true,
     this.routing = const RoutingSettings(),
     this.updateChannel = UpdateChannel.stable,
     this.fontScale = FontScale.normal,
@@ -177,6 +182,7 @@ class AppSettings {
     bool? showNotification,
     bool? killSwitchEnabled,
     bool? hwidEnabled,
+    bool? ipLookupEnabled,
     RoutingSettings? routing,
     UpdateChannel? updateChannel,
     FontScale? fontScale,
@@ -217,6 +223,7 @@ class AppSettings {
       showNotification: showNotification ?? this.showNotification,
       killSwitchEnabled: killSwitchEnabled ?? this.killSwitchEnabled,
       hwidEnabled: hwidEnabled ?? this.hwidEnabled,
+      ipLookupEnabled: ipLookupEnabled ?? this.ipLookupEnabled,
       routing: routing ?? this.routing,
       updateChannel: updateChannel ?? this.updateChannel,
       fontScale: fontScale ?? this.fontScale,
@@ -258,6 +265,7 @@ class AppSettings {
     'showNotification': showNotification,
     'killSwitchEnabled': killSwitchEnabled,
     'hwidEnabled': hwidEnabled,
+    'ipLookupEnabled': ipLookupEnabled,
     'routing': routing.toJson(),
     'updateChannel': updateChannel.name,
     'fontScale': fontScale.name,
@@ -277,6 +285,32 @@ class AppSettings {
   };
 
   static AppSettings fromJson(Map<String, dynamic> json) {
+    for (final entry in <String, List<String>>{
+      'vpnMode': VpnMode.values.map((e) => e.name).toList(),
+      'dnsMode': DnsMode.values.map((e) => e.name).toList(),
+      'dnsQueryStrategy': DnsQueryStrategy.values.map((e) => e.name).toList(),
+      'tlsFingerprint': TlsFingerprint.values.map((e) => e.name).toList(),
+      'logLevel': LogLevel.values.map((e) => e.name).toList(),
+      'fontScale': FontScale.values.map((e) => e.name).toList(),
+      'updateChannel': UpdateChannel.values.map((e) => e.name).toList(),
+    }.entries) {
+      if (json.containsKey(entry.key) &&
+          !entry.value.contains(json[entry.key])) {
+        throw FormatException('Неизвестное значение ${entry.key}');
+      }
+    }
+    for (final limit in [
+      ('socksPort', 1, 65535),
+      ('mtu', 576, 9000),
+      ('obsProbeIntervalSec', 0, 86400),
+      ('subAutoRefreshHours', 1, 8760),
+    ]) {
+      final value = json[limit.$1];
+      if (value != null &&
+          (value is! int || value < limit.$2 || value > limit.$3)) {
+        throw FormatException('Неверное значение ${limit.$1}');
+      }
+    }
     final routingJson = json['routing'] as Map<String, dynamic>?;
     return AppSettings(
       socksPort: json['socksPort'] as int? ?? AppConstants.defaultSocksPort,
@@ -317,6 +351,7 @@ class AppSettings {
       showNotification: json['showNotification'] as bool? ?? true,
       killSwitchEnabled: json['killSwitchEnabled'] as bool? ?? false,
       hwidEnabled: json['hwidEnabled'] as bool? ?? false,
+      ipLookupEnabled: json['ipLookupEnabled'] as bool? ?? true,
       routing: routingJson != null
           ? RoutingSettings.fromJson(routingJson)
           : const RoutingSettings(),
@@ -410,12 +445,17 @@ class SettingsService {
   final _secure = StorageSecureService();
 
   Future<AppSettings> load() async {
+    final active = await ProfileStorageService().loadActiveSettings();
+    if (active != null) return active;
     await StorageMigrationService.runIfNeeded();
     final prefs = await SharedPreferences.getInstance();
     final creds = await _secure.readSocksCredentials();
     final excluded = (prefs.getStringList(_excludedPackagesKey) ?? []).toSet();
     final included = (prefs.getStringList(_includedPackagesKey) ?? []).toSet();
     return AppSettings(
+      geoipUrl: prefs.getString('geoip_url') ?? GeoPresets.defaultGeoipUrl,
+      geositeUrl:
+          prefs.getString('geosite_url') ?? GeoPresets.defaultGeositeUrl,
       socksPort: prefs.getInt(_socksPortKey) ?? AppConstants.defaultSocksPort,
       logLevel: LogLevel.values.firstWhere(
         (e) => e.name == prefs.getString(_logLevelKey),
@@ -446,6 +486,7 @@ class SettingsService {
       showNotification: prefs.getBool(_showNotificationKey) ?? true,
       killSwitchEnabled: prefs.getBool(_killSwitchKey) ?? false,
       hwidEnabled: prefs.getBool(_hwidEnabledKey) ?? false,
+      ipLookupEnabled: prefs.getBool('ip_lookup_enabled') ?? true,
       routing: _loadRouting(prefs),
       updateChannel: UpdateChannel.values.firstWhere(
         (e) => e.name == prefs.getString(_updateChannelKey),
@@ -495,83 +536,173 @@ class SettingsService {
     );
   }
 
-  Future<void> save(AppSettings settings) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_socksPortKey, settings.socksPort);
-    await prefs.setString(_logLevelKey, settings.logLevel.name);
-    await prefs.setStringList(
-      _excludedPackagesKey,
-      settings.excludedPackages.toList(),
+  static Future<void> _writes = Future.value();
+  Future<void> save(
+    AppSettings settings, {
+    String? profileId,
+    bool updateProfile = true,
+    AppSettings? base,
+  }) {
+    final result = _writes.then(
+      (_) => _save(
+        settings,
+        profileId: profileId,
+        updateProfile: updateProfile,
+        base: base,
+      ),
     );
-    await prefs.setStringList(
-      _includedPackagesKey,
-      settings.includedPackages.toList(),
+    _writes = result.then<void>(
+      (_) {},
+      onError: (Object e, StackTrace stack) {},
     );
-    await prefs.setString(_vpnModeKey, settings.vpnMode.name);
-    await prefs.setBool(_splitTunnelingKey, settings.splitTunnelingEnabled);
-    await prefs.setBool(_randomPortKey, settings.randomPort);
-    await prefs.setBool(_autoConnectKey, settings.autoConnect);
-    await prefs.setString(_dnsModeKey, settings.dnsMode.name);
-    await prefs.setString(_dnsPresetKey, settings.dnsPreset);
-    await prefs.setString(_customDnsAddressKey, settings.customDnsAddress);
-    await prefs.setString(_customDnsTypeKey, settings.customDnsType);
-    await prefs.setBool(_enableUdpKey, settings.enableUdp);
-    await prefs.setBool(_allowIcmpKey, settings.allowIcmp);
-    await prefs.setBool(_randomCredentialsKey, settings.randomCredentials);
-    await prefs.setBool(_proxyOnlyKey, settings.proxyOnly);
-    await prefs.setBool(_showNotificationKey, settings.showNotification);
-    await prefs.setBool(_killSwitchKey, settings.killSwitchEnabled);
-    await prefs.setBool(_hwidEnabledKey, settings.hwidEnabled);
-    await prefs.setString(
-      _routingDirectionKey,
-      settings.routing.direction.name,
-    );
-    await prefs.setBool(_routingBypassLocalKey, settings.routing.bypassLocal);
-    await prefs.setBool(_routingGeoEnabledKey, settings.routing.geoEnabled);
-    await prefs.setStringList(_routingGeoCodesKey, settings.routing.geoCodes);
-    await prefs.setBool(
-      _routingDomainEnabledKey,
-      settings.routing.domainEnabled,
-    );
-    await prefs.setStringList(
-      _routingDomainZonesKey,
-      settings.routing.domainZones,
-    );
-    await prefs.setBool(
-      _routingGeositeEnabledKey,
-      settings.routing.geositeEnabled,
-    );
-    await prefs.setStringList(
-      _routingGeositeCodesKey,
-      settings.routing.geositeCodes,
-    );
-    await prefs.setBool(
-      _routingAdBlockEnabledKey,
-      settings.routing.adBlockEnabled,
-    );
-    await prefs.setBool(_routingSitesEnabledKey, settings.routing.sitesEnabled);
-    await prefs.setStringList(_routingSitesKey, settings.routing.sites);
-    await prefs.setBool(
-      _routingRuServicesKey,
-      settings.routing.ruServicesEnabled,
-    );
-    await prefs.setString(_updateChannelKey, settings.updateChannel.name);
-    await prefs.setString(_fontScaleKey, settings.fontScale.name);
-    await prefs.setBool(_sniffingEnabledKey, settings.sniffingEnabled);
-    await prefs.setInt(_mtuKey, settings.mtu);
-    await prefs.setBool(_subAutoRefreshKey, settings.subAutoRefresh);
-    await prefs.setInt(_subAutoRefreshHoursKey, settings.subAutoRefreshHours);
-    await prefs.setString(_subUserAgentKey, settings.subUserAgent);
-    await prefs.setInt(_obsProbeIntervalKey, settings.obsProbeIntervalSec);
-    await prefs.setString(_dnsQueryStrategyKey, settings.dnsQueryStrategy.name);
-    await prefs.setBool(_blockQuicKey, settings.blockQuic);
-    await prefs.setBool(_ipv6EnabledKey, settings.ipv6Enabled);
-    await prefs.setBool(_autoStartOnBootKey, settings.autoStartOnBoot);
-    await prefs.setString(_tlsFingerprintKey, settings.tlsFingerprint.name);
-    // SOCKS credentials go to encrypted storage
-    await _secure.writeSocksCredentials(
-      settings.socksUser,
-      settings.socksPassword,
-    );
+    return result;
+  }
+
+  Future<void> _save(
+    AppSettings settings, {
+    String? profileId,
+    required bool updateProfile,
+    AppSettings? base,
+  }) async {
+    final profileSnapshot = await ProfileStorageService().load();
+    if (updateProfile && profileSnapshot.profiles.isNotEmpty) {
+      final next = settings.toJson();
+      final before = base?.toJson();
+      final changes = <String, dynamic>{
+        for (final e in next.entries)
+          if (before == null ||
+              jsonEncode(before[e.key]) != jsonEncode(e.value))
+            e.key: e.value,
+      };
+      await ProfileStorageService().commit(
+        (s) => (
+          profiles: s.profiles
+              .map(
+                (p) => p.id == (profileId ?? profileSnapshot.activeProfileId)
+                    ? p.copyWith(
+                        settings: AppSettings.fromJson({
+                          ...p.settings.toJson(),
+                          ...changes,
+                        }),
+                      )
+                    : p,
+              )
+              .toList(),
+          activeProfileId: s.activeProfileId,
+          revision: s.revision,
+        ),
+      );
+    } else if (profileSnapshot.profiles.isEmpty) {
+      await ProfileStorageService().commit(
+        (s) => s.profiles.isNotEmpty
+            ? s
+            : (
+                profiles: [
+                  Profile(
+                    id: 'default',
+                    name: 'По умолчанию',
+                    isDefault: true,
+                    settings: settings,
+                    createdAt: DateTime.now(),
+                  ),
+                ],
+                activeProfileId: 'default',
+                revision: s.revision,
+              ),
+      );
+    }
+    // Legacy preferences are a compatibility mirror; reads use the atomic profile.
+    settings = await ProfileStorageService().loadActiveSettings() ?? settings;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('geoip_url', settings.geoipUrl);
+      await prefs.setString('geosite_url', settings.geositeUrl);
+      await prefs.setInt(_socksPortKey, settings.socksPort);
+      await prefs.setString(_logLevelKey, settings.logLevel.name);
+      await prefs.setStringList(
+        _excludedPackagesKey,
+        settings.excludedPackages.toList(),
+      );
+      await prefs.setStringList(
+        _includedPackagesKey,
+        settings.includedPackages.toList(),
+      );
+      await prefs.setString(_vpnModeKey, settings.vpnMode.name);
+      await prefs.setBool(_splitTunnelingKey, settings.splitTunnelingEnabled);
+      await prefs.setBool(_randomPortKey, settings.randomPort);
+      await prefs.setBool(_autoConnectKey, settings.autoConnect);
+      await prefs.setString(_dnsModeKey, settings.dnsMode.name);
+      await prefs.setString(_dnsPresetKey, settings.dnsPreset);
+      await prefs.setString(_customDnsAddressKey, settings.customDnsAddress);
+      await prefs.setString(_customDnsTypeKey, settings.customDnsType);
+      await prefs.setBool(_enableUdpKey, settings.enableUdp);
+      await prefs.setBool(_allowIcmpKey, settings.allowIcmp);
+      await prefs.setBool(_randomCredentialsKey, settings.randomCredentials);
+      await prefs.setBool(_proxyOnlyKey, settings.proxyOnly);
+      await prefs.setBool(_showNotificationKey, settings.showNotification);
+      await prefs.setBool(_killSwitchKey, settings.killSwitchEnabled);
+      await prefs.setBool(_hwidEnabledKey, settings.hwidEnabled);
+      await prefs.setBool('ip_lookup_enabled', settings.ipLookupEnabled);
+      await prefs.setString(
+        _routingDirectionKey,
+        settings.routing.direction.name,
+      );
+      await prefs.setBool(_routingBypassLocalKey, settings.routing.bypassLocal);
+      await prefs.setBool(_routingGeoEnabledKey, settings.routing.geoEnabled);
+      await prefs.setStringList(_routingGeoCodesKey, settings.routing.geoCodes);
+      await prefs.setBool(
+        _routingDomainEnabledKey,
+        settings.routing.domainEnabled,
+      );
+      await prefs.setStringList(
+        _routingDomainZonesKey,
+        settings.routing.domainZones,
+      );
+      await prefs.setBool(
+        _routingGeositeEnabledKey,
+        settings.routing.geositeEnabled,
+      );
+      await prefs.setStringList(
+        _routingGeositeCodesKey,
+        settings.routing.geositeCodes,
+      );
+      await prefs.setBool(
+        _routingAdBlockEnabledKey,
+        settings.routing.adBlockEnabled,
+      );
+      await prefs.setBool(
+        _routingSitesEnabledKey,
+        settings.routing.sitesEnabled,
+      );
+      await prefs.setStringList(_routingSitesKey, settings.routing.sites);
+      await prefs.setBool(
+        _routingRuServicesKey,
+        settings.routing.ruServicesEnabled,
+      );
+      await prefs.setString(_updateChannelKey, settings.updateChannel.name);
+      await prefs.setString(_fontScaleKey, settings.fontScale.name);
+      await prefs.setBool(_sniffingEnabledKey, settings.sniffingEnabled);
+      await prefs.setInt(_mtuKey, settings.mtu);
+      await prefs.setBool(_subAutoRefreshKey, settings.subAutoRefresh);
+      await prefs.setInt(_subAutoRefreshHoursKey, settings.subAutoRefreshHours);
+      await prefs.setString(_subUserAgentKey, settings.subUserAgent);
+      await prefs.setInt(_obsProbeIntervalKey, settings.obsProbeIntervalSec);
+      await prefs.setString(
+        _dnsQueryStrategyKey,
+        settings.dnsQueryStrategy.name,
+      );
+      await prefs.setBool(_blockQuicKey, settings.blockQuic);
+      await prefs.setBool(_ipv6EnabledKey, settings.ipv6Enabled);
+      await prefs.setBool(_autoStartOnBootKey, settings.autoStartOnBoot);
+      await prefs.setString(_tlsFingerprintKey, settings.tlsFingerprint.name);
+      // SOCKS credentials go to encrypted storage
+      await _secure.writeSocksCredentials(
+        settings.socksUser,
+        settings.socksPassword,
+      );
+    } catch (_) {
+      // The atomic profile is already durable and authoritative. A failed
+      // compatibility mirror must not report that this commit was lost.
+    }
   }
 }

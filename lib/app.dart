@@ -1,3 +1,4 @@
+import 'core/services/temporary_export_store.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -87,6 +88,9 @@ class _AppShellState extends ConsumerState<_AppShell>
   bool _autoConnectAttempted = false;
   StreamSubscription? _deeplinkSubscription;
   Timer? _updateCheckTimer;
+  Future<void> _importQueue = Future.value();
+  final _importEvents = <String>{};
+  static const _importChannel = MethodChannel('com.teapodstream/vpn');
 
   static const _pages = [
     HomeScreen(),
@@ -98,8 +102,10 @@ class _AppShellState extends ConsumerState<_AppShell>
   @override
   void initState() {
     super.initState();
+    TemporaryExportStore.cleanup().ignore();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _replayImports();
       ref.read(vpnProvider.notifier).syncNativeState();
       ref.read(vpnProvider.notifier).pingStaleConfigs();
       ref.read(geoProvider.notifier).check();
@@ -132,7 +138,9 @@ class _AppShellState extends ConsumerState<_AppShell>
   void _scheduleUpdateCheck() {
     _updateCheckTimer?.cancel();
     _updateCheckTimer = Timer(const Duration(seconds: 5), () {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       final updateState = ref.read(updateProvider);
       if (updateState is UpdateIdle) {
         ref.read(updateProvider.notifier).checkForUpdate();
@@ -148,7 +156,9 @@ class _AppShellState extends ConsumerState<_AppShell>
     // Ask the service first: on a cold UI start over a running session the
     // EventChannel replay may not have arrived yet.
     await ref.read(vpnProvider.notifier).syncNativeState();
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     final vpnState = ref.read(vpnProvider);
     if (!vpnState.isConnected && !vpnState.isBusy) {
       await ref.read(vpnProvider.notifier).connect();
@@ -161,7 +171,48 @@ class _AppShellState extends ConsumerState<_AppShell>
     if (type != 'deeplink') return;
     final uri = event['uri'] as String?;
     if (uri == null || !mounted) return;
-    DeeplinkHandler(context, ref).handleUri(uri);
+    final id = event['eventId'] as String?;
+    if (id == null || !_importEvents.add(id)) return;
+    _importQueue = _importQueue
+        .then((_) async {
+          if (!mounted) {
+            return;
+          }
+          try {
+            await DeeplinkHandler(context, ref).handleUri(uri);
+          } catch (_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Не удалось импортировать данные. Проверьте источник и формат.',
+                  ),
+                ),
+              );
+            }
+          } finally {
+            await _importChannel.invokeMethod<void>('ackDeeplink', {
+              'eventId': id,
+            });
+            if (_importEvents.length > 128) {
+              _importEvents.remove(_importEvents.first);
+            }
+          }
+        })
+        .catchError((Object _) {});
+  }
+
+  Future<void> _replayImports() async {
+    try {
+      final events = await _importChannel.invokeListMethod<dynamic>(
+        'getPendingDeeplinks',
+      );
+      for (final event in events ?? []) {
+        _handleEvent(event);
+      }
+    } catch (_) {
+      /* Non-Android platforms do not deliver OS intents here. */
+    }
   }
 
   @override
@@ -203,6 +254,10 @@ class _AppShellState extends ConsumerState<_AppShell>
       ),
     );
 
+    ref.listen<int>(
+      tabIndexProvider,
+      (_, index) => ref.read(vpnProvider.notifier).setStatsVisible(index == 0),
+    );
     final currentIndex = ref.watch(tabIndexProvider);
     return Scaffold(
       body: IndexedStack(index: currentIndex, children: _pages),

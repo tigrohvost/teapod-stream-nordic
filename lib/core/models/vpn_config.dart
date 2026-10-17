@@ -1,10 +1,15 @@
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 enum VpnProtocol { vless, vmess, trojan, shadowsocks, hysteria2 }
 
 enum VpnSecurity { none, tls, reality }
 
 enum VpnTransport { tcp, ws, grpc, http2, quic, xhttp, httpupgrade, splithttp }
+
+enum ProbeStatus { unknown, running, success, failed, cancelled }
+
+const _unchanged = Object();
 
 class VpnConfig {
   final String id;
@@ -33,6 +38,9 @@ class VpnConfig {
   final String? rawUri;
   final int? latencyMs;
   final DateTime? lastPingedAt;
+  final ProbeStatus probeStatus;
+  final int? lastSuccessfulLatencyMs;
+  final DateTime? lastSuccessfulPingAt;
   final String? subscriptionId; // ID of the subscription this config came from
   final String?
   ssPrefix; // hex-encoded prefix bytes for Outline Shadowsocks (e.g. "160301...")
@@ -77,6 +85,9 @@ class VpnConfig {
     this.rawUri,
     this.latencyMs,
     this.lastPingedAt,
+    this.probeStatus = ProbeStatus.unknown,
+    this.lastSuccessfulLatencyMs,
+    this.lastSuccessfulPingAt,
     this.subscriptionId,
     this.ssPrefix,
     this.obfsPassword,
@@ -91,8 +102,31 @@ class VpnConfig {
   });
 
   String? validate() {
-    if (rawXrayConfig != null) return null;
-    if (address.isEmpty) return 'Пустой адрес сервера';
+    if (rawXrayConfig != null) {
+      try {
+        final raw = jsonDecode(rawXrayConfig!);
+        if (raw is! Map<String, dynamic> ||
+            raw['outbounds'] is! List ||
+            (raw['outbounds'] as List).isEmpty ||
+            (raw['outbounds'] as List).any(
+              (o) => o is! Map || o['protocol'] is! String,
+            )) {
+          return 'Неверная структура управляемой конфигурации';
+        }
+        return null;
+      } catch (_) {
+        return 'Неверный JSON управляемой конфигурации';
+      }
+    }
+    if (address.trim().isEmpty || RegExp(r'\s').hasMatch(address)) {
+      return 'Пустой адрес сервера';
+    }
+    if (ssPrefix != null &&
+        (ssPrefix!.isEmpty ||
+            ssPrefix!.length.isOdd ||
+            !RegExp(r'^[0-9a-fA-F]+$').hasMatch(ssPrefix!))) {
+      return 'Неверный prefix';
+    }
     if (port < 1 || port > 65535) return 'Неверный порт: $port';
     if (protocol == VpnProtocol.vless || protocol == VpnProtocol.vmess) {
       if (uuid.isEmpty) return 'Пустой UUID';
@@ -107,16 +141,21 @@ class VpnConfig {
   }
 
   VpnConfig copyWith({
+    String? id,
     String? name,
-    int? latencyMs,
-    DateTime? lastPingedAt,
-    String? subscriptionId,
+    DateTime? createdAt,
+    Object? latencyMs = _unchanged,
+    Object? lastPingedAt = _unchanged,
+    Object? subscriptionId = _unchanged,
+    ProbeStatus? probeStatus,
+    int? lastSuccessfulLatencyMs,
+    DateTime? lastSuccessfulPingAt,
     bool? allowInsecure,
     String? pinSHA256,
     String? rawUri,
   }) {
     return VpnConfig(
-      id: id,
+      id: id ?? this.id,
       name: name ?? this.name,
       protocol: protocol,
       address: address,
@@ -138,11 +177,21 @@ class VpnConfig {
       alterId: alterId,
       method: method,
       password: password,
-      createdAt: createdAt,
+      createdAt: createdAt ?? this.createdAt,
       rawUri: rawUri ?? this.rawUri,
-      latencyMs: latencyMs ?? this.latencyMs,
-      lastPingedAt: lastPingedAt ?? this.lastPingedAt,
-      subscriptionId: subscriptionId ?? this.subscriptionId,
+      latencyMs: identical(latencyMs, _unchanged)
+          ? this.latencyMs
+          : latencyMs as int?,
+      lastPingedAt: identical(lastPingedAt, _unchanged)
+          ? this.lastPingedAt
+          : lastPingedAt as DateTime?,
+      subscriptionId: identical(subscriptionId, _unchanged)
+          ? this.subscriptionId
+          : subscriptionId as String?,
+      probeStatus: probeStatus ?? this.probeStatus,
+      lastSuccessfulLatencyMs:
+          lastSuccessfulLatencyMs ?? this.lastSuccessfulLatencyMs,
+      lastSuccessfulPingAt: lastSuccessfulPingAt ?? this.lastSuccessfulPingAt,
       ssPrefix: ssPrefix,
       obfsPassword: obfsPassword,
       allowInsecure: allowInsecure ?? this.allowInsecure,
@@ -183,6 +232,9 @@ class VpnConfig {
     'rawUri': rawUri,
     'latencyMs': latencyMs,
     'lastPingedAt': lastPingedAt?.toIso8601String(),
+    'probeStatus': probeStatus.name,
+    'lastSuccessfulLatencyMs': lastSuccessfulLatencyMs,
+    'lastSuccessfulPingAt': lastSuccessfulPingAt?.toIso8601String(),
     'subscriptionId': subscriptionId,
     'ssPrefix': ssPrefix,
     'obfsPassword': obfsPassword,
@@ -199,20 +251,13 @@ class VpnConfig {
   factory VpnConfig.fromJson(Map<String, dynamic> json) => VpnConfig(
     id: json['id'] as String,
     name: json['name'] as String,
-    protocol: VpnProtocol.values.firstWhere(
-      (e) => e.name == json['protocol'],
-      orElse: () => VpnProtocol.vless,
-    ),
+    protocol: VpnProtocol.values.firstWhere((e) => e.name == json['protocol']),
     address: json['address'] as String,
     port: json['port'] as int,
     uuid: json['uuid'] as String? ?? '',
-    security: VpnSecurity.values.firstWhere(
-      (e) => e.name == json['security'],
-      orElse: () => VpnSecurity.none,
-    ),
+    security: VpnSecurity.values.firstWhere((e) => e.name == json['security']),
     transport: VpnTransport.values.firstWhere(
       (e) => e.name == json['transport'],
-      orElse: () => VpnTransport.tcp,
     ),
     sni: json['sni'] as String?,
     wsPath: json['wsPath'] as String?,
@@ -231,6 +276,15 @@ class VpnConfig {
     createdAt: DateTime.parse(json['createdAt'] as String),
     rawUri: json['rawUri'] as String?,
     latencyMs: json['latencyMs'] as int?,
+    probeStatus: ProbeStatus.values.byName(
+      json['probeStatus'] as String? ??
+          (json['latencyMs'] != null ? 'success' : 'unknown'),
+    ),
+    lastSuccessfulLatencyMs:
+        json['lastSuccessfulLatencyMs'] as int? ?? json['latencyMs'] as int?,
+    lastSuccessfulPingAt: DateTime.tryParse(
+      json['lastSuccessfulPingAt'] as String? ?? '',
+    ),
     lastPingedAt: json['lastPingedAt'] != null
         ? DateTime.parse(json['lastPingedAt'] as String)
         : null,
@@ -250,4 +304,53 @@ class VpnConfig {
   String toJsonString() => jsonEncode(toJson());
   factory VpnConfig.fromJsonString(String s) =>
       VpnConfig.fromJson(jsonDecode(s) as Map<String, dynamic>);
+
+  /// Local-only identity. Never include this secret-derived hash in diagnostics.
+  String get connectionIdentity {
+    final data = toJson()
+      ..removeWhere(
+        (key, _) => const {
+          'id',
+          'name',
+          'createdAt',
+          'rawUri',
+          'subscriptionId',
+          'latencyMs',
+          'lastPingedAt',
+          'probeStatus',
+          'lastSuccessfulLatencyMs',
+          'lastSuccessfulPingAt',
+        }.contains(key),
+      );
+    if (rawXrayConfig != null) {
+      return sha256
+          .convert(
+            utf8.encode(jsonEncode(_canonical(jsonDecode(rawXrayConfig!)))),
+          )
+          .toString();
+    }
+    data['address'] = address.toLowerCase();
+    return sha256.convert(utf8.encode(jsonEncode(_canonical(data)))).toString();
+  }
+
+  bool hasFreshProbe(
+    DateTime now, {
+    Duration ttl = const Duration(minutes: 10),
+  }) =>
+      probeStatus == ProbeStatus.success &&
+      latencyMs != null &&
+      lastPingedAt != null &&
+      now.difference(lastPingedAt!) >= Duration.zero &&
+      now.difference(lastPingedAt!) <= ttl;
+
+  static Object? _canonical(Object? value) {
+    if (value is Map<String, dynamic>) {
+      return {
+        for (final key in value.keys.toList()..sort())
+          key: _canonical(value[key]),
+      };
+    }
+    if (value is List) return value.map(_canonical).toList();
+    return value;
+  }
 }

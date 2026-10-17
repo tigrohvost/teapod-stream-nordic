@@ -1,3 +1,4 @@
+import '../widgets/settings_shared.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -60,10 +61,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
   List<VpnConfig> _applySort(List<VpnConfig> configs) {
     if (!_sortByPing) return configs;
     return [...configs]..sort((a, b) {
-      if (a.latencyMs == null && b.latencyMs == null) return 0;
-      if (a.latencyMs == null) return 1;
-      if (b.latencyMs == null) return -1;
-      return a.latencyMs!.compareTo(b.latencyMs!);
+      return compareProbeResults(a, b, DateTime.now());
     });
   }
 
@@ -107,8 +105,11 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
               ),
               isPinging: _isPinging,
               onPing: configStateAsync.maybeWhen(
-                data: (s) =>
-                    s.configs.isNotEmpty ? () => _pingAll(s.configs) : null,
+                data: (s) => s.configs.isNotEmpty
+                    ? () => _isPinging
+                          ? ref.read(vpnProvider.notifier).cancelProbes()
+                          : _pingAll(s.configs)
+                    : null,
                 orElse: () => null,
               ),
             ),
@@ -415,8 +416,9 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
 
   // ── Actions ────────────────────────────────────────────────────
 
-  void _selectConfig(WidgetRef ref, VpnConfig config) {
-    ref.read(configProvider.notifier).setActiveConfig(config.id);
+  Future<void> _selectConfig(WidgetRef ref, VpnConfig config) async {
+    await ref.read(configProvider.notifier).setActiveConfig(config.id);
+    if (!mounted) return;
     final vpnState = ref.read(vpnProvider);
     if (vpnState.isConnected || vpnState.isBusy) {
       ref.read(vpnProvider.notifier).reconnectWithNewConfig();
@@ -428,9 +430,30 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
         .read(configProvider)
         .maybeWhen(data: (d) => d, orElse: () => null);
     if (cs == null || cs.configs.isEmpty) return;
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Полная резервная копия'),
+        content: const Text(
+          'Содержит пароли, ключи и приватные URL подписок. Передавайте только доверенному получателю.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Отмена'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Экспортировать с секретами'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
     final bundle = ConnectionsBundle(
       exportedAt: DateTime.now(),
-      configs: cs.standaloneConfigs,
+      configs: cs.configs,
       subscriptions: cs.subscriptions,
     );
     await Share.share(bundle.toCompactDeeplink(), subject: 'teapod configs');
@@ -846,11 +869,10 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
     );
     if (ok == true && controller.text.trim().isNotEmpty) {
       final updatedUrl = controller.text.trim();
-      await ConfigNotifier.storage.removeSubscription(sub.id);
       try {
         await ref
             .read(configProvider.notifier)
-            .addSubscriptionFromUrl(updatedUrl, name: sub.name);
+            .replaceSubscriptionUrl(sub.id, updatedUrl);
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Подписка обновлена по новому URL')),
@@ -962,31 +984,18 @@ class _CfgHeaderStrip extends StatelessWidget {
               letterSpacing: 1,
             ),
           ),
-          Row(
-            mainAxisSize: MainAxisSize.min,
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
             children: [
-              if (isPinging)
-                SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(
-                    color: t.accent,
-                    strokeWidth: 1.2,
-                  ),
-                )
-              else if (onPing != null)
-                GestureDetector(
-                  onTap: onPing,
+              if (onPing != null)
+                TextButton(
+                  onPressed: onPing,
                   child: Text(
-                    'ping',
-                    style: AppTheme.mono(
-                      size: 10,
-                      color: t.accent,
-                      letterSpacing: 1,
-                    ),
+                    isPinging ? 'отмена' : 'TCP ping',
+                    style: AppTheme.mono(size: 10, color: t.accentText),
                   ),
                 ),
-              const SizedBox(width: 12),
               Text(
                 'total [$totalStr]',
                 style: AppTheme.mono(
@@ -1331,7 +1340,7 @@ class _SubGroup extends StatelessWidget {
         hexAddr,
         style: AppTheme.mono(
           size: 10,
-          color: isActiveSubscription ? t.accent : t.textMuted,
+          color: isActiveSubscription ? t.accentText : t.textMuted,
         ),
       ),
     );
@@ -1368,7 +1377,9 @@ class _SubGroup extends StatelessWidget {
                               style: AppTheme.sans(
                                 size: 13,
                                 weight: FontWeight.w500,
-                                color: isActiveSubscription ? t.accent : t.text,
+                                color: isActiveSubscription
+                                    ? t.accentText
+                                    : t.text,
                                 letterSpacing: -0.2,
                               ),
                             ),
@@ -1790,8 +1801,8 @@ class _ConfigRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hexAddr = '0x${addr.toString().padLeft(2, '0')}';
-    final ping = config.latencyMs;
-    final tagColor = isActive ? t.accent : t.textDim;
+    final ping = config.hasFreshProbe(DateTime.now()) ? config.latencyMs : null;
+    final tagColor = isActive ? t.accentText : t.textDim;
     final tagBorder = isActive ? t.accent : t.line;
     final leftPad = indent ? 52.0 : 20.0;
     final isDraggable = draggableIndex != null;
@@ -1892,13 +1903,28 @@ class _ConfigRow extends StatelessWidget {
                     ),
                   ),
                   if (pinned) ...[
-                    Text('★', style: AppTheme.mono(size: 10, color: t.accent)),
+                    Text(
+                      '★',
+                      style: AppTheme.mono(size: 10, color: t.accentText),
+                    ),
                     const SizedBox(width: 6),
                   ],
                   if (ping != null)
                     Text(
-                      '${ping}ms',
-                      style: AppTheme.mono(size: 11, color: t.accent),
+                      'TCP ${ping}ms',
+                      style: AppTheme.mono(size: 11, color: t.accentText),
+                    )
+                  else
+                    Tooltip(
+                      message: config.lastSuccessfulLatencyMs == null
+                          ? 'Нет актуального измерения'
+                          : 'Последний успех: ${config.lastSuccessfulLatencyMs} ms',
+                      child: Text(switch (config.probeStatus) {
+                        ProbeStatus.running => 'TCP…',
+                        ProbeStatus.failed => 'TCP ×',
+                        ProbeStatus.cancelled => 'отмена',
+                        _ => 'не проверен',
+                      }, style: AppTheme.mono(size: 9, color: t.textMuted)),
                     ),
                   trailing,
                 ],
@@ -1993,7 +2019,7 @@ class _PinnedGroup extends StatelessWidget {
                 width: 32,
                 child: Text(
                   '[★]',
-                  style: AppTheme.mono(size: 10, color: t.accent),
+                  style: AppTheme.mono(size: 10, color: t.accentText),
                 ),
               ),
               const SizedBox(width: 10),
@@ -2157,35 +2183,8 @@ class _ToggleTile extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => onChanged(!value),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: t.lineSoft)),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(label, style: AppTheme.sans(size: 14, color: t.text)),
-            ),
-            Container(
-              width: 16,
-              height: 16,
-              decoration: BoxDecoration(
-                border: Border.all(color: value ? t.accent : t.line),
-                color: value ? t.accentFade : Colors.transparent,
-              ),
-              child: value
-                  ? Icon(Icons.check, size: 12, color: t.accent)
-                  : null,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      SetRowToggle(t: t, title: label, value: value, onChange: onChanged);
 }
 
 class _SheetTile extends StatelessWidget {

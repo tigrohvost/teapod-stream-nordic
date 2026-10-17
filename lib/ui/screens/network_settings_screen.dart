@@ -1,3 +1,4 @@
+import '../../providers/config_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/services/settings_service.dart';
@@ -95,7 +96,9 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
                           _fpLabel(fp),
                           style: AppTheme.mono(
                             size: 12,
-                            color: fp == s.tlsFingerprint ? t.accent : t.text,
+                            color: fp == s.tlsFingerprint
+                                ? t.accentText
+                                : t.text,
                             letterSpacing: 0.5,
                           ),
                         ),
@@ -103,7 +106,7 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
                       if (fp == s.tlsFingerprint)
                         Text(
                           '●',
-                          style: AppTheme.mono(size: 10, color: t.accent),
+                          style: AppTheme.mono(size: 10, color: t.accentText),
                         ),
                     ],
                   ),
@@ -124,6 +127,7 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
         .watch(profileProvider)
         .maybeWhen(data: (d) => d, orElse: () => null);
     final locked = profileState?.isReadonly ?? false;
+    final managed = ref.watch(effectiveConfigProvider)?.rawXrayConfig != null;
 
     return Scaffold(
       body: SafeArea(
@@ -149,8 +153,10 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
                   decoration: BoxDecoration(
                     border: Border(bottom: BorderSide(color: t.line)),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    spacing: 16,
+                    runSpacing: 4,
                     children: [
                       Text(
                         'teapod.stream // network',
@@ -315,7 +321,9 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
                                   ),
                                   const SizedBox(height: 3),
                                   Text(
-                                    'uTLS-маскировка ClientHello (TLS/REALITY)',
+                                    managed
+                                        ? 'Управляется подпиской'
+                                        : 'uTLS-маскировка ClientHello (TLS/REALITY)',
                                     style: AppTheme.mono(
                                       size: 10,
                                       color: t.textMuted,
@@ -327,7 +335,9 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
                             ),
                             const SizedBox(width: 16),
                             GestureDetector(
-                              onTap: locked
+                              onTap: managed
+                                  ? null
+                                  : locked
                                   ? () => showReadonlySnack(context)
                                   : () => _showFingerprintPicker(context, s),
                               child: Container(
@@ -342,7 +352,7 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
                                   _fpLabel(s.tlsFingerprint),
                                   style: AppTheme.mono(
                                     size: 11,
-                                    color: locked ? t.textDim : t.accent,
+                                    color: locked ? t.textDim : t.accentText,
                                     letterSpacing: 0.5,
                                   ),
                                 ),
@@ -350,6 +360,16 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
                             ),
                           ],
                         ),
+                      ),
+                      SetRowToggle(
+                        t: t,
+                        title: 'Показывать внешний IP',
+                        hint:
+                            'HTTPS-запрос к country.is через подключённый прокси',
+                        value: s.ipLookupEnabled,
+                        locked: locked,
+                        onChange: (v) =>
+                            _update(s.copyWith(ipLookupEnabled: v)),
                       ),
                       SetSectionHeader(t: t, addr: '0x33', label: 'tun'),
                       if (!s.proxyOnly)

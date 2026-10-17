@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import '../services/settings_service.dart';
 
 /// Детерминированный отпечаток настроек, влияющих на активное соединение.
@@ -34,5 +35,5 @@ String connectionFingerprint(AppSettings s) {
     'killSwitchEnabled': s.killSwitchEnabled,
     'showNotification': s.showNotification,
   };
-  return jsonEncode(map);
+  return sha256.convert(utf8.encode(jsonEncode(map))).toString();
 }

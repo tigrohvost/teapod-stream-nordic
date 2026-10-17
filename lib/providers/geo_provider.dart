@@ -1,8 +1,7 @@
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import '../core/services/geo_data_repository.dart';
 import '../core/constants/app_constants.dart';
 import 'settings_provider.dart';
 
@@ -12,7 +11,8 @@ class GeoMissing extends GeoState {}
 
 class GeoReady extends GeoState {
   final DateTime? lastUpdated;
-  GeoReady({this.lastUpdated});
+  final String? updateError;
+  GeoReady({this.lastUpdated, this.updateError});
 }
 
 class GeoDownloading extends GeoState {
@@ -27,124 +27,74 @@ class GeoError extends GeoState {
 }
 
 class GeoNotifier extends Notifier<GeoState> {
-  static const _kLastUpdated = 'geo_last_updated';
   static const _channel = MethodChannel(AppConstants.methodChannel);
+  GeoDataRepository? _repository;
+  Future<void>? _download;
 
   @override
   GeoState build() {
+    ref.onDispose(() => _repository?.cancel());
     Future.microtask(check);
     return GeoMissing();
   }
 
+  Future<GeoDataRepository> _repo() async {
+    if (_repository != null) return _repository!;
+    final dir = await _channel.invokeMethod<String>('getFilesDir');
+    if (dir == null || dir.isEmpty) {
+      throw const FileSystemException('Хранилище недоступно');
+    }
+    return _repository = GeoDataRepository(Directory(dir));
+  }
+
   Future<void> check() async {
+    if (_download != null) return;
     try {
-      final dir = await _channel.invokeMethod<String>('getFilesDir') ?? '';
-      if (dir.isEmpty) return;
-      final geoip = File('$dir/geoip.dat');
-      final geosite = File('$dir/geosite.dat');
-      if (!geoip.existsSync() || !geosite.existsSync()) {
-        // Try to extract bundled fallback from assets
-        await _channel.invokeMethod('prepareBinaries');
-      }
-      if (geoip.existsSync() && geosite.existsSync()) {
-        final prefs = await SharedPreferences.getInstance();
-        final ts = prefs.getInt(_kLastUpdated);
-        state = GeoReady(
-          lastUpdated: ts != null
-              ? DateTime.fromMillisecondsSinceEpoch(ts)
-              : null,
-        );
-      } else {
-        state = GeoMissing();
-      }
-    } catch (_) {
-      state = GeoMissing();
-    }
-  }
-
-  Future<void> download() async {
-    final settings = await ref.read(settingsProvider.future);
-    final String dir;
-    try {
-      dir = await _channel.invokeMethod<String>('getFilesDir') ?? '';
-    } catch (_) {
-      state = GeoError('Не удалось получить путь к файлам');
-      return;
-    }
-    if (dir.isEmpty) {
-      state = GeoError('Не удалось получить путь к файлам');
-      return;
-    }
-
-    state = GeoDownloading(downloaded: 0, total: -1);
-    int totalDownloaded = 0;
-    int grandTotal = -1;
-
-    try {
-      final lenGeoip = await _contentLength(settings.geoipUrl);
-      final lenGeosite = await _contentLength(settings.geositeUrl);
-      if (lenGeoip > 0 && lenGeosite > 0) grandTotal = lenGeoip + lenGeosite;
-      state = GeoDownloading(downloaded: 0, total: grandTotal);
-    } catch (_) {}
-
-    try {
-      for (final (url, name) in [
-        (settings.geoipUrl, 'geoip.dat'),
-        (settings.geositeUrl, 'geosite.dat'),
-      ]) {
-        await _downloadFile(
-          url: url,
-          destPath: '$dir/$name',
-          onProgress: (bytes) {
-            totalDownloaded += bytes;
-            state = GeoDownloading(
-              downloaded: totalDownloaded,
-              total: grandTotal,
+      await _channel.invokeMethod('prepareBinaries');
+      final manifest = await (await _repo()).current();
+      if (!ref.mounted || _download != null) return;
+      state = manifest == null
+          ? GeoMissing()
+          : GeoReady(
+              lastUpdated: DateTime.tryParse(
+                manifest['verifiedAt'] as String? ?? '',
+              ),
             );
-          },
-        );
-      }
-      final now = DateTime.now();
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_kLastUpdated, now.millisecondsSinceEpoch);
-      state = GeoReady(lastUpdated: now);
-    } catch (e) {
-      state = GeoError(e.toString().replaceFirst('Exception: ', ''));
+    } catch (_) {
+      if (ref.mounted) state = GeoMissing();
     }
   }
 
-  Future<int> _contentLength(String url) async {
-    final resp = await http.head(Uri.parse(url));
-    return int.tryParse(resp.headers['content-length'] ?? '') ?? -1;
-  }
+  Future<void> download() =>
+      _download ??= _downloadPair().whenComplete(() => _download = null);
+  void cancel() => _repository?.cancel();
 
-  Future<void> _downloadFile({
-    required String url,
-    required String destPath,
-    required void Function(int bytes) onProgress,
-  }) async {
-    final tmpPath = '$destPath.tmp';
-    final tmpFile = File(tmpPath);
-    final destFile = File(destPath);
-
-    final req = http.Request('GET', Uri.parse(url));
-    final resp = await http.Client().send(req);
-    if (resp.statusCode != 200) {
-      throw Exception('HTTP ${resp.statusCode}');
-    }
-
-    final sink = tmpFile.openWrite();
+  Future<void> _downloadPair() async {
     try {
-      await for (final chunk in resp.stream) {
-        sink.add(chunk);
-        onProgress(chunk.length);
-      }
-    } finally {
-      await sink.close();
+      final settings = await ref.read(settingsProvider.future);
+      final repository = await _repo();
+      state = GeoDownloading(downloaded: 0, total: -1);
+      final now = await repository.download(
+        settings.geoipUrl,
+        settings.geositeUrl,
+        onProgress: (count) {
+          if (ref.mounted) state = GeoDownloading(downloaded: count, total: -1);
+        },
+      );
+      if (ref.mounted) state = GeoReady(lastUpdated: now);
+    } catch (_) {
+      if (!ref.mounted) return;
+      final previous = await _repository?.current();
+      state = previous == null
+          ? GeoError('Не удалось проверить геобазы. Повторите загрузку.')
+          : GeoReady(
+              lastUpdated: DateTime.tryParse(
+                previous['verifiedAt'] as String? ?? '',
+              ),
+              updateError:
+                  'Обновление не прошло проверку; сохранена предыдущая версия',
+            );
     }
-
-    if (destFile.existsSync()) await destFile.delete();
-    await tmpFile.rename(destPath);
   }
 }
 

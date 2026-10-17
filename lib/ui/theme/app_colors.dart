@@ -116,6 +116,30 @@ class TeapodTokens extends ThemeExtension<TeapodTokens> {
   final Color accentFade;
   final Color danger;
 
+  /// Foreground-only accent; fill/border tokens keep the selected palette.
+  Color get accentText {
+    final backgrounds = [
+      bg,
+      bgElev,
+      bgSunken,
+      Color.alphaBlend(accentSoft, bg),
+      Color.alphaBlend(accentSoft, bgElev),
+      Color.alphaBlend(accentSoft, bgSunken),
+    ];
+    final target = bg.computeLuminance() < 0.5 ? Colors.white : Colors.black;
+    for (var step = 0; step <= 100; step++) {
+      final candidate = Color.lerp(accent, target, step / 100)!;
+      final lum = candidate.computeLuminance();
+      if (backgrounds.every((b) {
+        final l = b.computeLuminance();
+        return ((lum > l ? lum : l) + .05) / ((lum < l ? lum : l) + .05) >= 4.5;
+      })) {
+        return candidate;
+      }
+    }
+    return target;
+  }
+
   const TeapodTokens({
     required this.bg,
     required this.bgElev,

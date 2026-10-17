@@ -41,7 +41,23 @@ class _SparklinePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (samples.isEmpty) return;
+    if (this.samples.isEmpty ||
+        size.isEmpty ||
+        !size.width.isFinite ||
+        !size.height.isFinite) {
+      return;
+    }
+    final samples = this.samples
+        .map((v) => v.isFinite && v > 0 ? v : 0.0)
+        .toList();
+    if (samples.length == 1) {
+      canvas.drawCircle(
+        Offset(size.width / 2, size.height / 2),
+        strokeWidth,
+        Paint()..color = color,
+      );
+      return;
+    }
 
     final max = samples.fold<double>(0.5, (m, v) => v > m ? v : m);
     final w = size.width;

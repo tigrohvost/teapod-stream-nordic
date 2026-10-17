@@ -1,217 +1,120 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'deeplink_router.dart';
+import 'import_service.dart';
 import '../models/profile_bundle.dart';
 import '../models/connections_bundle.dart';
 import '../../providers/profile_provider.dart';
 import '../../providers/config_provider.dart';
-import '../../ui/theme/app_theme.dart';
-import '../../ui/theme/app_colors.dart';
 
+/// Shared preview and commit for OS links, QR, clipboard, text and URLs.
 class DeeplinkHandler {
   final WidgetRef ref;
   final BuildContext context;
-
   DeeplinkHandler(this.context, this.ref);
 
-  Future<void> handleUri(String uri) async {
-    final parsed = DeeplinkRouter.parse(uri);
-    if (parsed == null) return;
-
+  Future<bool> handleUri(String uri, {bool allowSelfSigned = false}) async {
     Object? bundle;
-    final sourceUrl = parsed.effectiveSourceUrl;
-
-    if (parsed.source == DeeplinkSource.data) {
-      bundle = parsed.type == DeeplinkType.profile
-          ? parsed.profileBundle
-          : parsed.connectionsBundle;
-    } else {
-      bundle = await DeeplinkRouter.fetchFromUrl(parsed);
-    }
-
-    if (!context.mounted) return;
-
-    if (bundle == null) {
-      final t = Theme.of(context).extension<TeapodTokens>()!;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Не удалось загрузить данные по ссылке',
-            style: AppTheme.mono(size: 12, color: t.bg),
-          ),
-          backgroundColor: t.danger,
-          duration: const Duration(seconds: 3),
-        ),
+    String? source;
+    if (uri.trim().startsWith('teapod://')) {
+      final parsed = DeeplinkRouter.parse(uri);
+      if (parsed == null) {
+        throw const FormatException('Не удалось распознать ссылку');
+      }
+      source = parsed.effectiveSourceUrl;
+      bundle = parsed.source == DeeplinkSource.data
+          ? parsed.profileBundle ?? parsed.connectionsBundle
+          : await DeeplinkRouter.fetchFromUrl(parsed);
+    } else if (ImportService.validUrl(uri.trim())) {
+      source = uri.trim();
+      bundle = ConnectionsBundle(
+        exportedAt: DateTime.now(),
+        subscriptionUrls: [source],
       );
-      return;
+    } else {
+      bundle = ImportService.fromText(uri);
     }
-
-    switch (parsed.type) {
-      case DeeplinkType.profile:
-        _showProfileImportDialog(bundle as ProfileBundle, sourceUrl: sourceUrl);
-      case DeeplinkType.connections:
-        _showConnectionsImportDialog(bundle as ConnectionsBundle);
+    if (bundle == null) {
+      throw const FormatException('Не удалось загрузить данные по ссылке');
     }
-  }
-
-  void _showProfileImportDialog(ProfileBundle bundle, {String? sourceUrl}) {
-    final t = Theme.of(context).extension<TeapodTokens>()!;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: t.bg,
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-        title: Text(
-          'Импорт профиля',
-          style: AppTheme.sans(
-            size: 16,
-            color: t.text,
-            weight: FontWeight.w500,
-          ),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Профиль: «${bundle.profile.name}»',
-              style: AppTheme.mono(size: 12, color: t.text),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Экспорт: ${_formatDate(bundle.exportedAt)}',
-              style: AppTheme.mono(size: 10, color: t.textMuted),
-            ),
-            if (sourceUrl != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Источник: $sourceUrl',
-                style: AppTheme.mono(size: 9, color: t.accent),
-              ),
-            ],
-            if (bundle.hasConnections)
-              Text(
-                '+ ${bundle.configs?.length ?? 0} конфигов, ${bundle.subscriptions?.length ?? 0} подписок',
-                style: AppTheme.mono(size: 10, color: t.accent),
-              ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(
-              'Отмена',
-              style: AppTheme.mono(size: 11, color: t.textMuted),
-            ),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await ref
-                  .read(profileProvider.notifier)
-                  .importBundle(bundle, sourceUrl: sourceUrl);
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Профиль «${bundle.profile.name}» импортирован',
-                      style: AppTheme.mono(size: 12, color: t.bg),
-                    ),
-                    backgroundColor: t.accent,
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
-              }
-            },
-            child: Text(
-              'Импортировать',
-              style: AppTheme.mono(size: 11, color: t.accent),
-            ),
-          ),
-        ],
-      ),
+    if (bundle is ProfileBundle) {
+      await ref.read(profileProvider.future);
+      await ref.read(configProvider.future);
+      if (!context.mounted) {
+        return false;
+      }
+      final confirmed = await _confirm(
+        'Импорт профиля',
+        'Профиль: «${bundle.profile.name}»\n'
+            '${bundle.configs?.length ?? 0} подключений, ${bundle.subscriptions?.length ?? 0} подписок',
+        source,
+      );
+      if (!confirmed || !context.mounted) return false;
+      await ref
+          .read(profileProvider.notifier)
+          .importBundle(bundle, sourceUrl: source);
+      if (context.mounted) _message('Профиль импортирован');
+      return true;
+    }
+    final notifier = ref.read(configProvider.notifier);
+    final plan = await notifier.prepareImport(
+      bundle as ConnectionsBundle,
+      allowSelfSigned: allowSelfSigned,
     );
+    final current = await ref.read(configProvider.future);
+    final preview = ImportService.apply(current, plan).$2;
+    if (!context.mounted) {
+      return false;
+    }
+    final confirmed = await _confirm(
+      'Импорт подключений',
+      '${plan.label == null ? '' : '${plan.label}\n'}'
+          'Добавить: ${preview.addedConfigs} подключений, ${preview.addedSubscriptions} подписок\n'
+          'Пропустить дубликаты: ${preview.skippedConfigs}\n'
+          'Некорректные элементы: ${preview.invalidItems}',
+      source,
+      canImport: preview.addedConfigs + preview.addedSubscriptions > 0,
+    );
+    if (!confirmed || !context.mounted) return false;
+    final result = await notifier.applyImport(plan);
+    if (context.mounted) {
+      _message(
+        'Добавлено: ${result.addedConfigs} подключений, '
+        '${result.addedSubscriptions} подписок; пропущено: ${result.skippedConfigs + result.invalidItems}',
+      );
+    }
+    return true;
   }
 
-  void _showConnectionsImportDialog(ConnectionsBundle bundle) {
-    final t = Theme.of(context).extension<TeapodTokens>()!;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: t.bg,
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-        title: Text(
-          'Импорт подключений',
-          style: AppTheme.sans(
-            size: 16,
-            color: t.text,
-            weight: FontWeight.w500,
-          ),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (bundle.label != null)
-              Text(
-                'Набор: «${bundle.label}»',
-                style: AppTheme.mono(size: 12, color: t.text),
-              ),
-            const SizedBox(height: 6),
-            Text(
-              '${bundle.configs.length} конфигов, ${bundle.subscriptions.length} подписок',
-              style: AppTheme.mono(size: 12, color: t.text),
+  Future<bool> _confirm(
+    String title,
+    String content,
+    String? source, {
+    bool canImport = true,
+  }) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: Text(
+              '$content${source == null ? '' : '\nИсточник: ${ImportService.sourceLabel(source)}'}',
             ),
-            const SizedBox(height: 4),
-            Text(
-              'Экспорт: ${_formatDate(bundle.exportedAt)}',
-              style: AppTheme.mono(size: 10, color: t.textMuted),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Отмена'),
+            ),
+            TextButton(
+              onPressed: canImport ? () => Navigator.pop(ctx, true) : null,
+              child: const Text('Импортировать'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(
-              'Отмена',
-              style: AppTheme.mono(size: 11, color: t.textMuted),
-            ),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              final result = await ref
-                  .read(configProvider.notifier)
-                  .importBundle(bundle);
-              if (context.mounted) {
-                final msg = result.addedSubscriptions > 0
-                    ? 'Добавлено: ${result.addedConfigs} конфигов, ${result.addedSubscriptions} подписок'
-                    : 'Добавлено: ${result.addedConfigs} новых конфигов';
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      msg,
-                      style: AppTheme.mono(size: 12, color: t.bg),
-                    ),
-                    backgroundColor: t.accent,
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
-              }
-            },
-            child: Text(
-              'Импортировать',
-              style: AppTheme.mono(size: 11, color: t.accent),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+      ) ??
+      false;
 
-  String _formatDate(DateTime dt) {
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-  }
+  void _message(String text) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 }

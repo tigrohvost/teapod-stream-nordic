@@ -9,6 +9,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/hero_panel.dart';
 import '../widgets/reconnect_banner.dart';
+import '../widgets/settings_shared.dart';
 
 String _formatDomainLabel(String zone) {
   if (zone == 'xn--p1ai') return '.рф';
@@ -22,7 +23,8 @@ class RoutingScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final settingsAsync = ref.watch(settingsProvider);
     final isConnected = ref.watch(vpnProvider).isConnected;
-    final geoMissing = ref.watch(geoProvider) is GeoMissing;
+    final geoState = ref.watch(geoProvider);
+    final geoMissing = geoState is GeoMissing || geoState is GeoError;
 
     return Scaffold(
       body: SafeArea(
@@ -1008,7 +1010,7 @@ class _ModeSelector extends StatelessWidget {
                             lab,
                             style: AppTheme.mono(
                               size: 12,
-                              color: active ? t.accent : t.text,
+                              color: active ? t.accentText : t.text,
                               letterSpacing: 1,
                             ),
                             textAlign: TextAlign.center,
@@ -1079,52 +1081,13 @@ class _ToggleWithChips extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Sublabel + toggle row
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          subLabel.toUpperCase(),
-                          style: AppTheme.mono(
-                            size: 10,
-                            color: t.textMuted,
-                            letterSpacing: 1,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text(
-                          '$count',
-                          style: AppTheme.mono(size: 10, color: t.textDim),
-                        ),
-                      ],
-                    ),
-                    _SquareSwitch(
-                      t: t,
-                      value: enabled,
-                      onChanged: locked ? null : (v) => onToggle(v),
-                    ),
-                  ],
-                ),
-                if (hint != null) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    hint!,
-                    style: AppTheme.mono(
-                      size: 10,
-                      color: t.textMuted,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ],
-            ),
+          SetRowToggle(
+            t: t,
+            title: '$subLabel ($count)',
+            hint: hint,
+            value: enabled,
+            locked: locked,
+            onChange: onToggle,
           ),
           if (enabled) ...[
             Padding(
@@ -1185,78 +1148,14 @@ class _RowToggle extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: last ? t.line : t.lineSoft)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: AppTheme.sans(size: 14, color: t.text)),
-                if (hint != null) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    hint!,
-                    style: AppTheme.mono(
-                      size: 10,
-                      color: t.textMuted,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 14),
-          _SquareSwitch(
-            t: t,
-            value: value,
-            onChanged: locked ? null : (v) => onChange(v),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Square switch ─────────────────────────────────────────────────
-
-class _SquareSwitch extends StatelessWidget {
-  final TeapodTokens t;
-  final bool value;
-  final void Function(bool)? onChanged;
-  const _SquareSwitch({required this.t, required this.value, this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onChanged != null ? () => onChanged!(!value) : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        width: 44,
-        height: 22,
-        padding: const EdgeInsets.all(2),
-        decoration: BoxDecoration(
-          border: Border.all(color: value ? t.accent : t.line),
-          color: value ? t.accentSoft : Colors.transparent,
-        ),
-        child: Align(
-          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width: 14,
-            height: 14,
-            color: value ? t.accent : t.textMuted,
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => SetRowToggle(
+    t: t,
+    title: title,
+    hint: hint,
+    value: value,
+    locked: locked,
+    onChange: onChange,
+  );
 }
 
 // ── Square chip ───────────────────────────────────────────────────
@@ -1600,11 +1499,13 @@ class _GeoUpdateRow extends ConsumerWidget {
         filled: true,
         onTap: () => ref.read(geoProvider.notifier).download(),
       ),
-      GeoReady(:final lastUpdated) => _GeoActionRow(
+      GeoReady(:final lastUpdated, :final updateError) => _GeoActionRow(
         t: t,
-        label: lastUpdated != null
-            ? _daysAgo(lastUpdated)
-            : 'Geo-базы загружены',
+        label:
+            updateError ??
+            (lastUpdated != null
+                ? _daysAgo(lastUpdated)
+                : 'Geo-базы загружены'),
         btnLabel: 'ОБНОВИТЬ',
         onTap: () => ref.read(geoProvider.notifier).download(),
       ),
@@ -1630,6 +1531,10 @@ class _GeoUpdateRow extends ConsumerWidget {
                   ? '${(downloaded / 1024 / 1024).toStringAsFixed(1)} / ${(total / 1024 / 1024).toStringAsFixed(1)} МБ'
                   : '${(downloaded / 1024 / 1024).toStringAsFixed(1)} МБ',
               style: AppTheme.mono(size: 10, color: t.textDim),
+            ),
+            TextButton(
+              onPressed: () => ref.read(geoProvider.notifier).cancel(),
+              child: const Text('Отменить загрузку'),
             ),
           ],
         ),
@@ -1695,7 +1600,7 @@ class _GeoActionRow extends StatelessWidget {
                 btnLabel,
                 style: AppTheme.mono(
                   size: 10,
-                  color: filled ? t.bg : t.accent,
+                  color: filled ? t.bg : t.accentText,
                   letterSpacing: 1,
                 ),
               ),
@@ -1799,7 +1704,7 @@ class _GeoSourceSheetState extends State<_GeoSourceSheet> {
                       style: AppTheme.mono(
                         size: 11,
                         color: currentName == preset.name
-                            ? t.accent
+                            ? t.accentText
                             : t.textDim,
                         letterSpacing: 0.5,
                       ),
@@ -1830,7 +1735,7 @@ class _GeoSourceSheetState extends State<_GeoSourceSheet> {
                     'Custom',
                     style: AppTheme.mono(
                       size: 11,
-                      color: currentName == 'custom' ? t.accent : t.textDim,
+                      color: currentName == 'custom' ? t.accentText : t.textDim,
                       letterSpacing: 0.5,
                     ),
                   ),

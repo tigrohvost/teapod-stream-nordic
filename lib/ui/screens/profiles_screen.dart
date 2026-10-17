@@ -1,8 +1,8 @@
-import 'dart:io';
+import '../../providers/config_provider.dart';
+import '../../core/services/temporary_export_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../core/models/profile.dart';
 import '../../core/models/profile_bundle.dart';
@@ -268,7 +268,7 @@ void _profShowCreateDialog(
             },
             child: Text(
               'Создать',
-              style: AppTheme.mono(size: 11, color: t.accent),
+              style: AppTheme.mono(size: 11, color: t.accentText),
             ),
           ),
         ],
@@ -408,7 +408,7 @@ void _profShowImportDialog(
             },
             child: Text(
               'Импортировать',
-              style: AppTheme.mono(size: 11, color: t.accent),
+              style: AppTheme.mono(size: 11, color: t.accentText),
             ),
           ),
         ],
@@ -517,7 +517,7 @@ void _showRenameDialog(
           },
           child: Text(
             'Сохранить',
-            style: AppTheme.mono(size: 11, color: t.accent),
+            style: AppTheme.mono(size: 11, color: t.accentText),
           ),
         ),
       ],
@@ -556,8 +556,8 @@ void _showExportSheet(
             const SizedBox(height: 16),
             _ExportRow(
               t: t,
-              label: 'Копировать ссылку',
-              hint: 'teapod://import/profile?data=...',
+              label: 'Копировать шаблон',
+              hint: 'Настройки без SOCKS-пароля и источников подписок',
               onTap: () {
                 Clipboard.setData(ClipboardData(text: deeplink));
                 Navigator.pop(ctx);
@@ -575,11 +575,48 @@ void _showExportSheet(
             ),
             _ExportRow(
               t: t,
-              label: 'Поделиться файлом',
+              label: 'Шаблон файлом',
               hint: '${profile.name.toLowerCase().replaceAll(' ', '_')}.json',
               onTap: () async {
                 Navigator.pop(ctx);
                 await _shareAsFile(context, profile, bundle);
+              },
+            ),
+            _ExportRow(
+              t: t,
+              label: 'Полная резервная копия',
+              hint: 'Содержит подключения, пароли, ключи и приватные URL',
+              onTap: () async {
+                Navigator.pop(ctx);
+                final accepted = await showDialog<bool>(
+                  context: context,
+                  builder: (dialog) => AlertDialog(
+                    title: const Text('Экспорт с секретами'),
+                    content: const Text(
+                      'В файл войдут учётные данные и приватные ссылки. Передавайте его только доверенному получателю.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialog, false),
+                        child: const Text('Отмена'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialog, true),
+                        child: const Text('Создать копию'),
+                      ),
+                    ],
+                  ),
+                );
+                if (accepted != true || !context.mounted) return;
+                await ref.read(configProvider.future);
+                if (!context.mounted) return;
+                await _shareAsFile(
+                  context,
+                  profile,
+                  ref
+                      .read(profileProvider.notifier)
+                      .exportBundle(profile.id, includeConnections: true),
+                );
               },
             ),
             const SizedBox(height: 8),
@@ -595,13 +632,7 @@ Future<void> _shareAsFile(
   Profile profile,
   ProfileBundle bundle,
 ) async {
-  final dir = await getTemporaryDirectory();
-  final safeName = profile.name.replaceAll(
-    RegExp(r'[^a-zA-Z0-9а-яА-Я_\- ]'),
-    '_',
-  );
-  final file = File('${dir.path}/$safeName.json');
-  await file.writeAsString(
+  final file = await TemporaryExportStore.create(
     const JsonEncoder.withIndent('  ').convert(bundle.toJson()),
   );
   await Share.shareXFiles([
@@ -751,7 +782,7 @@ class _ProfileCard extends StatelessWidget {
                           profile.name,
                           style: AppTheme.sans(
                             size: 14,
-                            color: isActive ? t.accent : t.text,
+                            color: isActive ? t.accentText : t.text,
                             weight: isActive
                                 ? FontWeight.w600
                                 : FontWeight.normal,
@@ -772,7 +803,7 @@ class _ProfileCard extends StatelessWidget {
                             'ACTIVE',
                             style: AppTheme.mono(
                               size: 9,
-                              color: t.accent,
+                              color: t.accentText,
                               letterSpacing: 1,
                             ),
                           ),

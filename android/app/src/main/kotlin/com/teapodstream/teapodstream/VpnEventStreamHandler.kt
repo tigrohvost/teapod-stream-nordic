@@ -13,6 +13,7 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
     private var eventSink: EventChannel.EventSink? = null
     private val handler = Handler(Looper.getMainLooper())
     private val eventBuffer = mutableListOf<Map<String, Any?>>()
+    internal val deeplinks = PendingDeeplinks()
     // Контекст приложения для обновления Quick Settings плитки — WeakReference чтобы не удерживать Activity
     private var _appContextRef: WeakReference<android.content.Context>? = null
     var appContext: android.content.Context?
@@ -21,6 +22,7 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
         eventSink = events
+        deeplinks.snapshot().forEach { sendEventInternal(it) }
         // Flush buffered events
         synchronized(eventBuffer) {
             for (event in eventBuffer) {
@@ -38,6 +40,7 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
                     XrayVpnService.activeSocksPassword,
                 )
                 // Send current stats
+                if (XrayVpnService.activeMode == "proxyOnly") return
                 val currentStats = XrayVpnService.getStats()
                 sendEvent(mapOf(
                     "type" to "stats",
@@ -55,7 +58,7 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
                     ))
                 }
             }
-            "connecting", "disconnecting", "reconnecting", "blocked" -> sendStateEvent(state)
+            "awaitingPermission", "connecting", "disconnecting", "reconnecting", "blocked", "stopBlocked" -> sendStateEvent(state)
             else -> sendStateEvent("disconnected")
         }
     }
@@ -65,13 +68,14 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
     }
 
     fun sendEvent(event: Map<String, Any?>) {
+        val versioned = mapOf("schemaVersion" to 1, "sessionId" to XrayVpnService.sessionId) + event
         handler.post {
             if (eventSink != null) {
-                sendEventInternal(event)
+                sendEventInternal(versioned)
             } else {
                 synchronized(eventBuffer) {
                     if (eventBuffer.size < 500) {
-                        eventBuffer.add(event)
+                        eventBuffer.add(versioned)
                     }
                 }
             }
@@ -99,6 +103,8 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
         sendEvent(mapOf(
             "type" to "state",
             "value" to "connected",
+            "mode" to XrayVpnService.activeMode,
+            "planInfo" to XrayVpnService.activePlanInfo,
             "socksPort" to socksPort,
             "socksUser" to socksUser,
             "socksPassword" to socksPassword,
@@ -128,7 +134,8 @@ object VpnEventStreamHandler : EventChannel.StreamHandler {
         )
     }
 
-    fun sendDeeplinkEvent(uri: String) {
-        sendEvent(mapOf("type" to "deeplink", "uri" to uri))
+    fun sendDeeplinkEvent(uri: String, id: String) {
+        deeplinks.enqueue(id, uri)
+        handler.post { deeplinks.snapshot().forEach { sendEventInternal(it) } }
     }
 }

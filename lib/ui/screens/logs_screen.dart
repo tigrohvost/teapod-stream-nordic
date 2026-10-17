@@ -1,7 +1,12 @@
+import '../../core/services/temporary_export_store.dart';
+import '../../core/services/diagnostic_redactor.dart';
+import '../../providers/config_provider.dart';
+import '../../providers/settings_provider.dart';
+import '../../protocols/xray/xray_engine.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../core/models/vpn_log_entry.dart';
 import '../../core/services/log_service.dart';
@@ -68,23 +73,69 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
       }
       return;
     }
-    // Copy to cache dir — share_plus requires files in a shareable location
-    final now = DateTime.now();
-    final name =
-        'teapod_'
-        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}'
-        '_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}.txt';
-    final tmp = File('${(await getTemporaryDirectory()).path}/$name');
-    await src.copy(tmp.path);
+    final configs = (await ref.read(configProvider.future));
+    final settings = await ref.read(settingsProvider.future);
+    final mode = ref.read(vpnProvider).appliedMode;
+    final failure = ref.read(vpnProvider).error ?? 'нет';
+    final versions = await XrayEngine().getBinaryVersions();
+    final package = await PackageInfo.fromPlatform();
+    final secrets = <String>[
+      settings.socksUser,
+      settings.socksPassword,
+      ref.read(vpnProvider).activeSocksUser,
+      ref.read(vpnProvider).activeSocksPassword,
+      ...configs.subscriptions.map((s) => s.url),
+      for (final c in configs.configs) ...[
+        c.address,
+        c.sni ?? '',
+        c.uuid,
+        c.password ?? '',
+        c.rawUri ?? '',
+        c.publicKey ?? '',
+        c.obfsPassword ?? '',
+      ],
+    ];
+    final report = DiagnosticRedactor.redact(
+      'TeapodStream ${package.version} (${package.buildNumber})\n'
+      'Core: ${versions['xray']}\nРежим: $mode\nЭтап/ошибка: $failure\n\n${await src.readAsString()}',
+      secrets: secrets,
+    );
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Диагностический отчёт'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Text(
+              'Версия, режим, ошибки и журнал с удалёнными секретами. Проверьте содержимое перед передачей.\n\n$report',
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Отмена'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Поделиться'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final tmp = await TemporaryExportStore.create(report, extension: 'txt');
     await Share.shareXFiles([
       XFile(tmp.path, mimeType: 'text/plain'),
-    ], subject: 'TeapodStream Log');
+    ], subject: 'TeapodStream Diagnostics');
   }
 
   Color _lvlColor(LogLevel lvl, TeapodTokens t) => switch (lvl) {
     LogLevel.error => t.danger,
     LogLevel.warning => _warn,
-    LogLevel.info => t.accent,
+    LogLevel.info => t.accentText,
     LogLevel.debug => t.textMuted,
   };
 
@@ -371,7 +422,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                           : '○ paused — tap to resume',
                       style: AppTheme.mono(
                         size: 10,
-                        color: _autoScroll ? t.accent : t.textMuted,
+                        color: _autoScroll ? t.accentText : t.textMuted,
                         letterSpacing: 1,
                       ),
                     ),

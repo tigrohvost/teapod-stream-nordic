@@ -73,13 +73,15 @@ class HeartbeatLoopTest {
         val reconnects = LinkedBlockingQueue<Long>()
 
         override val running: Boolean get() = up
-        override val tunModeActive = false
+        @Volatile var directReachable = true
+        @Volatile var activeConnections = 0L
+        override val tunModeActive = true
         override fun socksAuth() = "" to ""
         override fun isTunRunning() = true
-        override fun tunActiveConnections() = 0L
+        override fun tunActiveConnections() = activeConnections
         override fun tunLastRxActivityMs() = 0L
         override fun tunStatsLine() = ""
-        override fun hasDirectInternet() = true
+        override fun hasDirectInternet() = directReachable
         override fun requestReconnect(afterProbeFailure: Boolean) {
             if (afterProbeFailure) streak.incrementAndGet()
             reconnects.add(System.currentTimeMillis())
@@ -141,4 +143,17 @@ class HeartbeatLoopTest {
         assertNotNull(at)
         assertTrue(at!! - startedAt >= 1_000L)
     }
+    @Test fun `unknown direct reachability never disables warmup deadline`() {
+        val d = start(isReconnect = true) { 0L }
+        d.directReachable = false
+        assertNotNull(d.reconnects.poll(3, TimeUnit.SECONDS))
+    }
+
+    @Test fun `more than 200 healthy connections do not cause reconnect`() {
+        proxy.healthy = true
+        val d = start { 0L }
+        d.activeConnections = 500
+        assertNull(d.reconnects.poll(500, TimeUnit.MILLISECONDS))
+    }
+
 }

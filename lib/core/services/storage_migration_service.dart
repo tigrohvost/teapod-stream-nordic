@@ -5,16 +5,16 @@ import 'storage_secure_service.dart';
 /// Safe to call on every launch — skips immediately after the first successful run.
 class StorageMigrationService {
   static const _flagKey = 'storage_migrated_v2';
-  static bool _ranThisSession = false;
+  static Future<void>? _pending;
 
-  static Future<void> runIfNeeded() async {
-    if (_ranThisSession) return;
-    _ranThisSession = true;
+  static Future<void> runIfNeeded({StorageSecureService? secure}) =>
+      _pending ??= _migrate(
+        secure ?? StorageSecureService(),
+      ).whenComplete(() => _pending = null);
 
+  static Future<void> _migrate(StorageSecureService secure) async {
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool(_flagKey) == true) return;
-
-    final secure = StorageSecureService();
 
     try {
       // VPN configs: List<String> (each element is a JSON object) → single JSON array
@@ -54,8 +54,9 @@ class StorageMigrationService {
         await prefs.remove(key);
       }
     } catch (_) {
-      // On Keystore failure — do NOT set the flag so migration retries next launch.
-      // Old plaintext data remains intact as fallback.
+      // Never let the caller commit an empty canonical snapshot after a partial
+      // migration. Keep plaintext intact and allow retry in this process too.
+      rethrow;
     }
   }
 }

@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import '../core/services/deeplink_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models/profile.dart';
 import '../core/models/profile_bundle.dart';
@@ -12,8 +12,13 @@ import 'config_provider.dart';
 class ProfileState {
   final List<Profile> profiles;
   final String activeProfileId;
+  final int revision;
 
-  const ProfileState({required this.profiles, required this.activeProfileId});
+  const ProfileState({
+    required this.profiles,
+    required this.activeProfileId,
+    this.revision = 0,
+  });
 
   Profile? get activeProfile =>
       profiles.where((p) => p.id == activeProfileId).firstOrNull;
@@ -24,138 +29,184 @@ class ProfileState {
       ProfileState(
         profiles: profiles ?? this.profiles,
         activeProfileId: activeProfileId ?? this.activeProfileId,
+        revision: revision,
       );
 }
 
 class ProfileNotifier extends AsyncNotifier<ProfileState> {
   final _storage = ProfileStorageService();
-
-  ProfileState? get _current =>
-      state.maybeWhen(data: (d) => d, orElse: () => null);
+  final _refresh = <String, int>{};
+  ProfileState? get _current => state.value;
 
   @override
   Future<ProfileState> build() async {
-    var profiles = await _storage.loadProfiles();
-    var activeId = await _storage.loadActiveProfileId();
-
-    if (profiles.isEmpty) {
+    var snapshot = await _storage.load();
+    if (snapshot.profiles.isEmpty) {
       final settings = await SettingsService().load();
-      final defaultProfile = Profile(
-        id: 'default',
-        name: 'По умолчанию',
-        isDefault: true,
-        settings: settings,
-        createdAt: DateTime.now(),
+      snapshot = await _storage.commit(
+        (s) => (
+          profiles: [
+            Profile(
+              id: 'default',
+              name: 'По умолчанию',
+              isDefault: true,
+              settings: settings,
+              createdAt: DateTime.now(),
+            ),
+          ],
+          activeProfileId: 'default',
+          revision: s.revision,
+        ),
       );
-      profiles = [defaultProfile];
-      await _storage.saveProfiles(profiles);
-      await _storage.saveActiveProfileId('default');
-      activeId = 'default';
     }
-
-    if (!profiles.any((p) => p.id == activeId)) {
-      activeId = profiles.first.id;
-      await _storage.saveActiveProfileId(activeId);
+    if (!snapshot.profiles.any((p) => p.id == snapshot.activeProfileId)) {
+      snapshot = await _storage.commit(
+        (s) => (
+          profiles: s.profiles,
+          activeProfileId: s.profiles.first.id,
+          revision: s.revision,
+        ),
+      );
     }
+    return ProfileState(
+      profiles: snapshot.profiles,
+      activeProfileId: snapshot.activeProfileId,
+      revision: snapshot.revision,
+    );
+  }
 
-    return ProfileState(profiles: profiles, activeProfileId: activeId);
+  Future<void> _commit(ProfileSnapshot Function(ProfileSnapshot) update) async {
+    await future;
+    final next = await _storage.commit(update);
+    if (ref.mounted && next.revision >= (_current?.revision ?? -1)) {
+      state = AsyncData(
+        ProfileState(
+          profiles: next.profiles,
+          activeProfileId: next.activeProfileId,
+          revision: next.revision,
+        ),
+      );
+    }
+  }
+
+  Future<void> reload() async {
+    final snapshot = await _storage.load();
+    if (ref.mounted && snapshot.revision >= (_current?.revision ?? -1)) {
+      state = AsyncData(
+        ProfileState(
+          profiles: snapshot.profiles,
+          activeProfileId: snapshot.activeProfileId,
+          revision: snapshot.revision,
+        ),
+      );
+    }
   }
 
   Future<void> switchProfile(String id) async {
-    final current = _current;
-    if (current == null || current.activeProfileId == id) return;
-    final profile = current.profiles.firstWhere((p) => p.id == id);
-
-    await SettingsService().save(profile.settings);
-    await _storage.saveActiveProfileId(id);
-
-    state = AsyncData(current.copyWith(activeProfileId: id));
+    await _commit(
+      (s) => s.profiles.any((p) => p.id == id)
+          ? (profiles: s.profiles, activeProfileId: id, revision: s.revision)
+          : s,
+    );
+    final profile = _current?.activeProfile;
+    if (profile == null) return;
+    await SettingsService().save(profile.settings, updateProfile: false);
     ref.invalidate(settingsProvider);
+    await ref.read(settingsProvider.future);
   }
 
   Future<void> createProfile(String name, {bool copyFromCurrent = true}) async {
-    final current = _current;
-    if (current == null) return;
-
     final settings = copyFromCurrent
-        ? (ref
-                  .read(settingsProvider)
-                  .maybeWhen(data: (d) => d, orElse: () => null) ??
-              const AppSettings())
+        ? await ref.read(settingsProvider.future)
         : const AppSettings();
-
-    final id = 'profile_${DateTime.now().millisecondsSinceEpoch}';
-    final profile = Profile(
-      id: id,
-      name: name,
-      settings: settings,
-      createdAt: DateTime.now(),
+    await _commit(
+      (s) => (
+        profiles: [
+          ...s.profiles,
+          Profile(
+            id: 'profile_${DateTime.now().microsecondsSinceEpoch}',
+            name: name,
+            settings: settings,
+            createdAt: DateTime.now(),
+          ),
+        ],
+        activeProfileId: s.activeProfileId,
+        revision: s.revision,
+      ),
     );
-
-    final profiles = [...current.profiles, profile];
-    await _storage.saveProfiles(profiles);
-    state = AsyncData(current.copyWith(profiles: profiles));
   }
 
-  Future<void> renameProfile(String id, String newName) async {
-    final current = _current;
-    if (current == null) return;
-    final profiles = current.profiles
-        .map((p) => p.id == id ? p.copyWith(name: newName) : p)
-        .toList();
-    await _storage.saveProfiles(profiles);
-    state = AsyncData(current.copyWith(profiles: profiles));
-  }
+  Future<void> renameProfile(String id, String name) => _commit(
+    (s) => (
+      profiles: s.profiles
+          .map((p) => p.id == id ? p.copyWith(name: name) : p)
+          .toList(),
+      activeProfileId: s.activeProfileId,
+      revision: s.revision,
+    ),
+  );
 
-  Future<void> deleteProfile(String id) async {
-    final current = _current;
-    if (current == null) return;
-    final target = current.profiles.firstWhere((p) => p.id == id);
-    if (target.isDefault || current.activeProfileId == id) return;
+  Future<void> deleteProfile(String id) => _commit((s) {
+    _refresh[id] = (_refresh[id] ?? 0) + 1;
+    return (
+      profiles: s.profiles
+          .where((p) => p.id != id || p.isDefault || s.activeProfileId == id)
+          .toList(),
+      activeProfileId: s.activeProfileId,
+      revision: s.revision,
+    );
+  });
 
-    final profiles = current.profiles.where((p) => p.id != id).toList();
-    await _storage.saveProfiles(profiles);
-    state = AsyncData(current.copyWith(profiles: profiles));
-  }
+  Future<void> toggleReadonly(String id) => _commit(
+    (s) => (
+      profiles: s.profiles
+          .map((p) => p.id == id ? p.copyWith(readonly: !p.readonly) : p)
+          .toList(),
+      activeProfileId: s.activeProfileId,
+      revision: s.revision,
+    ),
+  );
 
-  Future<void> toggleReadonly(String id) async {
-    final current = _current;
-    if (current == null) return;
-    final profiles = current.profiles
-        .map((p) => p.id == id ? p.copyWith(readonly: !p.readonly) : p)
-        .toList();
-    await _storage.saveProfiles(profiles);
-    state = AsyncData(current.copyWith(profiles: profiles));
-  }
+  Future<void> syncActiveSettings(AppSettings settings, {String? profileId}) =>
+      _commit(
+        (s) => (
+          profiles: s.profiles
+              .map(
+                (p) => p.id == (profileId ?? s.activeProfileId)
+                    ? p.copyWith(settings: settings)
+                    : p,
+              )
+              .toList(),
+          activeProfileId: s.activeProfileId,
+          revision: s.revision,
+        ),
+      );
 
-  Future<void> syncActiveSettings(AppSettings settings) async {
-    final current = _current;
-    if (current == null) return;
-    final id = current.activeProfileId;
-    await _storage.updateProfileSettings(id, settings);
-    final profiles = current.profiles
-        .map((p) => p.id == id ? p.copyWith(settings: settings) : p)
-        .toList();
-    state = AsyncData(current.copyWith(profiles: profiles));
-  }
-
-  ProfileBundle exportBundle(
-    String profileId, {
-    bool includeConnections = false,
-  }) {
-    final current = _current!;
-    final profile = current.profiles.firstWhere((p) => p.id == profileId);
-    if (!includeConnections) {
-      return ProfileBundle(exportedAt: DateTime.now(), profile: profile);
-    }
-    final configState = ref
-        .read(configProvider)
-        .maybeWhen(data: (d) => d, orElse: () => null);
+  ProfileBundle exportBundle(String id, {bool includeConnections = false}) {
+    final profile = _current!.profiles.firstWhere((p) => p.id == id);
+    final configs = ref.read(configProvider).value;
     return ProfileBundle(
       exportedAt: DateTime.now(),
-      profile: profile,
-      configs: configState?.configs.toList(),
-      subscriptions: configState?.subscriptions.toList(),
+      profile: includeConnections
+          ? profile
+          : Profile(
+              id: profile.id,
+              name: profile.name,
+              createdAt: profile.createdAt,
+              settings: profile.settings.copyWith(
+                socksUser: '',
+                socksPassword: '',
+                randomCredentials: true,
+                subUserAgent: '',
+                dnsPreset: 'cf_udp',
+                customDnsAddress: '1.1.1.1',
+                customDnsType: 'udp',
+                geoipUrl: GeoPresets.defaultGeoipUrl,
+                geositeUrl: GeoPresets.defaultGeositeUrl,
+              ),
+            ),
+      configs: includeConnections ? configs?.configs : null,
+      subscriptions: includeConnections ? configs?.subscriptions : null,
     );
   }
 
@@ -165,76 +216,64 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
     bool makeReadonly = false,
     String? sourceUrl,
   }) async {
-    final current = _current;
-    if (current == null) return null;
-
-    final newId = 'profile_${DateTime.now().millisecondsSinceEpoch}';
+    await future;
+    ProfileBundle.fromJson(bundle.toJson());
+    if (bundle.hasConnections) {
+      await ref
+          .read(configProvider.notifier)
+          .importBundle(
+            ConnectionsBundle(
+              exportedAt: bundle.exportedAt,
+              configs: bundle.configs ?? [],
+              subscriptions: bundle.subscriptions ?? [],
+            ),
+          );
+    }
+    var id = 'profile_${DateTime.now().microsecondsSinceEpoch}';
     final profile = Profile(
-      id: newId,
+      id: id,
       name: bundle.profile.name,
-      isDefault: false,
       readonly: makeReadonly,
       settings: bundle.profile.settings,
       createdAt: DateTime.now(),
-      sourceUrl: sourceUrl ?? bundle.sourceUrl,
-      lastFetchedAt: sourceUrl != null
-          ? DateTime.now()
-          : bundle.profile.lastFetchedAt,
+      sourceUrl: sourceUrl ?? bundle.sourceUrl ?? bundle.profile.sourceUrl,
     );
-
-    final profiles = [...current.profiles, profile];
-    await _storage.saveProfiles(profiles);
-    state = AsyncData(current.copyWith(profiles: profiles));
-
-    if (bundle.hasConnections) {
-      await ref
-          .read(configProvider.notifier)
-          .importBundle(
-            ConnectionsBundle(
-              exportedAt: bundle.exportedAt,
-              configs: bundle.configs ?? [],
-              subscriptions: bundle.subscriptions ?? [],
-            ),
-          );
-    }
-
-    if (switchToProfile) await switchProfile(newId);
-    return newId;
+    await _commit((s) {
+      final existing = s.profiles
+          .where(
+            (p) => profile.sourceUrl != null
+                ? p.sourceUrl == profile.sourceUrl
+                : p.name == profile.name &&
+                      jsonEncode(p.settings.toJson()) ==
+                          jsonEncode(profile.settings.toJson()),
+          )
+          .firstOrNull;
+      if (existing != null) {
+        id = existing.id;
+        return s;
+      }
+      return (
+        profiles: [...s.profiles, profile],
+        activeProfileId: s.activeProfileId,
+        revision: s.revision,
+      );
+    });
+    if (switchToProfile) await switchProfile(id);
+    return id;
   }
 
-  Future<String?> refreshProfile(String profileId, String url) async {
-    final current = _current;
-    if (current == null) return null;
-
-    ProfileBundle bundle;
-    try {
-      final response = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 15));
-      if (response.statusCode != 200) return null;
-
-      bundle = ProfileBundle.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>,
-      );
-    } catch (e) {
+  Future<String?> refreshProfile(String id, String url) async {
+    await future;
+    final generation = (_refresh[id] ?? 0) + 1;
+    _refresh[id] = generation;
+    final bundle = await DeeplinkRouter.fetchFromUrl(
+      DeeplinkParseResult.urlProfile(url),
+    );
+    if (bundle is! ProfileBundle) return null;
+    if (_refresh[id] != generation ||
+        !_current!.profiles.any((p) => p.id == id && p.sourceUrl == url)) {
       return null;
     }
-
-    final existingIdx = current.profiles.indexWhere((p) => p.id == profileId);
-    if (existingIdx < 0) return null;
-
-    final existing = current.profiles[existingIdx];
-    final updated = existing.copyWith(
-      name: bundle.profile.name,
-      settings: bundle.profile.settings,
-      lastFetchedAt: DateTime.now(),
-    );
-
-    final profiles = [...current.profiles];
-    profiles[existingIdx] = updated;
-    await _storage.saveProfiles(profiles);
-    state = AsyncData(current.copyWith(profiles: profiles));
-
     if (bundle.hasConnections) {
       await ref
           .read(configProvider.notifier)
@@ -246,14 +285,34 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
             ),
           );
     }
-
-    // If this is the active profile, apply its settings
-    if (profileId == current.activeProfileId) {
-      await SettingsService().save(updated.settings);
+    var applied = false;
+    await _commit((s) {
+      if (_refresh[id] != generation || !s.profiles.any((p) => p.id == id)) {
+        return s;
+      }
+      applied = true;
+      return (
+        profiles: s.profiles
+            .map(
+              (p) => p.id == id
+                  ? p.copyWith(
+                      name: bundle.profile.name,
+                      settings: bundle.profile.settings,
+                      lastFetchedAt: DateTime.now(),
+                    )
+                  : p,
+            )
+            .toList(),
+        activeProfileId: s.activeProfileId,
+        revision: s.revision,
+      );
+    });
+    if (!applied) return null;
+    if (_current?.activeProfileId == id) {
       ref.invalidate(settingsProvider);
+      await ref.read(settingsProvider.future);
     }
-
-    return profileId;
+    return id;
   }
 }
 

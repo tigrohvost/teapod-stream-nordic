@@ -382,7 +382,7 @@ class _DnsSettingsScreenState extends ConsumerState<DnsSettingsScreen> {
                                           style: AppTheme.mono(
                                             size: 11,
                                             color: _customType == type
-                                                ? t.accent
+                                                ? t.accentText
                                                 : t.textDim,
                                             letterSpacing: 1,
                                           ),

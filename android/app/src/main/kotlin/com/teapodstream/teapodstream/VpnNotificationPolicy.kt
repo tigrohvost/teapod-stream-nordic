@@ -6,6 +6,7 @@ internal enum class VpnNotificationVariant {
     DISCONNECTING,
     CONNECTED,
     DISCONNECTED,
+    STATUS_ONLY,
     KEEP_CURRENT,
 }
 
@@ -19,6 +20,7 @@ internal object VpnNotificationPolicy {
             "disconnecting" -> VpnNotificationVariant.DISCONNECTING
             "connected" -> VpnNotificationVariant.CONNECTED
             "disconnected" -> VpnNotificationVariant.DISCONNECTED
+            "awaitingPermission", "blocked", "stopBlocked", "error" -> VpnNotificationVariant.STATUS_ONLY
             else -> VpnNotificationVariant.KEEP_CURRENT
         }
     }

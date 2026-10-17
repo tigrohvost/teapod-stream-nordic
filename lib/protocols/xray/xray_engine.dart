@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/services.dart';
 import '../../core/constants/app_constants.dart';
@@ -16,20 +17,25 @@ class XrayEngine implements VpnEngine {
   String get protocolName => 'xray';
 
   @override
-  Future<void> connect(VpnConfig config, VpnEngineOptions options) async {
-    final String xrayConfig;
-
-    if (config.rawXrayConfig != null) {
-      xrayConfig = XrayConfigBuilder.mergeWithRaw(
-        config.rawXrayConfig!,
-        options,
-      );
-    } else {
-      xrayConfig = XrayConfigBuilder.buildJson(config, options);
-    }
-
+  Future<void> connect(
+    VpnConfig config,
+    VpnEngineOptions options, {
+    int revision = 0,
+    String? fingerprint,
+  }) async {
+    final plan = XrayConfigBuilder.plan(config, options, revision: revision);
     await _channel.invokeMethod('connect', {
-      'xrayConfig': xrayConfig,
+      'xrayConfig': plan.xrayJson,
+      'schemaVersion': 1,
+      'planInfo': jsonEncode({
+        'schemaVersion': 1,
+        'revision': plan.revision,
+        'source': plan.source,
+        'mode': plan.mode,
+        'appliedSettings': plan.appliedSettings,
+        'unsupportedSettings': plan.unsupportedSettings,
+        'fingerprint': fingerprint,
+      }),
       'socksPort': options.socksPort,
       'socksUser': options.socksUser,
       'socksPassword': options.socksPassword,
@@ -47,6 +53,18 @@ class XrayEngine implements VpnEngine {
     });
   }
 
+  Future<void> validate(VpnConfig config, VpnEngineOptions options) async {
+    final plan = XrayConfigBuilder.plan(config, options);
+    await _channel.invokeMethod<void>('validateConfig', {
+      'schemaVersion': 1,
+      'xrayConfig': plan.xrayJson,
+      'vpnMode': options.vpnMode.name,
+      'includedPackages': options.includedPackages.toList(),
+      'proxyOnly': options.proxyOnly,
+      'ssPrefix': config.ssPrefix,
+    });
+  }
+
   @override
   Future<void> disconnect() async {
     await _channel.invokeMethod('disconnect');
@@ -54,7 +72,12 @@ class XrayEngine implements VpnEngine {
 
   @override
   Future<int?> pingConfig(VpnConfig config) async {
-    if (config.address.isEmpty || config.address == 'managed') return null;
+    if (config.rawXrayConfig != null ||
+        config.protocol == VpnProtocol.hysteria2 ||
+        config.transport == VpnTransport.quic ||
+        config.address.isEmpty) {
+      return null;
+    }
     try {
       final result = await _channel.invokeMethod<int>('ping', {
         'address': config.address,
@@ -104,6 +127,9 @@ class XrayEngine implements VpnEngine {
         socksUser: '',
         socksPassword: '',
         connectedAtMs: 0,
+        sessionId: 0,
+        mode: 'unknown',
+        plan: const <String, dynamic>{},
       );
 
   /// Like [getVpnState], but null when the query itself failed — so callers
@@ -122,6 +148,11 @@ class XrayEngine implements VpnEngine {
           socksUser: result['socksUser'] as String? ?? '',
           socksPassword: result['socksPassword'] as String? ?? '',
           connectedAtMs: (result['connectedAtMs'] as num?)?.toInt() ?? 0,
+          sessionId: (result['sessionId'] as num?)?.toInt() ?? 0,
+          mode: result['mode'] as String? ?? 'unknown',
+          plan:
+              jsonDecode(result['planInfo'] as String? ?? '{}')
+                  as Map<String, dynamic>,
         );
       }
     } catch (_) {}
@@ -228,8 +259,10 @@ class XrayEngine implements VpnEngine {
   }
 
   VpnState _parseState(String s) => switch (s) {
+    'awaitingPermission' => VpnState.awaitingPermission,
+    'stopBlocked' => VpnState.stopBlocked,
     'connecting' => VpnState.connecting,
-    'reconnecting' => VpnState.connecting,
+    'reconnecting' => VpnState.recovering,
     'connected' => VpnState.connected,
     'disconnecting' => VpnState.disconnecting,
     'disconnected' => VpnState.disconnected,
@@ -247,4 +280,7 @@ typedef NativeVpnState = ({
   String socksUser,
   String socksPassword,
   int connectedAtMs,
+  int sessionId,
+  String mode,
+  Map<String, dynamic> plan,
 });

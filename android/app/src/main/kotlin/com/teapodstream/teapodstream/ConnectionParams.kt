@@ -15,37 +15,35 @@ internal data class ConnectionParams(
     val blockQuic: Boolean,
     val ipv6Enabled: Boolean = false,
     val mtu: Int = 1500,
+    val planInfo: String = "{}",
 ) {
-    fun save(dir: File, log: (String, String) -> Unit) {
-        try {
-            val json = org.json.JSONObject().apply {
-                put("socksPort", socksPort)
-                put("excludedPackages", org.json.JSONArray(excludedPackages))
-                put("includedPackages", org.json.JSONArray(includedPackages))
-                put("vpnMode", vpnMode)
-                if (ssPrefix != null) put("ssPrefix", ssPrefix)
-                put("proxyOnly", proxyOnly)
-                put("showNotification", showNotification)
-                put("killSwitch", killSwitch)
-                put("allowIcmp", allowIcmp)
-                put("blockQuic", blockQuic)
-                put("ipv6Enabled", ipv6Enabled)
-                put("mtu", mtu)
-            }
-            File(dir, "last_connection_meta.json").writeText(json.toString())
-        } catch (e: Exception) {
-            log("warning", "Failed to save connection params: ${e.message}")
-        }
+    fun toJson(): org.json.JSONObject = org.json.JSONObject().apply {
+        put("socksPort", socksPort)
+        put("excludedPackages", org.json.JSONArray(excludedPackages))
+        put("includedPackages", org.json.JSONArray(includedPackages))
+        put("vpnMode", vpnMode)
+        if (ssPrefix != null) put("ssPrefix", ssPrefix)
+        put("proxyOnly", proxyOnly)
+        put("showNotification", showNotification)
+        put("killSwitch", killSwitch)
+        put("allowIcmp", allowIcmp)
+        put("blockQuic", blockQuic)
+        put("ipv6Enabled", ipv6Enabled)
+        put("mtu", mtu)
+        put("planInfo", planInfo)
     }
 
     companion object {
         fun load(dir: File): ConnectionParams? = try {
-            val json = org.json.JSONObject(File(dir, "last_connection_meta.json").readText())
+            fromJson(org.json.JSONObject(File(dir, "last_connection_meta.json").readText()))
+        } catch (_: Exception) { null }
+
+        fun fromJson(json: org.json.JSONObject): ConnectionParams {
             val excluded = json.getJSONArray("excludedPackages")
                 .let { arr -> List(arr.length()) { arr.getString(it) } }
             val included = json.getJSONArray("includedPackages")
                 .let { arr -> List(arr.length()) { arr.getString(it) } }
-            ConnectionParams(
+            return ConnectionParams(
                 socksPort = json.getInt("socksPort"),
                 excludedPackages = excluded,
                 includedPackages = included,
@@ -58,9 +56,8 @@ internal data class ConnectionParams(
                 blockQuic = json.optBoolean("blockQuic", false),
                 ipv6Enabled = json.optBoolean("ipv6Enabled", false),
                 mtu = json.optInt("mtu", 1500).coerceIn(576, 9000),
+                planInfo = json.optString("planInfo", "{}"),
             )
-        } catch (_: Exception) {
-            null
         }
     }
 }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../../core/models/effective_connection_plan.dart';
 import '../../core/interfaces/vpn_engine.dart';
 import '../../core/models/vpn_config.dart';
 import '../../core/models/dns_config.dart';
@@ -135,8 +136,18 @@ class XrayConfigBuilder {
         {'tag': 'block', 'protocol': 'blackhole'},
       ],
       'routing': {
-        'domainStrategy': 'IPIfNonMatch',
+        // A catch-all already matches the domain, so IPIfNonMatch never reaches
+        // GeoIP rules for domain requests. Resolve when evaluating an IP rule.
+        'domainStrategy': _needsIpResolution(routing)
+            ? 'IPOnDemand'
+            : 'IPIfNonMatch',
         'rules': [
+          if (routing.adBlockEnabled)
+            {
+              'type': 'field',
+              'domain': [XrayDefaults.adBlockGeosite],
+              'outboundTag': 'block',
+            },
           // QUIC blocking is handled at the TUN level by tun2socks, which replies
           // with an ICMP Port Unreachable so the browser falls back to TCP immediately.
           // No xray routing rule is needed: silently dropping UDP/443 here (blackhole)
@@ -175,7 +186,11 @@ class XrayConfigBuilder {
           if (routing.direction == RoutingDirection.onlySelected) ...[
             {
               'type': 'field',
-              'domain': ['full:cp.cloudflare.com', 'full:ip-api.com'],
+              'domain': [
+                'full:cp.cloudflare.com',
+                'full:connectivitycheck.gstatic.com',
+                'full:api.country.is',
+              ],
               'outboundTag': 'proxy',
             },
           ],
@@ -202,6 +217,11 @@ class XrayConfigBuilder {
     };
   }
 
+  static bool _needsIpResolution(RoutingSettings routing) =>
+      routing.isActive &&
+      (routing.bypassLocal ||
+          (routing.geoEnabled && routing.geoCodes.isNotEmpty));
+
   static List<Map<String, dynamic>> _buildGeoRules(RoutingSettings routing) {
     if (!routing.isActive) return [];
 
@@ -214,12 +234,6 @@ class XrayConfigBuilder {
         'ip': ['geoip:private'],
         'outboundTag': 'direct',
       });
-    }
-
-    if (!routing.geoEnabled &&
-        !routing.domainEnabled &&
-        !routing.geositeEnabled) {
-      return rules;
     }
 
     final selectedOut = routing.direction == RoutingDirection.bypass
@@ -425,26 +439,27 @@ class XrayConfigBuilder {
   static String _networkName(VpnTransport t) =>
       t == VpnTransport.http2 ? 'h2' : t.name;
 
-  static List<String>? _formatPinSHA256(String? pin) {
-    if (pin == null || pin.isEmpty) return null;
+  static String _formatPinSHA256(String pin) {
     try {
-      if (pin.contains(':')) {
-        final bytes = pin
-            .split(':')
-            .map((e) => int.parse(e, radix: 16))
-            .toList();
-        return [base64Encode(bytes)];
-      }
-      if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(pin)) {
-        final bytes = <int>[];
-        for (var i = 0; i < pin.length; i += 2) {
-          bytes.add(int.parse(pin.substring(i, i + 2), radix: 16));
-        }
-        return [base64Encode(bytes)];
-      }
-      return [pin];
+      return pin
+          .split(',')
+          .map((value) {
+            final hex = value.trim().replaceAll(':', '');
+            if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(hex)) {
+              return hex.toLowerCase();
+            }
+            final bytes = base64Decode(base64.normalize(value.trim()));
+            if (bytes.length != 32) {
+              throw const FormatException('SHA-256 length');
+            }
+            return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+          })
+          .join(',');
     } catch (_) {
-      return [pin];
+      throw const ConnectionPlanException(
+        'INVALID_TLS_PIN',
+        'TLS pin должен содержать SHA-256 сертификата',
+      );
     }
   }
 
@@ -458,14 +473,7 @@ class XrayConfigBuilder {
       return {
         'network': 'hysteria',
         'security': 'tls',
-        'tlsSettings': {
-          'serverName': config.sni ?? '',
-          'allowInsecure': config.allowInsecure,
-          if (config.pinSHA256 != null && config.pinSHA256!.isNotEmpty)
-            'pinnedPeerCertificateChainSha256': _formatPinSHA256(
-              config.pinSHA256,
-            ),
-        },
+        'tlsSettings': _buildTlsSettings(config, fingerprint),
         'hysteriaSettings': {'version': 2, 'auth': config.password ?? ''},
         if (config.obfsPassword != null && config.obfsPassword!.isNotEmpty)
           'finalmask': {
@@ -493,19 +501,7 @@ class XrayConfigBuilder {
             'mldsa65Verify': config.postQuantumKey,
         },
       if (config.security == VpnSecurity.tls)
-        'tlsSettings': {
-          'serverName': config.sni ?? '',
-          'allowInsecure': false,
-          if (fingerprint != null && fingerprint.isNotEmpty)
-            'fingerprint': fingerprint,
-          if (config.alpn != null && config.alpn!.isNotEmpty)
-            'alpn': config.alpn!.split(',').map((s) => s.trim()).toList(),
-          if (config.ech != null && config.ech!.isNotEmpty)
-            'echSettings': {
-              'enable': true,
-              'config': [config.ech],
-            },
-        },
+        'tlsSettings': _buildTlsSettings(config, fingerprint),
       if (config.transport == VpnTransport.ws)
         'wsSettings': {
           'path': config.wsPath ?? '/',
@@ -544,6 +540,31 @@ class XrayConfigBuilder {
     return const JsonEncoder().convert(build(config, options));
   }
 
+  static Map<String, dynamic> _buildTlsSettings(
+    VpnConfig config,
+    String? fingerprint,
+  ) {
+    if (config.allowInsecure &&
+        (config.pinSHA256 == null || config.pinSHA256!.isEmpty)) {
+      throw const ConnectionPlanException(
+        'UNSUPPORTED_TLS_INSECURE',
+        'Закреплённое ядро требует проверку TLS: добавьте pin сертификата или отключите insecure',
+      );
+    }
+    return {
+      'serverName': config.sni ?? '',
+      'allowInsecure': false,
+      if (fingerprint != null && fingerprint.isNotEmpty)
+        'fingerprint': fingerprint,
+      if (config.pinSHA256 != null && config.pinSHA256!.isNotEmpty)
+        'pinnedPeerCertSha256': _formatPinSHA256(config.pinSHA256!),
+      if (config.alpn != null && config.alpn!.isNotEmpty)
+        'alpn': config.alpn!.split(',').map((s) => s.trim()).toList(),
+      if (config.ech != null && config.ech!.isNotEmpty)
+        'echConfigList': config.ech,
+    };
+  }
+
   static bool _isIpAddress(String host) {
     if (RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(host)) return true;
     if (host.contains(':')) return true; // IPv6
@@ -558,6 +579,19 @@ class XrayConfigBuilder {
   static String mergeWithRaw(String rawConfig, VpnEngineOptions options) {
     try {
       final cfg = jsonDecode(rawConfig) as Map<String, dynamic>;
+      for (final outbound
+          in (cfg['outbounds'] as List? ?? []).whereType<Map>()) {
+        final stream = outbound['streamSettings'];
+        final tls = stream is Map ? stream['tlsSettings'] : null;
+        if (tls is Map &&
+            (tls.containsKey('pinnedPeerCertificateChainSha256') ||
+                tls.containsKey('echSettings'))) {
+          throw const ConnectionPlanException(
+            'UNSUPPORTED_TLS_FIELDS',
+            'Подписка использует устаревшие поля TLS pin/ECH; обновите её у поставщика',
+          );
+        }
+      }
 
       // Preserve the original socks inbound tag so server routing rules
       // (inboundTag: ["socks", "http"]) keep matching after we replace the inbound.
@@ -599,69 +633,87 @@ class XrayConfigBuilder {
         },
       ];
 
-      // DNS block is intentionally NOT replaced: managed configs carry their own DNS
-      // routing configured for their outbound topology. Overriding it breaks dns-module
-      // routing (no 'proxy' outbound exists in these configs) and causes DNS leaks.
-      // User's custom DNS server and adblock settings do not apply to managed configs.
       cfg['log'] = {'loglevel': options.logLevel.name};
-
       _clampObservatoryInterval(cfg, options.obsProbeIntervalSec);
       _neutralizeDirectFallback(cfg);
-
-      final appRules = <Map<String, dynamic>>[];
-
-      // Adblock for managed configs: DNS-based blocking is unavailable (the DNS
-      // block belongs to the server), so block ad domains via a routing rule to
-      // the injected blackhole. Requires sniffing (routeOnly) for domain matching.
-      if (options.routing.adBlockEnabled) {
-        _ensureBlackholeOutbound(cfg);
-        appRules.add({
-          'type': 'field',
-          'domain': [XrayDefaults.adBlockGeosite],
-          'outboundTag': blackholeTag,
-        });
-      }
-
-      // In direct DNS mode, intercept port 53 so it bypasses the tunnel.
-      // In proxy DNS mode we leave DNS handling to the server config entirely.
-      if (options.dnsMode == DnsMode.direct) {
-        appRules.add({
-          'type': 'field',
-          'port': '53',
-          'network': 'udp,tcp',
-          'outboundTag': 'direct',
-        });
-      }
-
-      // Only inject rules that route to 'direct' — safe regardless of server outbound names.
-      // onlySelected rules (→ 'proxy') are skipped: the server's own catch-all handles routing.
-      final routing = options.routing;
-      if (routing.direction == RoutingDirection.bypass) {
-        appRules.addAll(_buildGeoRules(routing));
-      } else if (routing.bypassLocal) {
-        appRules.add({
-          'type': 'field',
-          'ip': ['geoip:private'],
-          'outboundTag': 'direct',
-        });
-      }
-
-      // No catch-all rule — the server's routing handles the remainder.
-
-      if (appRules.isNotEmpty) {
-        final serverRouting = cfg['routing'] as Map<String, dynamic>? ?? {};
-        final serverRules = List<dynamic>.from(
-          serverRouting['rules'] as List? ?? [],
-        );
-        cfg['routing'] = {
-          ...serverRouting,
-          'rules': [...appRules, ...serverRules],
-        };
-      }
+      final target = _managedProxyTarget(cfg, socksTag);
+      final directTag = _ensureOutbound(cfg, 'direct', 'freedom');
+      final dnsTag = _ensureOutbound(cfg, 'teapod-dns-out', 'dns');
+      final dnsInbound = _uniqueTag(cfg, 'teapod-dns-module');
+      final dns = _buildDnsBlock(options);
+      dns['hosts'] = {
+        ...((cfg['dns'] as Map?)?['hosts'] as Map? ?? {}),
+        ...(dns['hosts'] as Map? ?? {}),
+      };
+      if (options.dnsMode == DnsMode.proxy) dns['tag'] = dnsInbound;
+      cfg['dns'] = dns;
+      final appRules = <Map<String, dynamic>>[
+        if (options.routing.adBlockEnabled)
+          {
+            'type': 'field',
+            'domain': [XrayDefaults.adBlockGeosite],
+            'outboundTag': _ensureBlackholeOutbound(cfg),
+          },
+        if (options.dnsMode == DnsMode.proxy) ...[
+          {
+            'type': 'field',
+            'inboundTag': [dnsInbound],
+            ...target,
+          },
+          {
+            'type': 'field',
+            'inboundTag': [socksTag],
+            'port': '53',
+            'network': 'udp,tcp',
+            'outboundTag': dnsTag,
+          },
+        ] else
+          {
+            'type': 'field',
+            'port': '53',
+            'network': 'udp,tcp',
+            'outboundTag': directTag,
+          },
+        ..._buildGeoRules(options.routing).map((rule) {
+          final result = Map<String, dynamic>.from(rule);
+          final out = result.remove('outboundTag');
+          result.addAll(out == 'direct' ? {'outboundTag': directTag} : target);
+          return result;
+        }),
+        if (options.routing.direction == RoutingDirection.onlySelected) ...[
+          {
+            'type': 'field',
+            'domain': [
+              'full:cp.cloudflare.com',
+              'full:connectivitycheck.gstatic.com',
+              'full:api.ipify.org',
+              'full:api.country.is',
+            ],
+            ...target,
+          },
+          {
+            'type': 'field',
+            'inboundTag': [socksTag],
+            'outboundTag': directTag,
+          },
+        ],
+      ];
+      final serverRouting = cfg['routing'] as Map<String, dynamic>? ?? {};
+      cfg['routing'] = {
+        ...serverRouting,
+        if (_needsIpResolution(options.routing)) 'domainStrategy': 'IPOnDemand',
+        'rules': [...appRules, ...(serverRouting['rules'] as List? ?? [])],
+      };
+      validateReferences(cfg);
 
       return jsonEncode(cfg);
+    } on ConnectionPlanException {
+      rethrow;
     } catch (_) {
-      return rawConfig;
+      throw const ConnectionPlanException(
+        'INVALID_MANAGED_CONFIG',
+        'Не удалось применить настройки управляемой конфигурации',
+      );
     }
   }
 
@@ -698,8 +750,7 @@ class XrayConfigBuilder {
       if (proxy != null) {
         b['fallbackTag'] = proxy;
       } else {
-        _ensureBlackholeOutbound(cfg);
-        b['fallbackTag'] = blackholeTag;
+        b['fallbackTag'] = _ensureBlackholeOutbound(cfg);
       }
     }
   }
@@ -721,19 +772,205 @@ class XrayConfigBuilder {
     return null;
   }
 
-  static void _ensureBlackholeOutbound(Map<String, dynamic> cfg) {
-    final outbounds =
-        cfg['outbounds'] as List<dynamic>? ?? (cfg['outbounds'] = <dynamic>[]);
-    final exists = outbounds.whereType<Map<String, dynamic>>().any(
-      (o) => o['tag'] == blackholeTag,
-    );
-    if (!exists) {
-      outbounds.add({
-        'tag': blackholeTag,
-        'protocol': 'blackhole',
-        'settings': {},
-      });
+  static String _ensureBlackholeOutbound(Map<String, dynamic> cfg) =>
+      _ensureOutbound(cfg, blackholeTag, 'blackhole');
+
+  static String _uniqueTag(Map<String, dynamic> cfg, String preferred) {
+    final tags = <Object?>{
+      for (final key in ['inbounds', 'outbounds'])
+        ...((cfg[key] as List?) ?? []).whereType<Map>().map((o) => o['tag']),
+      (cfg['dns'] as Map?)?['tag'],
+    };
+    var tag = preferred;
+    for (var n = 1; tags.contains(tag); n++) {
+      tag = '$preferred-$n';
     }
+    return tag;
+  }
+
+  static String _ensureOutbound(
+    Map<String, dynamic> cfg,
+    String preferred,
+    String protocol,
+  ) {
+    final outbounds = cfg['outbounds'] as List<dynamic>;
+    if (outbounds.whereType<Map>().any(
+      (o) =>
+          o['tag'] == preferred &&
+          o['protocol'] == protocol &&
+          (o['settings'] == null ||
+              (o['settings'] is Map && (o['settings'] as Map).isEmpty)) &&
+          o.keys.every((k) => ['tag', 'protocol', 'settings'].contains(k)),
+    )) {
+      return preferred;
+    }
+    final tag = _uniqueTag(cfg, preferred);
+    outbounds.add({
+      'tag': tag,
+      'protocol': protocol,
+      'settings': <String, dynamic>{},
+    });
+    return tag;
+  }
+
+  static Map<String, dynamic> _managedProxyTarget(
+    Map<String, dynamic> cfg,
+    String socksTag,
+  ) {
+    final outbounds = (cfg['outbounds'] as List).cast<Map>();
+    if (outbounds.isEmpty) {
+      throw const ConnectionPlanException(
+        'NO_PROXY_TARGET',
+        'В конфигурации нет исходящих подключений',
+      );
+    }
+    bool proxy(String tag) => outbounds.any(
+      (o) =>
+          o['tag'] == tag &&
+          !const [
+            'freedom',
+            'blackhole',
+            'dns',
+            'loopback',
+          ].contains(o['protocol']),
+    );
+    final routing = cfg['routing'] as Map? ?? {};
+    for (final rule in (routing['rules'] as List? ?? []).whereType<Map>()) {
+      if (rule.keys.any(
+        (k) => !const [
+          'type',
+          'network',
+          'inboundTag',
+          'outboundTag',
+          'balancerTag',
+        ].contains(k),
+      )) {
+        continue;
+      }
+      final inbounds = rule['inboundTag'] as List?;
+      if (inbounds != null && !inbounds.contains(socksTag)) continue;
+      final network = rule['network'];
+      if (network != null && network != 'tcp,udp' && network != 'udp,tcp') {
+        continue;
+      }
+      if (rule['balancerTag'] is String) {
+        final balancers = (routing['balancers'] as List? ?? [])
+            .whereType<Map>();
+        final balancer = balancers
+            .where((b) => b['tag'] == rule['balancerTag'])
+            .firstOrNull;
+        if (balancer == null) {
+          throw const ConnectionPlanException(
+            'MISSING_BALANCER',
+            'Балансировщик отсутствует',
+          );
+        }
+        final prefixes = (balancer['selector'] as List? ?? []).cast<String>();
+        final matches = outbounds
+            .where(
+              (o) => prefixes.any((s) => (o['tag'] as String).startsWith(s)),
+            )
+            .toList();
+        if (matches.any((o) => !proxy(o['tag'] as String))) {
+          throw const ConnectionPlanException(
+            'UNSAFE_BALANCER',
+            'Балансировщик включает прямой или служебный маршрут',
+          );
+        }
+        if (matches.isEmpty && balancer['fallbackTag'] == null) {
+          throw const ConnectionPlanException(
+            'EMPTY_BALANCER',
+            'Балансировщик не содержит подключений',
+          );
+        }
+        return {'balancerTag': rule['balancerTag']};
+      }
+      if (rule['outboundTag'] is String &&
+          proxy(rule['outboundTag'] as String)) {
+        return {'outboundTag': rule['outboundTag']};
+      }
+    }
+    final first = outbounds.first;
+    if (first['tag'] is String && proxy(first['tag'] as String)) {
+      return {'outboundTag': first['tag']};
+    }
+    throw const ConnectionPlanException(
+      'AMBIGUOUS_PROXY_TARGET',
+      'Подписка не задаёт однозначный маршрут через прокси',
+    );
+  }
+
+  static void validateReferences(Map<String, dynamic> cfg) {
+    final outbounds = (cfg['outbounds'] as List).cast<Map>();
+    final tags = outbounds.map((o) => o['tag']).toSet();
+    if (tags.contains(null) || tags.length != outbounds.length) {
+      throw const ConnectionPlanException(
+        'INVALID_OUTBOUND_TAGS',
+        'Теги подключений отсутствуют или повторяются',
+      );
+    }
+    final routing = cfg['routing'] as Map? ?? {};
+    final balancers = (routing['balancers'] as List? ?? []).cast<Map>();
+    final balancerTags = balancers.map((b) => b['tag']).toSet();
+    if (balancerTags.contains(null) ||
+        balancerTags.length != balancers.length) {
+      throw const ConnectionPlanException(
+        'INVALID_BALANCER_TAGS',
+        'Неверные теги балансировщиков',
+      );
+    }
+    for (final rule in [
+      ...(routing['rules'] as List? ?? []).cast<Map>(),
+      ...balancers,
+    ]) {
+      for (final key in ['outboundTag', 'fallbackTag']) {
+        if (rule[key] != null && !tags.contains(rule[key])) {
+          throw const ConnectionPlanException(
+            'MISSING_OUTBOUND',
+            'Маршрут ссылается на отсутствующее подключение',
+          );
+        }
+      }
+      if (rule['balancerTag'] != null &&
+          !balancerTags.contains(rule['balancerTag'])) {
+        throw const ConnectionPlanException(
+          'MISSING_BALANCER',
+          'Маршрут ссылается на отсутствующий балансировщик',
+        );
+      }
+    }
+  }
+
+  static EffectiveConnectionPlan plan(
+    VpnConfig config,
+    VpnEngineOptions options, {
+    int revision = 0,
+  }) {
+    final error = config.validate();
+    if (error != null) throw ConnectionPlanException('INVALID_CONFIG', error);
+    final managed = config.rawXrayConfig != null;
+    return EffectiveConnectionPlan(
+      xrayJson: managed
+          ? mergeWithRaw(config.rawXrayConfig!, options)
+          : buildJson(config, options),
+      mode: options.proxyOnly
+          ? 'proxyOnly'
+          : options.vpnMode.name == 'allExcept' &&
+                options.excludedPackages.isEmpty
+          ? 'all'
+          : options.vpnMode.name,
+      source: managed ? 'managed' : 'config',
+      revision: revision,
+      appliedSettings: {
+        'routing': options.routing.toJson(),
+        'dnsMode': options.dnsMode.name,
+        'proxyOnly': options.proxyOnly,
+        'vpnMode': options.vpnMode.name,
+        'includedPackages': options.includedPackages.toList(),
+        'excludedPackages': options.excludedPackages.toList(),
+      },
+      unsupportedSettings: managed ? ['tlsFingerprint'] : [],
+    );
   }
 
   /// Managed configs often ship aggressive observatory settings (e.g. probeInterval

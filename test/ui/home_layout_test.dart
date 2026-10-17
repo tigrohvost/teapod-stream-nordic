@@ -9,6 +9,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:teapodstream/app.dart';
 import 'package:teapodstream/core/interfaces/vpn_engine.dart';
+import 'package:teapodstream/core/models/vpn_config.dart';
+import 'package:teapodstream/protocols/xray/vless_parser.dart';
 import 'package:teapodstream/core/services/settings_service.dart';
 import 'package:teapodstream/providers/app_info_provider.dart';
 import 'package:teapodstream/providers/config_provider.dart';
@@ -21,6 +23,7 @@ import 'package:teapodstream/ui/screens/add_config_screen.dart';
 import 'package:teapodstream/ui/screens/configs_screen.dart';
 import 'package:teapodstream/ui/screens/routing_screen.dart';
 import 'package:teapodstream/ui/screens/settings_screen.dart';
+import 'package:teapodstream/ui/screens/network_settings_screen.dart';
 import 'package:teapodstream/ui/theme/app_colors.dart';
 import 'package:teapodstream/ui/theme/app_theme.dart';
 import 'package:teapodstream/ui/theme/app_text_scaler.dart';
@@ -30,6 +33,9 @@ class _Vpn extends VpnNotifier {
   final VpnState2 initial;
   @override
   VpnState2 build() => initial;
+  @override
+  Future<void> disconnect() async =>
+      state = state.copyWith(connectionState: VpnState.disconnected);
 }
 
 class _Settings extends SettingsNotifier {
@@ -43,8 +49,10 @@ class _IpInfo extends IpInfoNotifier {
 }
 
 class _Configs extends ConfigNotifier {
+  _Configs([this.items = const []]);
+  final List<VpnConfig> items;
   @override
-  Future<ConfigState> build() async => ConfigState();
+  Future<ConfigState> build() async => ConfigState(configs: items);
 }
 
 class _Profiles extends ProfileNotifier {
@@ -82,9 +90,11 @@ void main() {
     VpnState2 vpn = const VpnState2(),
     Widget screen = const HomeScreen(),
     double keyboard = 0,
+    double width = 360,
+    VpnConfig? selected,
   }) async {
     tester.view.devicePixelRatio = 1;
-    tester.view.physicalSize = const Size(360, 800);
+    tester.view.physicalSize = Size(width, 800);
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
@@ -93,9 +103,11 @@ void main() {
           vpnProvider.overrideWith(() => _Vpn(vpn)),
           settingsProvider.overrideWith(_Settings.new),
           ipInfoProvider.overrideWith(_IpInfo.new),
-          configProvider.overrideWith(_Configs.new),
+          configProvider.overrideWith(
+            () => _Configs(selected == null ? [] : [selected]),
+          ),
           profileProvider.overrideWith(_Profiles.new),
-          effectiveConfigProvider.overrideWith((ref) => null),
+          effectiveConfigProvider.overrideWith((ref) => selected),
           pendingReconnectProvider.overrideWith((ref) => false),
           appVersionProvider.overrideWith((ref) async => 'v1.6.4'),
         ],
@@ -118,7 +130,11 @@ void main() {
         tester.element(find.byKey(const Key('capture'))),
       ),
     );
-    await tester.pumpAndSettle();
+    if (vpn.isBusy || vpn.isConnected) {
+      await tester.pump(const Duration(milliseconds: 400));
+    } else {
+      await tester.pumpAndSettle();
+    }
   }
 
   Future<void> capture(WidgetTester tester, String name) async {
@@ -136,16 +152,123 @@ void main() {
     });
   }
 
-  for (final brightness in Brightness.values) {
-    for (final scale in [1.0, 1.5, 2.0]) {
-      testWidgets('home fits 360px at scale $scale in ${brightness.name}', (
-        tester,
-      ) async {
-        await pumpScreen(tester, brightness: brightness, scale: scale);
-        expect(tester.takeException(), isNull);
-        await capture(tester, 'home-${brightness.name}-$scale');
-      });
+  for (final width in [320.0, 360.0]) {
+    for (final brightness in Brightness.values) {
+      for (final scale in [1.0, 1.5, 2.0]) {
+        testWidgets(
+          'home fits ${width}px at scale $scale in ${brightness.name}',
+          (tester) async {
+            await pumpScreen(
+              tester,
+              brightness: brightness,
+              scale: scale,
+              width: width,
+            );
+            expect(tester.takeException(), isNull);
+            if (width == 360) {
+              await capture(tester, 'home-${brightness.name}-$scale');
+            }
+          },
+        );
+      }
     }
+  }
+
+  final longConfig =
+      VlessParser.parseUri('trojan://fixture@owned.example.test:443')!.copyWith(
+        name:
+            'Очень длинное название тестового подключения • сервер для проверки интерфейса',
+      );
+  for (final width in [320.0, 360.0]) {
+    for (final scale in [1.0, 1.5, 2.0]) {
+      for (final brightness in Brightness.values) {
+        for (final state in VpnState.values) {
+          testWidgets('$state at ${width}px scale $scale ${brightness.name}', (
+            tester,
+          ) async {
+            await pumpScreen(
+              tester,
+              width: width,
+              scale: scale,
+              brightness: brightness,
+              selected: longConfig,
+              vpn: VpnState2(
+                connectionState: state,
+                appliedMode: 'proxyOnly',
+                appliedSource: 'managed',
+                error: state == VpnState.error
+                    ? 'Длинное сообщение об ошибке: проверьте выбранную конфигурацию и сетевое подключение.'
+                    : null,
+              ),
+            );
+            if (width == 320 &&
+                scale == 2 &&
+                brightness == Brightness.dark &&
+                [
+                  VpnState.awaitingPermission,
+                  VpnState.stopBlocked,
+                ].contains(state)) {
+              await capture(tester, 'home-${state.name}-320-large');
+            }
+          });
+        }
+      }
+    }
+  }
+
+  testWidgets('consent cancellation has an executable semantic tap action', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await pumpScreen(
+      tester,
+      vpn: const VpnState2(connectionState: VpnState.awaitingPermission),
+    );
+    final cancel = tester.getSemantics(
+      find.bySemanticsLabel('отменить подключение'),
+    );
+    expect(cancel.getSemanticsData().hasAction(ui.SemanticsAction.tap), isTrue);
+    cancel.owner!.performAction(cancel.id, ui.SemanticsAction.tap);
+    await tester.pump();
+    expect(find.text('OFFLINE'), findsOneWidget);
+    semantics.dispose();
+  });
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'network settings scroll to last field at 320px with keyboard ${brightness.name}',
+      (tester) async {
+        await pumpScreen(
+          tester,
+          width: 320,
+          scale: 2,
+          brightness: brightness,
+          keyboard: 340,
+          screen: const NetworkSettingsScreen(),
+        );
+        await tester.scrollUntilVisible(
+          find.text('Observatory мин. интервал, сек'),
+          220,
+          scrollable: find.byType(Scrollable).first,
+          maxScrolls: 60,
+        );
+        await tester.pumpAndSettle();
+        await capture(tester, 'network-keyboard-${brightness.name}');
+      },
+    );
+    testWidgets(
+      'long configuration row fits 320px at scale 2 ${brightness.name}',
+      (tester) async {
+        await pumpScreen(
+          tester,
+          width: 320,
+          scale: 2,
+          brightness: brightness,
+          selected: longConfig,
+          screen: const ConfigsScreen(),
+        );
+      },
+    );
   }
 
   testWidgets('empty home leads to configuration import', (tester) async {

@@ -1,415 +1,322 @@
+import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../core/interfaces/vpn_engine.dart';
+import '../protocols/xray/xray_engine.dart';
+import 'package:uuid/uuid.dart';
 import '../core/models/vpn_config.dart';
 import '../core/models/pinned_ref.dart';
 import '../core/models/connections_bundle.dart';
+import '../core/models/config_state.dart';
 import '../core/services/config_storage_service.dart';
-import '../core/services/subscription_service.dart'
-    show SubscriptionService, SubscriptionFetchResult, HwidDeviceInfo;
+import '../core/services/config_repository.dart';
+import '../core/services/import_service.dart';
+import '../core/services/subscription_service.dart';
 import '../core/services/device_service.dart';
 import 'settings_provider.dart';
+export '../core/models/config_state.dart';
+export '../core/services/import_service.dart'
+    show ImportPlan, ImportConnectionsResult;
 
-class ConfigState {
-  final List<VpnConfig> configs;
-  final String? activeConfigId;
-  final String? activeSubscriptionId;
-  final List<Subscription> subscriptions;
-  final List<PinnedRef> pins;
-
-  ConfigState({
-    this.configs = const [],
-    this.activeConfigId,
-    this.activeSubscriptionId,
-    this.subscriptions = const [],
-    this.pins = const [],
-  });
-
-  VpnConfig? get activeConfig => activeConfigId == null
-      ? null
-      : configs.where((c) => c.id == activeConfigId).firstOrNull;
-
-  late final List<VpnConfig> standaloneConfigs = configs
-      .where((c) => c.subscriptionId == null)
-      .toList();
-
-  late final Map<String, List<VpnConfig>> configsBySubscription = () {
-    final result = <String, List<VpnConfig>>{};
-    for (final config in configs.where((c) => c.subscriptionId != null)) {
-      result.putIfAbsent(config.subscriptionId!, () => []).add(config);
+final configRepositoryProvider = Provider((ref) => ConfigRepository());
+final subscriptionServiceProvider = Provider((ref) => SubscriptionService());
+final configValidationProvider = Provider<Future<void> Function(VpnConfig)>(
+  (ref) => (config) async {
+    if (Platform.isAndroid && config.rawXrayConfig != null) {
+      await XrayEngine().validate(
+        config,
+        const VpnEngineOptions(
+          socksPort: 10808,
+          httpPort: 0,
+          socksUser: '',
+          socksPassword: '',
+        ),
+      );
     }
-    return result;
-  }();
-
-  /// Пины в порядке закрепления; null — конфиг с таким именем
-  /// в подписке отсутствует (пин «потерян», но не удаляется).
-  late final List<(PinnedRef, VpnConfig?)> resolvedPins = pins
-      .map((p) => (p, configs.where(p.matches).firstOrNull))
-      .toList();
-
-  bool isPinned(VpnConfig c) => pins.any((p) => p.matches(c));
-
-  ConfigState copyWith({
-    List<VpnConfig>? configs,
-    String? activeConfigId,
-    bool clearActive = false,
-    String? activeSubscriptionId,
-    bool clearActiveSub = false,
-    List<Subscription>? subscriptions,
-    List<PinnedRef>? pins,
-  }) {
-    return ConfigState(
-      configs: configs ?? this.configs,
-      activeConfigId: clearActive
-          ? null
-          : (activeConfigId ?? this.activeConfigId),
-      activeSubscriptionId: clearActiveSub
-          ? null
-          : (activeSubscriptionId ?? this.activeSubscriptionId),
-      subscriptions: subscriptions ?? this.subscriptions,
-      pins: pins ?? this.pins,
-    );
-  }
-}
+  },
+);
 
 class ConfigNotifier extends AsyncNotifier<ConfigState> {
-  static final storage = ConfigStorageService();
+  final _refreshGeneration = <String, int>{};
+  ConfigRepository get _repository => ref.read(configRepositoryProvider);
+  Future<void> _validate(VpnConfig config) => ImportService(
+    validateConfig: ref.read(configValidationProvider),
+  ).validate(config);
 
   @override
-  Future<ConfigState> build() async {
-    final configs = await storage.loadConfigs();
-    final activeId = await storage.loadActiveConfigId();
-    final activeSubId = await storage.loadActiveSubscriptionId();
-    final subs = await storage.loadSubscriptions();
-    final pins = await storage.loadPins();
-    return ConfigState(
-      configs: configs,
-      activeConfigId: activeId,
-      activeSubscriptionId: activeSubId,
-      subscriptions: subs,
-      pins: pins,
-    );
+  Future<ConfigState> build() => _repository.load();
+
+  Future<void> _commit(ConfigState Function(ConfigState) update) async {
+    await future;
+    final next = await _repository.commit(update);
+    if (ref.mounted && next.revision >= (state.value?.revision ?? -1)) {
+      state = AsyncData(next);
+    }
   }
 
-  // ─── Pins ───
-
-  Future<void> togglePin(VpnConfig c) async {
-    final current = state.maybeWhen(data: (d) => d, orElse: () => null);
-    if (current == null) return;
+  Future<void> togglePin(VpnConfig c) => _commit((current) {
     final pin = PinnedRef(subscriptionId: c.subscriptionId, name: c.name);
-    final pins = List<PinnedRef>.from(current.pins);
+    final pins = [...current.pins];
     if (!pins.remove(pin)) pins.add(pin);
-    await storage.savePins(pins);
-    state = AsyncData(current.copyWith(pins: pins));
-  }
+    return current.copyWith(pins: pins);
+  });
 
-  Future<void> unpin(PinnedRef pin) async {
-    final current = state.maybeWhen(data: (d) => d, orElse: () => null);
-    if (current == null) return;
-    final pins = current.pins.where((p) => p != pin).toList();
-    await storage.savePins(pins);
-    state = AsyncData(current.copyWith(pins: pins));
-  }
-
-  Future<void> addConfig(VpnConfig config) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-    final configs = [...current.configs, config];
-    await storage.addConfig(config);
-    state = AsyncData(current.copyWith(configs: configs));
-  }
-
-  Future<void> addConfigs(List<VpnConfig> newConfigs) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-    final configs = [...current.configs, ...newConfigs];
-    await storage.addConfigsBatch(newConfigs);
-    state = AsyncData(current.copyWith(configs: configs));
-  }
-
-  Future<void> removeConfig(String id) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-    final configs = current.configs.where((c) => c.id != id).toList();
-    await storage.removeConfig(id);
-    final newState = current.activeConfigId == id
-        ? current.copyWith(configs: configs, clearActive: true)
-        : current.copyWith(configs: configs);
-    if (current.activeConfigId == id) {
-      await storage.saveActiveConfigId(null);
+  Future<void> unpin(PinnedRef pin) =>
+      _commit((c) => c.copyWith(pins: c.pins.where((p) => p != pin).toList()));
+  Future<void> addConfig(VpnConfig config) => addConfigs([config]);
+  Future<void> addConfigs(List<VpnConfig> configs) async {
+    for (final config in configs) {
+      await _validate(config);
     }
-    state = AsyncData(newState);
+    await _commit((c) {
+      final keys = c.configs.map((e) => e.connectionIdentity).toSet();
+      return c.copyWith(
+        configs: [
+          ...c.configs,
+          ...configs.where((e) => keys.add(e.connectionIdentity)),
+        ],
+      );
+    });
   }
 
-  Future<void> setActiveConfig(String? id) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-    // Selecting a specific config clears subscription mode
-    if (id == null) {
-      state = AsyncData(
-        current.copyWith(clearActive: true, clearActiveSub: true),
-      );
-    } else {
-      state = AsyncData(
-        current.copyWith(activeConfigId: id, clearActiveSub: true),
-      );
-    }
-    await storage.saveActiveConfigId(id);
-    await storage.saveActiveSubscriptionId(null);
-  }
+  Future<void> removeConfig(String id) => _commit(
+    (c) => c.copyWith(
+      configs: c.configs.where((e) => e.id != id).toList(),
+      clearActive: c.activeConfigId == id,
+    ),
+  );
 
-  Future<void> setActiveSubscription(String? id) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-    state = AsyncData(
-      current.copyWith(activeSubscriptionId: id, clearActiveSub: id == null),
+  Future<void> setActiveConfig(String? id) => _commit((c) {
+    if (id != null && !c.configs.any((e) => e.id == id)) return c;
+    return c.copyWith(
+      activeConfigId: id,
+      clearActive: id == null,
+      clearActiveSub: true,
     );
-    await storage.saveActiveSubscriptionId(id);
-  }
+  });
+
+  Future<void> setActiveSubscription(String? id) => _commit((c) {
+    if (id != null && !c.subscriptions.any((s) => s.id == id)) return c;
+    return c.copyWith(activeSubscriptionId: id, clearActiveSub: id == null);
+  });
 
   Future<void> updateConfig(VpnConfig updated) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-    final configs = current.configs
-        .map((c) => c.id == updated.id ? updated : c)
-        .toList();
-    await storage.updateConfig(updated);
-    state = AsyncData(current.copyWith(configs: configs));
+    await _validate(updated);
+    await _commit(
+      (c) => c.copyWith(
+        configs: c.configs
+            .map((e) => e.id == updated.id ? updated : e)
+            .toList(),
+      ),
+    );
   }
-
-  // ─── Subscription methods ───
 
   Future<void> addSubscriptionFromUrl(
     String url, {
     String? name,
     bool allowSelfSigned = false,
   }) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-    final existing = current.subscriptions.where((s) => s.url == url).toList();
-
-    final settingsAsync = ref.read(settingsProvider);
-    final settings = settingsAsync.maybeWhen(
-      data: (d) => d,
-      orElse: () => null,
-    );
-    final hwidEnabled = settings?.hwidEnabled ?? false;
-    final hwid = hwidEnabled ? await DeviceService.getHwidInfo() : null;
-    final userAgent = settings?.subUserAgent ?? '';
-
-    String subId;
-    List<VpnConfig> newConfigs;
-
-    if (existing.isNotEmpty) {
-      // Update existing: remove old configs, add new ones
-      subId = existing.first.id;
-      final oldConfigs = current.configs
-          .where((c) => c.subscriptionId == subId)
+    if (!ImportService.validUrl(url)) {
+      throw const FormatException('Неверный URL подписки');
+    }
+    final initial = await future;
+    final original = initial.subscriptions
+        .where((s) => s.url == url)
+        .firstOrNull;
+    final generation = (_refreshGeneration[url] ?? 0) + 1;
+    _refreshGeneration[url] = generation;
+    final settings = await ref.read(settingsProvider.future);
+    final hwid = settings.hwidEnabled
+        ? await DeviceService.getHwidInfo()
+        : null;
+    final fetched = await ref
+        .read(subscriptionServiceProvider)
+        .fetchSubscription(
+          url,
+          allowSelfSigned: allowSelfSigned,
+          hwid: hwid,
+          userAgent: settings.subUserAgent,
+        );
+    if (fetched.configs.isEmpty ||
+        fetched.configs.any((c) => c.validate() != null)) {
+      throw const FormatException(
+        'Подписка не содержит корректных подключений',
+      );
+    }
+    for (final config in fetched.configs) {
+      await _validate(config);
+    }
+    await _commit((current) {
+      if (_refreshGeneration[url] != generation) return current;
+      final existing = current.subscriptions
+          .where((s) => s.url == url)
+          .firstOrNull;
+      if (original != null && existing?.id != original.id) return current;
+      final subId = existing?.id ?? const Uuid().v4();
+      final old = {
+        for (final c in current.configs.where((c) => c.subscriptionId == subId))
+          c.connectionIdentity: c,
+      };
+      final keys = <String>{};
+      final fresh = fetched.configs
+          .where((c) => keys.add(c.connectionIdentity))
+          .map((c) {
+            final previous = old[c.connectionIdentity];
+            return c.copyWith(
+              id: previous?.id,
+              subscriptionId: subId,
+              latencyMs: previous?.latencyMs,
+              lastPingedAt: previous?.lastPingedAt,
+              probeStatus: previous?.probeStatus ?? ProbeStatus.unknown,
+              lastSuccessfulLatencyMs: previous?.lastSuccessfulLatencyMs,
+              lastSuccessfulPingAt: previous?.lastSuccessfulPingAt,
+            );
+          })
           .toList();
-      // Preserve ping results by matching address:port
-      final latencyMap = <String, int>{};
-      final pingTimeMap = <String, DateTime>{};
-      for (final old in oldConfigs) {
-        final key = '${old.address}:${old.port}';
-        if (old.latencyMs != null) latencyMap[key] = old.latencyMs!;
-        if (old.lastPingedAt != null) pingTimeMap[key] = old.lastPingedAt!;
-      }
-      final (tagged, fetchResult) = await _fetchAndTagConfigs(
-        url,
-        subId,
-        allowSelfSigned: allowSelfSigned,
-        hwid: hwid,
-        userAgent: userAgent,
-      );
-      if (tagged.isEmpty) {
-        throw Exception('Subscription returned no valid configurations');
-      }
-      // Remove old first, then add new — prevents duplicates if interrupted mid-update
-      await storage.removeConfigsBatch(oldConfigs.map((c) => c.id).toList());
-      newConfigs = tagged.map((c) {
-        final key = '${c.address}:${c.port}';
-        final ms = latencyMap[key];
-        final pingedAt = pingTimeMap[key];
-        return (ms != null || pingedAt != null)
-            ? c.copyWith(latencyMs: ms, lastPingedAt: pingedAt)
-            : c;
-      }).toList();
-      await storage.addConfigsBatch(newConfigs);
-
-      final updatedSub = Subscription(
-        id: subId,
-        name: name ?? fetchResult.profileTitle ?? existing.first.name,
-        url: existing.first.url,
-        createdAt: existing.first.createdAt,
-        lastFetchedAt: DateTime.now(),
-        expireAt: fetchResult.expireAt,
-        uploadBytes: fetchResult.uploadBytes,
-        downloadBytes: fetchResult.downloadBytes,
-        totalBytes: fetchResult.totalBytes,
-        announce: fetchResult.announce,
-        announceUrl: fetchResult.announceUrl,
-      );
-      await storage.updateSubscription(updatedSub);
-
-      final newConfigsList = [
-        ...current.configs.where((c) => c.subscriptionId != subId),
-        ...newConfigs,
-      ];
-      final newSubs = current.subscriptions
-          .map((s) => s.id == subId ? updatedSub : s)
-          .toList();
-
-      // A refresh regenerates every config id. Carry the selection over to the
-      // same server, or the hourly background refresh silently switched the user
-      // to the subscription's first entry (used by the next connect/auto-connect).
-      final activeNow =
-          (state.maybeWhen(data: (d) => d, orElse: () => null) ?? current)
-              .activeConfig;
-      final carriedActiveId =
-          activeNow != null && activeNow.subscriptionId == subId
-          ? matchRefreshedConfig(activeNow, newConfigs)?.id
-          : null;
-
-      state = AsyncData(
-        current.copyWith(
-          configs: newConfigsList,
-          subscriptions: newSubs,
-          activeConfigId: carriedActiveId,
-          clearActive:
-              carriedActiveId == null &&
-              current.activeConfigId != null &&
-              !newConfigsList.any((c) => c.id == current.activeConfigId),
-        ),
-      );
-      if (carriedActiveId != null) {
-        await storage.saveActiveConfigId(carriedActiveId);
-      }
-    } else {
-      // New subscription
-      subId = 'sub_${DateTime.now().millisecondsSinceEpoch}';
-      final (tagged, fetchResult) = await _fetchAndTagConfigs(
-        url,
-        subId,
-        allowSelfSigned: allowSelfSigned,
-        hwid: hwid,
-        userAgent: userAgent,
-      );
-      if (tagged.isEmpty) {
-        throw Exception('Subscription returned no valid configurations');
-      }
-      newConfigs = tagged;
-      await storage.addConfigsBatch(newConfigs);
-
       final sub = Subscription(
         id: subId,
-        name: name ?? fetchResult.profileTitle ?? Uri.parse(url).host,
+        name:
+            name ??
+            existing?.name ??
+            fetched.profileTitle ??
+            Uri.parse(url).host,
         url: url,
-        createdAt: DateTime.now(),
+        createdAt: existing?.createdAt ?? DateTime.now(),
         lastFetchedAt: DateTime.now(),
-        expireAt: fetchResult.expireAt,
-        uploadBytes: fetchResult.uploadBytes,
-        downloadBytes: fetchResult.downloadBytes,
-        totalBytes: fetchResult.totalBytes,
-        announce: fetchResult.announce,
-        announceUrl: fetchResult.announceUrl,
+        expireAt: fetched.expireAt,
+        uploadBytes: fetched.uploadBytes,
+        downloadBytes: fetched.downloadBytes,
+        totalBytes: fetched.totalBytes,
+        announce: fetched.announce,
+        announceUrl: fetched.announceUrl,
       );
-      await storage.addSubscription(sub);
+      final configs = [
+        ...current.configs.where((c) => c.subscriptionId != subId),
+        ...fresh,
+      ];
+      final active = current.activeConfig;
+      final carried = active?.subscriptionId == subId
+          ? matchRefreshedConfig(active!, fresh)?.id
+          : current.activeConfigId;
+      return current.copyWith(
+        configs: configs,
+        subscriptions: [
+          ...current.subscriptions.where((s) => s.id != subId),
+          sub,
+        ],
+        activeConfigId:
+            carried ??
+            (active == null && original == null ? fresh.first.id : null),
+        clearActive: active != null && carried == null,
+      );
+    });
+  }
 
-      state = AsyncData(
-        current.copyWith(
-          configs: [...current.configs, ...newConfigs],
-          subscriptions: [...current.subscriptions, sub],
-        ),
+  Future<void> renameSubscription(String id, String name) => _commit(
+    (c) => c.copyWith(
+      subscriptions: c.subscriptions
+          .map((s) => s.id == id ? s.copyWith(name: name) : s)
+          .toList(),
+    ),
+  );
+
+  Future<void> replaceSubscriptionUrl(String id, String url) async {
+    if (!ImportService.validUrl(url)) {
+      throw const FormatException('Неверный URL подписки');
+    }
+    final original = (await future).subscriptions
+        .where((s) => s.id == id)
+        .first;
+    final generation = (_refreshGeneration['replace:$id'] ?? 0) + 1;
+    _refreshGeneration['replace:$id'] = generation;
+    final fetched = await ref
+        .read(subscriptionServiceProvider)
+        .fetchSubscription(url);
+    if (fetched.configs.isEmpty ||
+        fetched.configs.any((c) => c.validate() != null)) {
+      throw const FormatException(
+        'Подписка не содержит корректных подключений',
       );
     }
-
-    // Set first new config as active if none active
-    if (state.value?.activeConfigId == null && newConfigs.isNotEmpty) {
-      await setActiveConfig(newConfigs.first.id);
+    for (final config in fetched.configs) {
+      await _validate(config);
     }
+    await _commit((c) {
+      if (_refreshGeneration['replace:$id'] != generation ||
+          !c.subscriptions.any((s) => s.id == id && s.url == original.url)) {
+        return c;
+      }
+      _refreshGeneration[original.url] =
+          (_refreshGeneration[original.url] ?? 0) + 1;
+      final configs = fetched.configs
+          .map((e) => e.copyWith(subscriptionId: id))
+          .toList();
+      final selected = c.activeConfig?.subscriptionId == id;
+      final active = selected
+          ? matchRefreshedConfig(c.activeConfig!, configs)?.id
+          : c.activeConfigId;
+      return c.copyWith(
+        configs: [
+          ...c.configs.where((e) => e.subscriptionId != id),
+          ...configs,
+        ],
+        subscriptions: c.subscriptions
+            .map(
+              (s) => s.id != id
+                  ? s
+                  : Subscription.fromJson({
+                      ...s.toJson(),
+                      'url': url,
+                      'lastFetchedAt': DateTime.now().toIso8601String(),
+                    }),
+            )
+            .toList(),
+        activeConfigId: active,
+        clearActive: selected && active == null,
+      );
+    });
   }
 
-  Future<(List<VpnConfig>, SubscriptionFetchResult)> _fetchAndTagConfigs(
-    String url,
-    String subId, {
-    bool allowSelfSigned = false,
-    HwidDeviceInfo? hwid,
-    String? userAgent,
-  }) async {
-    final svc = SubscriptionService();
-    final result = await svc.fetchSubscription(
-      url,
-      allowSelfSigned: allowSelfSigned,
-      hwid: hwid,
-      userAgent: userAgent,
-    );
-    final tagged = result.configs
-        .map((c) => c.copyWith(subscriptionId: subId))
-        .toList();
-    return (tagged, result);
-  }
-
-  Future<void> renameSubscription(String id, String newName) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-    final sub = current.subscriptions.firstWhere((s) => s.id == id);
-    final renamed = sub.copyWith(name: newName);
-    await storage.updateSubscription(renamed);
-    state = AsyncData(
-      current.copyWith(
-        subscriptions: current.subscriptions
-            .map((s) => s.id == id ? renamed : s)
-            .toList(),
-      ),
-    );
-  }
-
-  Future<void> removeSubscription(String subId) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-    await storage.removeSubscription(subId);
-    final clearActiveSub = current.activeSubscriptionId == subId;
-    if (clearActiveSub) await storage.saveActiveSubscriptionId(null);
-    state = AsyncData(
-      current.copyWith(
-        configs: current.configs
-            .where((c) => c.subscriptionId != subId)
-            .toList(),
-        subscriptions: current.subscriptions
-            .where((s) => s.id != subId)
-            .toList(),
-        clearActive:
-            current.activeConfigId != null &&
-            current.configs.any(
-              (c) =>
-                  c.id == current.activeConfigId && c.subscriptionId == subId,
-            ),
-        clearActiveSub: clearActiveSub,
-      ),
-    );
+  Future<void> removeSubscription(String id) async {
+    await _commit((c) {
+      _refreshGeneration['replace:$id'] =
+          (_refreshGeneration['replace:$id'] ?? 0) + 1;
+      final sub = c.subscriptions.where((s) => s.id == id).firstOrNull;
+      if (sub != null) {
+        _refreshGeneration[sub.url] = (_refreshGeneration[sub.url] ?? 0) + 1;
+      }
+      return c.copyWith(
+        configs: c.configs.where((e) => e.subscriptionId != id).toList(),
+        subscriptions: c.subscriptions.where((s) => s.id != id).toList(),
+        clearActive: c.activeConfig?.subscriptionId == id,
+        clearActiveSub: c.activeSubscriptionId == id,
+      );
+    });
   }
 
   Future<void> refreshStaleSubscriptions({int intervalHours = 6}) async {
-    final current = state.maybeWhen(data: (d) => d, orElse: () => null);
-    if (current == null || current.subscriptions.isEmpty) return;
-    final threshold = Duration(hours: intervalHours);
-    final stale = current.subscriptions.where((s) {
-      if (s.lastFetchedAt == null) return true;
-      return DateTime.now().difference(s.lastFetchedAt!) > threshold;
-    }).toList();
-    for (final sub in stale) {
-      // One unreachable subscription must not abort the others — nor the
-      // startup sync that awaits this.
+    final current = await future;
+    for (final sub in current.subscriptions) {
+      if (sub.lastFetchedAt != null &&
+          DateTime.now().difference(sub.lastFetchedAt!) <=
+              Duration(hours: intervalHours)) {
+        continue;
+      }
+      if (!(await future).subscriptions.any((s) => s.id == sub.id)) continue;
       try {
         await addSubscriptionFromUrl(sub.url);
-      } catch (_) {}
+      } catch (_) {
+        /* Keep the working snapshot. */
+      }
     }
   }
 
-  /// The config in [fresh] that is the same server as [old] after a refresh:
-  /// same name and endpoint, else same name, else same endpoint.
   static VpnConfig? matchRefreshedConfig(
     VpnConfig old,
     List<VpnConfig> fresh,
   ) =>
+      fresh
+          .where((c) => c.connectionIdentity == old.connectionIdentity)
+          .firstOrNull ??
       fresh
           .where(
             (c) =>
@@ -423,232 +330,130 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
           .where((c) => c.address == old.address && c.port == old.port)
           .firstOrNull;
 
-  // ─── Import from ConnectionsBundle ───
+  Future<ImportPlan> prepareImport(
+    ConnectionsBundle bundle, {
+    bool allowSelfSigned = false,
+  }) => ImportService(
+    validateConfig: ref.read(configValidationProvider),
+    fetchSubscription: (url) => ref
+        .read(subscriptionServiceProvider)
+        .fetchSubscription(url, allowSelfSigned: allowSelfSigned),
+  ).prepare(bundle);
+
+  Future<ImportConnectionsResult> applyImport(ImportPlan plan) async {
+    late ImportConnectionsResult result;
+    await _commit((c) {
+      final applied = ImportService.apply(c, plan);
+      result = applied.$2;
+      return applied.$1;
+    });
+    return result;
+  }
 
   Future<ImportConnectionsResult> importBundle(ConnectionsBundle bundle) async {
-    final current =
-        state.maybeWhen(data: (d) => d, orElse: () => null) ?? ConfigState();
-
-    // Build a map of old subscription ID -> new subscription ID
-    final subIdMap = <String, String>{};
-    var addedConfigs = 0;
-    var addedSubscriptions = 0;
-    final newSubscriptions = <Subscription>[];
-
-    // Import subscriptions first, creating new IDs
-    for (final sub in bundle.subscriptions) {
-      final existingSub = current.subscriptions
-          .where((s) => s.url == sub.url)
-          .firstOrNull;
-
-      if (existingSub != null) {
-        subIdMap[sub.id] = existingSub.id;
-        continue;
-      }
-
-      final newId =
-          'sub_import_${DateTime.now().millisecondsSinceEpoch}_$addedSubscriptions';
-      subIdMap[sub.id] = newId;
-
-      final newSub = Subscription(
-        id: newId,
-        name: sub.name,
-        url: sub.url,
-        createdAt: DateTime.now(),
-        lastFetchedAt: sub.lastFetchedAt,
-        expireAt: sub.expireAt,
-        uploadBytes: sub.uploadBytes,
-        downloadBytes: sub.downloadBytes,
-        totalBytes: sub.totalBytes,
-        announce: sub.announce,
-        announceUrl: sub.announceUrl,
-      );
-      newSubscriptions.add(newSub);
-      await storage.addSubscription(newSub);
-      addedSubscriptions++;
+    final plan = await prepareImport(bundle);
+    if (plan.invalidItems > 0) {
+      throw const FormatException('Набор содержит некорректные подключения');
     }
-
-    // Remap subscription IDs in configs and generate new IDs
-    final newTs = DateTime.now().millisecondsSinceEpoch;
-    final remappedConfigs = bundle.configs.asMap().entries.map((entry) {
-      final idx = entry.key;
-      final c = entry.value;
-      final newId = 'cfg_import_${newTs}_${idx}_${c.id.hashCode}';
-      final newSubId =
-          c.subscriptionId != null && subIdMap.containsKey(c.subscriptionId)
-          ? subIdMap[c.subscriptionId]
-          : c.subscriptionId;
-
-      return VpnConfig(
-        id: newId,
-        name: c.name,
-        protocol: c.protocol,
-        address: c.address,
-        port: c.port,
-        uuid: c.uuid,
-        security: c.security,
-        transport: c.transport,
-        sni: c.sni,
-        wsPath: c.wsPath,
-        wsHost: c.wsHost,
-        grpcServiceName: c.grpcServiceName,
-        fingerprint: c.fingerprint,
-        publicKey: c.publicKey,
-        shortId: c.shortId,
-        spiderX: c.spiderX,
-        postQuantumKey: c.postQuantumKey,
-        flow: c.flow,
-        encryption: c.encryption,
-        alterId: c.alterId,
-        method: c.method,
-        password: c.password,
-        createdAt: DateTime.now(),
-        rawUri: c.rawUri,
-        latencyMs: c.latencyMs,
-        subscriptionId: newSubId,
-        ssPrefix: c.ssPrefix,
-        obfsPassword: c.obfsPassword,
-        xhttpMode: c.xhttpMode,
-        xhttpExtra: c.xhttpExtra,
-      );
-    }).toList();
-
-    // Import configs that don't already exist (by rawUri or address:port match)
-    final existingKeys = current.configs
-        .map((c) => c.rawUri ?? '${c.address}:${c.port}')
-        .toSet();
-    final newConfigs = <VpnConfig>[];
-    for (final config in remappedConfigs) {
-      final key = config.rawUri ?? '${config.address}:${config.port}';
-      if (!existingKeys.contains(key)) {
-        newConfigs.add(config);
-      }
-    }
-
-    if (newConfigs.isNotEmpty) {
-      await storage.addConfigsBatch(newConfigs);
-      addedConfigs = newConfigs.length;
-    }
-
-    // Update in-memory state
-    final updatedSubs = [...current.subscriptions, ...newSubscriptions];
-
-    state = AsyncData(
-      current.copyWith(
-        configs: [...current.configs, ...newConfigs],
-        subscriptions: updatedSubs,
-      ),
-    );
-
-    if (state.value?.activeConfigId == null && newConfigs.isNotEmpty) {
-      await setActiveConfig(newConfigs.first.id);
-    }
-
-    return ImportConnectionsResult(
-      addedConfigs: addedConfigs,
-      addedSubscriptions: addedSubscriptions,
-      skippedConfigs: remappedConfigs.length - newConfigs.length,
-    );
+    return applyImport(plan);
   }
+
+  Future<void> markProbes(
+    Set<String> identities,
+    ProbeStatus status,
+    DateTime started,
+  ) => _commit(
+    (c) => c.copyWith(
+      configs: c.configs
+          .map(
+            (config) =>
+                identities.contains(config.connectionIdentity) &&
+                    !(config.lastPingedAt?.isAfter(started) ?? false)
+                ? config.copyWith(
+                    probeStatus: status,
+                    latencyMs: null,
+                    lastPingedAt: started,
+                  )
+                : config,
+          )
+          .toList(),
+    ),
+  );
 
   Future<void> batchUpdatePingResults(
-    Map<String, int?> latencyByEndpoint,
+    Map<String, int?> results,
     DateTime pingedAt,
-  ) async {
-    final current = state.maybeWhen(data: (d) => d, orElse: () => null);
-    if (current == null) return;
-    var anyChanged = false;
-    final updated = current.configs.map((c) {
-      final key = '${c.address}:${c.port}';
-      if (!latencyByEndpoint.containsKey(key)) return c;
-      anyChanged = true;
-      return c.copyWith(
-        latencyMs: latencyByEndpoint[key],
-        lastPingedAt: pingedAt,
-      );
-    }).toList();
-    if (!anyChanged) return;
-    await storage.saveConfigs(updated);
-    state = AsyncData(current.copyWith(configs: updated));
-  }
+  ) => _commit(
+    (c) => c.copyWith(
+      configs: c.configs.map((config) {
+        final key = config.connectionIdentity;
+        if (!results.containsKey(key) ||
+            (config.lastPingedAt?.isAfter(pingedAt) ?? false)) {
+          return config;
+        }
+        final ms = results[key];
+        return config.copyWith(
+          latencyMs: ms,
+          lastPingedAt: pingedAt,
+          probeStatus: ms == null ? ProbeStatus.failed : ProbeStatus.success,
+          lastSuccessfulLatencyMs: ms,
+          lastSuccessfulPingAt: ms == null ? null : pingedAt,
+        );
+      }).toList(),
+    ),
+  );
 
-  // ─── Reorder ───
-
-  Future<void> reorderSubscriptions(int oldIndex, int newIndex) async {
-    final current = state.maybeWhen(data: (d) => d, orElse: () => null);
-    if (current == null) return;
-    final subs = List<Subscription>.from(current.subscriptions);
-    if (oldIndex < newIndex) newIndex -= 1;
-    final item = subs.removeAt(oldIndex);
-    subs.insert(newIndex, item);
-    await storage.saveSubscriptions(subs);
-    state = AsyncData(current.copyWith(subscriptions: subs));
-  }
-
-  Future<void> reorderGroupConfigs(
-    String? subId,
-    int oldIndex,
-    int newIndex,
-  ) async {
-    final current = state.maybeWhen(data: (d) => d, orElse: () => null);
-    if (current == null) return;
-    final groupConfigs = List<VpnConfig>.from(
-      subId == null
-          ? current.standaloneConfigs
-          : (current.configsBySubscription[subId] ?? []),
-    );
-    if (oldIndex < newIndex) newIndex -= 1;
-    final item = groupConfigs.removeAt(oldIndex);
-    groupConfigs.insert(newIndex.clamp(0, groupConfigs.length), item);
-    final allConfigs = List<VpnConfig>.from(current.configs);
-    final firstIdx = allConfigs.indexWhere((c) => c.subscriptionId == subId);
-    allConfigs.removeWhere((c) => c.subscriptionId == subId);
-    if (firstIdx >= 0) {
-      allConfigs.insertAll(firstIdx, groupConfigs);
-    } else {
-      allConfigs.addAll(groupConfigs);
-    }
-    await storage.saveConfigs(allConfigs);
-    state = AsyncData(current.copyWith(configs: allConfigs));
-  }
-}
-
-class ImportConnectionsResult {
-  final int addedConfigs;
-  final int addedSubscriptions;
-  final int skippedConfigs;
-
-  const ImportConnectionsResult({
-    required this.addedConfigs,
-    required this.addedSubscriptions,
-    required this.skippedConfigs,
+  Future<void> reorderSubscriptions(int oldIndex, int newIndex) => _commit((c) {
+    final subs = [...c.subscriptions];
+    if (oldIndex < newIndex) newIndex--;
+    subs.insert(newIndex, subs.removeAt(oldIndex));
+    return c.copyWith(subscriptions: subs);
   });
+
+  Future<void> reorderGroupConfigs(String? subId, int oldIndex, int newIndex) =>
+      _commit((c) {
+        final group = c.configs
+            .where((e) => e.subscriptionId == subId)
+            .toList();
+        if (oldIndex < newIndex) newIndex--;
+        group.insert(newIndex, group.removeAt(oldIndex));
+        final all = [...c.configs];
+        final first = all.indexWhere((e) => e.subscriptionId == subId);
+        all.removeWhere((e) => e.subscriptionId == subId);
+        all.insertAll(first < 0 ? all.length : first, group);
+        return c.copyWith(configs: all);
+      });
 }
 
 final configProvider = AsyncNotifierProvider<ConfigNotifier, ConfigState>(
   ConfigNotifier.new,
 );
 
-/// The config that will actually be used on connect:
-/// best-latency config from the active subscription, or the manually selected config.
+int compareProbeResults(VpnConfig a, VpnConfig b, DateTime now) {
+  final aFresh = a.hasFreshProbe(now), bFresh = b.hasFreshProbe(now);
+  if (aFresh != bFresh) return aFresh ? -1 : 1;
+  if (aFresh) {
+    final latency = a.latencyMs!.compareTo(b.latencyMs!);
+    if (latency != 0) return latency;
+  }
+  return a.connectionIdentity.compareTo(b.connectionIdentity);
+}
+
 final effectiveConfigProvider = Provider<VpnConfig?>((ref) {
-  final cs = ref
-      .watch(configProvider)
-      .maybeWhen(data: (d) => d, orElse: () => null);
+  final cs = ref.watch(configProvider).value;
   if (cs == null) return null;
-  final subId = cs.activeSubscriptionId;
-  if (subId != null) {
-    final subConfigs = cs.configs
-        .where((c) => c.subscriptionId == subId)
-        .toList();
-    if (subConfigs.isNotEmpty) {
-      subConfigs.sort((a, b) {
-        if (a.latencyMs == null) return 1;
-        if (b.latencyMs == null) return -1;
-        return a.latencyMs!.compareTo(b.latencyMs!);
-      });
-      return subConfigs.first;
-    }
+  if (cs.activeSubscriptionId != null) {
+    final now = DateTime.now();
+    final candidates =
+        cs.configs
+            .where(
+              (c) =>
+                  c.subscriptionId == cs.activeSubscriptionId &&
+                  c.probeStatus != ProbeStatus.failed,
+            )
+            .toList()
+          ..sort((a, b) => compareProbeResults(a, b, now));
+    return candidates.firstOrNull;
   }
   return cs.activeConfig;
 });

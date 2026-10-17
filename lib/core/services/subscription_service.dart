@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'bounded_download.dart';
+import '../interfaces/vpn_engine.dart';
+import '../../protocols/xray/xray_config_builder.dart';
 import 'dart:convert';
 import 'dart:io';
 import '../constants/app_constants.dart';
@@ -90,12 +94,16 @@ class SubscriptionService {
     HwidDeviceInfo? hwid,
     String? userAgent,
   }) async {
-    final uri = Uri.parse(url);
+    final uri = documentUri(url);
     // Without a connect timeout an unreachable host (refresh runs outside the
     // tunnel) held up startup sync for the OS TCP timeout — minutes.
     final httpClient = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
 
+    final deadline = Timer(
+      const Duration(seconds: 45),
+      () => httpClient.close(force: true),
+    );
     UntrustedCertificateException? certError;
 
     httpClient.badCertificateCallback =
@@ -112,7 +120,9 @@ class SubscriptionService {
     String body;
     HttpHeaders responseHeaders;
     try {
-      final request = await httpClient.getUrl(uri);
+      final request = await httpClient
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 15));
       final ua = userAgent?.trim() ?? '';
       request.headers.set(
         'User-Agent',
@@ -135,15 +145,13 @@ class SubscriptionService {
       }
 
       responseHeaders = response.headers;
-      body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 30));
+      body = await readBoundedBody(response);
     } on HandshakeException {
       if (certError != null) throw certError!;
       rethrow;
     } finally {
-      httpClient.close();
+      deadline.cancel();
+      httpClient.close(force: true);
     }
 
     final meta = _parseHeaders(responseHeaders);
@@ -158,7 +166,9 @@ class SubscriptionService {
         final jsonData = jsonDecode(body);
         final items = jsonData is List ? jsonData : [jsonData];
         for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
+          if (item is! Map<String, dynamic>) {
+            throw const FormatException('Неверный элемент подписки');
+          }
           final rawRemarks = item['remarks'] as String? ?? 'Server';
           final remarks = rawRemarks.replaceFirst(RegExp(r'^[\s\-\—\–]+'), '');
           final rawJson = jsonEncode(item);
@@ -200,6 +210,22 @@ class SubscriptionService {
             ),
           );
         }
+        if (configs.length > 10000) {
+          throw const FormatException('Слишком много подключений');
+        }
+        for (final config in configs) {
+          final error = config.validate();
+          if (error != null) throw FormatException(error);
+          XrayConfigBuilder.plan(
+            config,
+            const VpnEngineOptions(
+              socksPort: 10808,
+              httpPort: 10809,
+              socksUser: '',
+              socksPassword: '',
+            ),
+          );
+        }
         if (configs.isNotEmpty) {
           return SubscriptionFetchResult(
             configs: configs,
@@ -213,8 +239,11 @@ class SubscriptionService {
             hwidStatus: meta.hwidStatus,
           );
         }
+        throw const FormatException('Пустая подписка');
+      } on FormatException {
+        rethrow;
       } catch (_) {
-        // Not valid JSON — fall through to standard URI parsing.
+        throw const FormatException('Неверный managed-конфиг');
       }
     }
 
@@ -236,15 +265,19 @@ class SubscriptionService {
       }
     }
 
-    for (final line in lines) {
-      final trimmed = line.trim();
-      try {
-        final config = VlessParser.parseUri(trimmed);
-        if (config != null) configs.add(config);
-      } catch (_) {
-        // Skip unparseable lines
-      }
+    if (lines.length > 10000) {
+      throw const FormatException('Слишком много подключений');
     }
+    for (final line in lines) {
+      final config = VlessParser.parseUri(line.trim());
+      if (config == null) {
+        throw const FormatException(
+          'Подписка содержит некорректное подключение',
+        );
+      }
+      configs.add(config);
+    }
+    if (configs.isEmpty) throw const FormatException('Пустая подписка');
 
     return SubscriptionFetchResult(
       configs: configs,

@@ -32,8 +32,10 @@ class VpnNotificationPolicyTest {
             "disconnecting" to VpnNotificationVariant.DISCONNECTING,
             "connected" to VpnNotificationVariant.CONNECTED,
             "disconnected" to VpnNotificationVariant.DISCONNECTED,
-            "error" to VpnNotificationVariant.KEEP_CURRENT,
-            "blocked" to VpnNotificationVariant.KEEP_CURRENT,
+            "error" to VpnNotificationVariant.STATUS_ONLY,
+            "blocked" to VpnNotificationVariant.STATUS_ONLY,
+            "stopBlocked" to VpnNotificationVariant.STATUS_ONLY,
+            "awaitingPermission" to VpnNotificationVariant.STATUS_ONLY,
         )
 
         expected.forEach { (state, variant) ->

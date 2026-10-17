@@ -4,25 +4,25 @@ import '../../core/models/vpn_config.dart';
 
 Map<String, dynamic>? _parseExtra(String? raw) {
   if (raw == null || raw.isEmpty) return null;
-  try {
-    final decoded = Uri.decodeComponent(raw);
-    final json = jsonDecode(decoded);
-    return json is Map<String, dynamic> ? json : null;
-  } catch (_) {
-    return null;
+  final json = jsonDecode(raw);
+  if (json is! Map<String, dynamic>) {
+    throw const FormatException('Expected JSON object');
   }
+  return json;
 }
 
 class VlessParser {
   static VpnConfig? parseUri(String uri) {
-    if (uri.startsWith('vless://')) return _parseVless(uri);
-    if (uri.startsWith('vmess://')) return _parseVmess(uri);
-    if (uri.startsWith('trojan://')) return _parseTrojan(uri);
-    if (uri.startsWith('ss://')) return _parseShadowsocks(uri);
-    if (uri.startsWith('hy2://') || uri.startsWith('hysteria2://')) {
-      return _parseHysteria2(uri);
-    }
-    return null;
+    if (uri.length > 1024 * 1024) return null;
+    final config = switch (Uri.tryParse(uri)?.scheme) {
+      'vless' => _parseVless(uri),
+      'vmess' => _parseVmess(uri),
+      'trojan' => _parseTrojan(uri),
+      'ss' => _parseShadowsocks(uri),
+      'hy2' || 'hysteria2' => _parseHysteria2(uri),
+      _ => null,
+    };
+    return config?.validate() == null ? config : null;
   }
 
   static String _cleanName(String name) {
@@ -64,7 +64,7 @@ class VlessParser {
       final security = _parseSecurity(params['security'] ?? 'none');
       final transport = _parseTransport(params['type'] ?? 'tcp');
       final allowInsecure = _parseInsecure(params);
-      final pinSHA256 = params['pinSHA256'];
+      final pinSHA256 = params['pinSHA256'] ?? params['pcs'];
 
       return VpnConfig(
         id: const Uuid().v4(),
@@ -72,21 +72,19 @@ class VlessParser {
         protocol: VpnProtocol.vless,
         address: host,
         port: port,
-        uuid: userInfo,
+        uuid: Uri.decodeComponent(userInfo),
         security: security,
         transport: transport,
         allowInsecure: allowInsecure,
         pinSHA256: pinSHA256,
         sni: params['sni'] ?? params['serverName'],
-        wsPath: Uri.decodeComponent(params['path'] ?? '/'),
+        wsPath: params['path'] ?? '/',
         wsHost: params['host'],
         grpcServiceName: params['serviceName'],
         fingerprint: params['fp'],
         publicKey: params['pbk'],
         shortId: params['sid'],
-        spiderX: params['spx'] != null
-            ? Uri.decodeComponent(params['spx']!)
-            : null,
+        spiderX: params['spx'],
         postQuantumKey: params['pqv'],
         flow: params['flow'],
         encryption: params['encryption'] ?? 'none',
@@ -110,7 +108,7 @@ class VlessParser {
       final decoded = utf8.decode(base64Decode(_padBase64(encoded)));
       final json = jsonDecode(decoded) as Map<String, dynamic>;
 
-      final port = int.tryParse(json['port']?.toString() ?? '443') ?? 443;
+      final port = int.parse(json['port']?.toString() ?? '443');
       final host = json['add'] as String? ?? '';
       final rawName = json['ps'] as String? ?? '$host:$port';
       final name = _cleanName(rawName);
@@ -125,7 +123,7 @@ class VlessParser {
         address: host,
         port: port,
         uuid: json['id'] as String? ?? '',
-        security: tls == 'tls' ? VpnSecurity.tls : VpnSecurity.none,
+        security: _parseSecurity(tls.isEmpty ? 'none' : tls),
         transport: _parseTransport(net),
         sni: json['sni'] as String?,
         wsPath: json['path'] as String?,
@@ -158,7 +156,7 @@ class VlessParser {
 
       final atIdx = main.lastIndexOf('@');
       if (atIdx < 0) return null;
-      final password = main.substring(0, atIdx);
+      final password = Uri.decodeComponent(main.substring(0, atIdx));
       final hostPart = main.substring(atIdx + 1);
 
       final qIdx = hostPart.indexOf('?');
@@ -176,8 +174,13 @@ class VlessParser {
         port: port,
         uuid: '',
         password: password,
-        security: VpnSecurity.tls,
+        security: _parseSecurity(params['security'] ?? 'tls'),
         transport: _parseTransport(params['type'] ?? 'tcp'),
+        allowInsecure: _parseInsecure(params),
+        pinSHA256: params['pinSHA256'] ?? params['pcs'],
+        alpn: params['alpn'],
+        ech: params['ech'],
+        finalmask: _parseExtra(params['fm']),
         sni: params['sni'] ?? params['peer'],
         wsPath: params['path'],
         wsHost: params['host'],
@@ -227,7 +230,7 @@ class VlessParser {
         try {
           decoded = utf8.decode(base64Decode(_padBase64(userInfo)));
         } catch (_) {
-          decoded = userInfo;
+          decoded = Uri.decodeComponent(userInfo);
         }
 
         final colonIdx = decoded.indexOf(':');
@@ -320,7 +323,7 @@ class VlessParser {
           ? params['obfs-password']
           : null;
       final allowInsecure = _parseInsecure(params);
-      final pinSHA256 = params['pinSHA256'];
+      final pinSHA256 = params['pinSHA256'] ?? params['pcs'];
 
       return VpnConfig(
         id: const Uuid().v4(),
@@ -356,14 +359,14 @@ class VlessParser {
       final host = hostPort.substring(1, closeBracket);
       final rest = hostPort.substring(closeBracket + 1);
       final port = rest.startsWith(':')
-          ? int.tryParse(rest.substring(1)) ?? defaultPort
+          ? int.parse(rest.substring(1))
           : defaultPort;
       return (host, port);
     }
     final colonIdx = hostPort.lastIndexOf(':');
     if (colonIdx < 0) return (hostPort, defaultPort);
     final host = hostPort.substring(0, colonIdx);
-    final port = int.tryParse(hostPort.substring(colonIdx + 1)) ?? defaultPort;
+    final port = int.parse(hostPort.substring(colonIdx + 1));
     return (host, port);
   }
 
@@ -373,8 +376,10 @@ class VlessParser {
         return VpnSecurity.tls;
       case 'reality':
         return VpnSecurity.reality;
-      default:
+      case 'none':
         return VpnSecurity.none;
+      default:
+        throw const FormatException('Неподдерживаемый security');
     }
   }
 
@@ -395,8 +400,11 @@ class VlessParser {
         return VpnTransport.httpupgrade;
       case 'splithttp':
         return VpnTransport.splithttp;
-      default:
+      case 'tcp':
+      case 'raw':
         return VpnTransport.tcp;
+      default:
+        throw const FormatException('Неподдерживаемый transport');
     }
   }
 

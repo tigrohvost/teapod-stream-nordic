@@ -53,18 +53,18 @@ class VpnStats {
 
   static String formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KiB';
     if (bytes < 1024 * 1024 * 1024) {
-      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MiB';
     }
-    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GiB';
   }
 
   static String formatSpeed(int bps) {
-    final bits = bps * 8;
-    if (bits < 1024) return '$bits bit/s';
-    if (bits < 1024 * 1024) return '${(bits / 1024).toStringAsFixed(1)} Kbit/s';
-    return '${(bits / (1024 * 1024)).toStringAsFixed(1)} Mbit/s';
+    final bits = bps < 0 ? 0 : bps * 8;
+    if (bits < 1000) return '$bits bit/s';
+    if (bits < 1000000) return '${(bits / 1000).toStringAsFixed(1)} kbit/s';
+    return '${(bits / 1000000).toStringAsFixed(1)} Mbit/s';
   }
 
   static String formatDuration(Duration d) {

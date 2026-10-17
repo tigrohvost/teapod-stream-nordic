@@ -126,12 +126,7 @@ class _StatsCardState extends State<StatsCard> {
       0,
       (m, p) => max(m, max(p.upload, p.download)),
     );
-    final bits = maxVal * 8;
-    if (bits < 1024) return '';
-    if (bits < 1024 * 1024) {
-      return 'пик: ${(bits / 1024).toStringAsFixed(0)} Kbit/s';
-    }
-    return 'пик: ${(bits / (1024 * 1024)).toStringAsFixed(1)} Mbit/s';
+    return 'пик: ${VpnStats.formatSpeed(maxVal.round())}';
   }
 
   List<_SpeedPoint> get _paddedHistory {

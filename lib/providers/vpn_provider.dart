@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../core/interfaces/vpn_engine.dart';
 import '../core/models/vpn_config.dart';
+import '../core/models/effective_connection_plan.dart';
+import '../core/services/probe_scheduler.dart';
 import '../core/constants/app_constants.dart';
 import '../core/models/vpn_stats.dart';
 import '../core/models/connection_fingerprint.dart';
@@ -21,6 +23,9 @@ class VpnState2 {
   final VpnState connectionState;
   final VpnStats stats;
   final String? error;
+  final String appliedMode;
+  final String appliedSource;
+  final int appliedRevision;
   final int activeSocksPort;
   final String activeSocksUser;
   final String activeSocksPassword;
@@ -33,6 +38,9 @@ class VpnState2 {
     this.connectionState = VpnState.disconnected,
     this.stats = const VpnStats(),
     this.error,
+    this.appliedMode = 'unknown',
+    this.appliedSource = 'unknown',
+    this.appliedRevision = 0,
     this.activeSocksPort = 0,
     this.activeSocksUser = '',
     this.activeSocksPassword = '',
@@ -40,15 +48,26 @@ class VpnState2 {
   });
 
   bool get isConnected => connectionState == VpnState.connected;
-  bool get isConnecting => connectionState == VpnState.connecting;
+  bool get isConnecting =>
+      connectionState == VpnState.connecting ||
+      connectionState == VpnState.awaitingPermission ||
+      connectionState == VpnState.recovering;
   bool get isDisconnecting => connectionState == VpnState.disconnecting;
-  bool get isBlocked => connectionState == VpnState.blocked;
-  bool get isBusy => isConnecting || isDisconnecting;
+  bool get isBlocked =>
+      connectionState == VpnState.blocked ||
+      connectionState == VpnState.stopBlocked;
+  bool get isBusy =>
+      isConnecting ||
+      isDisconnecting ||
+      connectionState == VpnState.stopBlocked;
 
   VpnState2 copyWith({
     VpnState? connectionState,
     VpnStats? stats,
     String? error,
+    String? appliedMode,
+    String? appliedSource,
+    int? appliedRevision,
     int? activeSocksPort,
     String? activeSocksUser,
     String? activeSocksPassword,
@@ -58,6 +77,9 @@ class VpnState2 {
       connectionState: connectionState ?? this.connectionState,
       stats: stats ?? this.stats,
       error: error,
+      appliedMode: appliedMode ?? this.appliedMode,
+      appliedSource: appliedSource ?? this.appliedSource,
+      appliedRevision: appliedRevision ?? this.appliedRevision,
       activeSocksPort: activeSocksPort ?? this.activeSocksPort,
       activeSocksUser: activeSocksUser ?? this.activeSocksUser,
       activeSocksPassword: activeSocksPassword ?? this.activeSocksPassword,
@@ -74,40 +96,54 @@ final Stream<dynamic> vpnEvents = const EventChannel(
   '${AppConstants.methodChannel}/events',
 ).receiveBroadcastStream();
 
+final vpnEngineProvider = Provider<XrayEngine>((ref) => XrayEngine());
+final vpnEventProvider = Provider<Stream<dynamic>>((ref) => vpnEvents);
+
 class VpnNotifier extends Notifier<VpnState2> {
   late final XrayEngine _engine;
 
   StreamSubscription<dynamic>? _eventSub;
   Timer? _connectTimeout;
   Timer? _disconnectTimeout;
-  Timer? _statsPoller;
+  bool _appActive = true;
+  bool _statsVisible = true;
+  bool _statsInFlight = false;
+  int _statsGeneration = 0;
+  int _sessionId = 0;
+  int _attempt = 0;
+  int _statsEvents = 0;
+  String? _pendingFingerprint;
+  final _probes = ProbeScheduler();
   Timer? _subRefreshTimer;
   bool _isPinging = false;
   DateTime? _connectedAt;
 
   @override
   VpnState2 build() {
-    _engine = XrayEngine();
+    _engine = ref.read(vpnEngineProvider);
 
-    _eventSub = vpnEvents.listen(
-      (dynamic event) {
-        if (event is Map) {
-          _handleEvent(Map<String, dynamic>.from(event));
-        }
-      },
-      onError: (dynamic error) {
-        ref
-            .read(logServiceProvider.notifier)
-            .addError('Event channel error: $error');
-      },
-    );
+    _eventSub = ref
+        .read(vpnEventProvider)
+        .listen(
+          (dynamic event) {
+            if (event is Map) {
+              _handleEvent(Map<String, dynamic>.from(event));
+            }
+          },
+          onError: (dynamic error) {
+            ref
+                .read(logServiceProvider.notifier)
+                .addError('Event channel error: $error');
+          },
+        );
 
     ref.onDispose(() {
       _eventSub?.cancel();
       _connectTimeout?.cancel();
       _disconnectTimeout?.cancel();
-      _statsPoller?.cancel();
+      _statsGeneration++;
       _subRefreshTimer?.cancel();
+      _probes.cancel();
     });
 
     // Auto-refresh subscriptions: timer fires hourly, staleness check uses configured interval
@@ -159,6 +195,8 @@ class VpnNotifier extends Notifier<VpnState2> {
       }
 
       final vpnState = await _engine.getVpnState();
+      if (!ref.mounted || vpnState.sessionId < _sessionId) return;
+      _sessionId = vpnState.sessionId;
       if (vpnState.state == VpnState.connected && vpnState.socksPort > 0) {
         if (vpnState.connectedAtMs > 0) {
           _connectedAt = DateTime.fromMillisecondsSinceEpoch(
@@ -167,6 +205,10 @@ class VpnNotifier extends Notifier<VpnState2> {
         }
         state = VpnState2(
           connectionState: VpnState.connected,
+          appliedMode: vpnState.mode,
+          appliedSource: vpnState.plan['source'] as String? ?? 'unknown',
+          appliedRevision: vpnState.plan['revision'] as int? ?? 0,
+          appliedFingerprint: vpnState.plan['fingerprint'] as String?,
           activeSocksPort: vpnState.socksPort,
           activeSocksUser: vpnState.socksUser,
           activeSocksPassword: vpnState.socksPassword,
@@ -175,46 +217,54 @@ class VpnNotifier extends Notifier<VpnState2> {
         // ignore: unused_result
         ref.refresh(ipInfoProvider);
         // Also fetch initial stats
-        _startStatsPolling();
-        // VPN уже работал до старта приложения — считаем применёнными текущие
-        // настройки (точный снапшот на момент connect недоступен).
-        final s = await ref.read(settingsProvider.future);
-        state = state.copyWith(appliedFingerprint: connectionFingerprint(s));
+        _loadStatsSnapshot();
       }
     });
 
     return const VpnState2();
   }
 
-  void _startStatsPolling() {
-    // Prevent duplicate polling
-    if (_statsPoller?.isActive == true) return;
-
-    _statsPoller = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (state.connectionState != VpnState.connected) {
-        return;
-      }
+  void _loadStatsSnapshot() {
+    // A single snapshot on attach/resume. Subsequent points arrive as events.
+    if (!_appActive ||
+        !_statsVisible ||
+        _statsInFlight ||
+        state.appliedMode == 'proxyOnly') {
+      return;
+    }
+    _statsInFlight = true;
+    final generation = _statsGeneration;
+    final events = _statsEvents;
+    Future<void>(() async {
       try {
-        final stats = await _engine.getStats();
-        _handleStats(
-          Map<String, dynamic>.from({
-            'upload': stats.upload,
-            'download': stats.download,
-            'uploadSpeed': stats.uploadSpeed,
-            'downloadSpeed': stats.downloadSpeed,
-          }),
-        );
-
-        // Also fetch stats history for chart
         final history = await _engine.getStatsHistory();
-        if (history.isNotEmpty) {
+        if (ref.mounted &&
+            _appActive &&
+            _statsVisible &&
+            generation == _statsGeneration &&
+            events == _statsEvents) {
           _handleStatsHistory({'history': history});
         }
-      } catch (_) {}
+      } finally {
+        _statsInFlight = false;
+      }
     });
   }
 
+  void setStatsVisible(bool visible) {
+    if (_statsVisible == visible) return;
+    _statsVisible = visible;
+    _statsGeneration++;
+    if (visible && state.isConnected) _loadStatsSnapshot();
+  }
+
   void _handleEvent(Map<String, dynamic> event) {
+    final incoming = (event['sessionId'] as num?)?.toInt();
+    if (incoming != null && incoming < _sessionId) return;
+    if (incoming != null && incoming > _sessionId) {
+      _sessionId = incoming;
+      _statsGeneration++;
+    }
     final type = event['type'] as String?;
     switch (type) {
       case 'state':
@@ -222,6 +272,9 @@ class VpnNotifier extends Notifier<VpnState2> {
         final isReconnect = rawValue == 'reconnecting';
         final newState = _parseState(rawValue);
         if (newState == VpnState.connected) {
+          final plan =
+              jsonDecode(event['planInfo'] as String? ?? '{}')
+                  as Map<String, dynamic>;
           final port = event['socksPort'] as int?;
           if (port != null && port > 0) {
             final user = event['socksUser'] as String? ?? '';
@@ -234,6 +287,10 @@ class VpnNotifier extends Notifier<VpnState2> {
               );
             }
             state = state.copyWith(
+              appliedMode: event['mode'] as String?,
+              appliedSource: plan['source'] as String? ?? 'unknown',
+              appliedRevision: plan['revision'] as int? ?? 0,
+              appliedFingerprint: plan['fingerprint'] as String?,
               activeSocksPort: port,
               activeSocksUser: user,
               activeSocksPassword: pass,
@@ -257,16 +314,39 @@ class VpnNotifier extends Notifier<VpnState2> {
                 source: 'xray',
               ),
             );
+      case 'connectionError':
+        final code = event['code'] as String?;
+        state = state.copyWith(
+          error: switch (code) {
+            'VPN_PERMISSION_REQUIRED' =>
+              'Нажмите подключить и разрешите VPN в диалоге Android',
+            'EMPTY_ALLOWED_APPS' => 'Выберите хотя бы одно приложение',
+            'PREFIX_REQUIRES_TUN' =>
+              'Prefix transport доступен только в режиме VPN',
+            'NATIVE_STOP_TIMEOUT' || 'NATIVE_STOP_FAILED' =>
+              'Остановка ядра не завершена. Новое подключение пока недоступно.',
+            _ => 'Не удалось применить конфигурацию ($code)',
+          },
+        );
       case 'stats':
-        break; // Ignore stats from EventChannel - we use poller instead
+        if (_appActive && _statsVisible && state.isConnected) {
+          _handleStats(event);
+        }
       case 'statsHistory':
-        _handleStatsHistory(event);
+        if (_appActive &&
+            _statsVisible &&
+            state.isConnected &&
+            state.appliedMode != 'proxyOnly') {
+          _handleStatsHistory(event);
+        }
     }
   }
 
   VpnState _parseState(String? s) => switch (s) {
+    'awaitingPermission' => VpnState.awaitingPermission,
+    'stopBlocked' => VpnState.stopBlocked,
     'connecting' => VpnState.connecting,
-    'reconnecting' => VpnState.connecting,
+    'reconnecting' => VpnState.recovering,
     'connected' => VpnState.connected,
     'disconnecting' => VpnState.disconnecting,
     'disconnected' => VpnState.disconnected,
@@ -277,20 +357,24 @@ class VpnNotifier extends Notifier<VpnState2> {
 
   void _onNativeState(VpnState nativeState, {bool isReconnect = false}) {
     if (nativeState == VpnState.connected) {
+      state = state.copyWith(appliedFingerprint: _pendingFingerprint);
+      _pendingFingerprint = null;
       _connectedAt ??= DateTime.now();
       _connectTimeout?.cancel();
       _connectTimeout = null;
-      // Start polling as backup for when EventChannel doesn't deliver (app in background)
-      _startStatsPolling();
+      // Load bounded native history once on attachment.
+      _loadStatsSnapshot();
     } else if (nativeState == VpnState.disconnected ||
         nativeState == VpnState.error ||
-        nativeState == VpnState.blocked) {
+        nativeState == VpnState.blocked ||
+        nativeState == VpnState.stopBlocked) {
       _connectedAt = null;
       _connectTimeout?.cancel();
       _connectTimeout = null;
       _disconnectTimeout?.cancel();
       _disconnectTimeout = null;
-    } else if (nativeState == VpnState.connecting) {
+    } else if (nativeState == VpnState.connecting ||
+        nativeState == VpnState.recovering) {
       if (isReconnect) {
         // Native-triggered reconnect: cancel Flutter-side timeout so it doesn't
         // force error while the service is mid-reconnect (cycle can exceed 45s).
@@ -311,7 +395,10 @@ class VpnNotifier extends Notifier<VpnState2> {
     } else if (nativeState == VpnState.disconnecting) {
       _disconnectTimeout ??= Timer(const Duration(seconds: 10), () {
         if (state.connectionState == VpnState.disconnecting) {
-          state = VpnState2(connectionState: VpnState.disconnected);
+          state = state.copyWith(
+            connectionState: VpnState.stopBlocked,
+            error: 'Остановка ядра не подтверждена. Дождитесь завершения.',
+          );
           _disconnectTimeout = null;
         }
       });
@@ -321,16 +408,18 @@ class VpnNotifier extends Notifier<VpnState2> {
 
     if (nativeState == VpnState.disconnected ||
         nativeState == VpnState.error ||
-        nativeState == VpnState.blocked) {
+        nativeState == VpnState.blocked ||
+        nativeState == VpnState.stopBlocked) {
+      _pendingFingerprint = null;
       // Reset stats on disconnect/error/blocked
-      _statsPoller?.cancel();
+      _statsGeneration++;
       state = VpnState2(
         connectionState: nativeState,
         // Reset stats including speedHistory
         stats: const VpnStats(),
-        error: nativeState == VpnState.error
-            ? (state.error ?? 'Connection error')
-            : null,
+        error:
+            state.error ??
+            (nativeState == VpnState.error ? 'Ошибка подключения' : null),
       );
     } else {
       state = state.copyWith(connectionState: nativeState);
@@ -338,6 +427,8 @@ class VpnNotifier extends Notifier<VpnState2> {
   }
 
   void _handleStats(Map<String, dynamic> event) {
+    if (state.appliedMode == 'proxyOnly') return;
+    _statsEvents++;
     // Handle both int and Long (from Kotlin)
     final upload = (event['upload'] as num?)?.toInt() ?? 0;
     final download = (event['download'] as num?)?.toInt() ?? 0;
@@ -351,6 +442,12 @@ class VpnNotifier extends Notifier<VpnState2> {
         downloadBytes: download,
         uploadSpeedBps: uploadSpeed,
         downloadSpeedBps: downloadSpeed,
+        speedHistory: [
+          ...state.stats.speedHistory.skip(
+            state.stats.speedHistory.length >= 300 ? 1 : 0,
+          ),
+          SpeedPoint(uploadSpeed: uploadSpeed, downloadSpeed: downloadSpeed),
+        ],
         connectedDuration: _connectedAt != null
             ? DateTime.now().difference(_connectedAt!)
             : Duration.zero,
@@ -370,38 +467,36 @@ class VpnNotifier extends Notifier<VpnState2> {
     if (history.isEmpty) return;
 
     // Native history is the source of truth
-    state = state.copyWith(stats: state.stats.copyWith(speedHistory: history));
+    state = state.copyWith(
+      stats: state.stats.copyWith(
+        speedHistory: history
+            .skip(history.length > 300 ? history.length - 300 : 0)
+            .toList(),
+      ),
+    );
   }
 
   Future<void> connect() async {
     if (state.isBusy || state.isConnected) return;
 
-    // Update state synchronously — button turns yellow in the same frame as tap
-    state = state.copyWith(connectionState: VpnState.connecting, error: null);
-
-    // Safety timeout — if native never confirms, force error after 45s
+    final attempt = ++_attempt;
+    state = state.copyWith(
+      connectionState: VpnState.awaitingPermission,
+      error: null,
+    );
     _connectTimeout?.cancel();
-    _connectTimeout = Timer(const Duration(seconds: 45), () {
-      if (state.connectionState == VpnState.connecting) {
-        state = state.copyWith(
-          connectionState: VpnState.error,
-          error: 'Connection timeout',
-        );
-        _connectTimeout = null;
-        _engine.disconnect().ignore();
-      }
-    });
+    _connectTimeout = null;
 
     // Notification permission for foreground service (Android 13+) — best-effort
     await Permission.notification.request();
 
     // Cancelled meanwhile, or the EventChannel replay delivered the real state.
-    if (state.connectionState != VpnState.connecting) return;
+    if (!ref.mounted || attempt != _attempt || state.isConnected) return;
     // A UI started over a live session (tile, boot, always-on, recreated
     // activity) must adopt it: the service ignores a second connect, and the
     // fresh SOCKS credentials generated below would describe nothing.
     final native = await _engine.queryVpnState();
-    if (state.connectionState != VpnState.connecting) return;
+    if (!ref.mounted || attempt != _attempt || state.isConnected) return;
     if (native != null &&
         native.state == VpnState.connected &&
         native.socksPort > 0) {
@@ -411,9 +506,7 @@ class VpnNotifier extends Notifier<VpnState2> {
       return;
     }
 
-    final configState = ref
-        .read(configProvider)
-        .maybeWhen(data: (d) => d, orElse: () => null);
+    final configState = await ref.read(configProvider.future);
     final config = _resolveEffectiveConfig(configState);
     if (config == null) {
       ref
@@ -442,11 +535,18 @@ class VpnNotifier extends Notifier<VpnState2> {
       return;
     }
 
-    final settings =
-        ref
-            .read(settingsProvider)
-            .maybeWhen(data: (d) => d, orElse: () => null) ??
-        const AppSettings();
+    final settings = await ref.read(settingsProvider.future);
+    if (!ref.mounted || attempt != _attempt) return;
+    if (!settings.proxyOnly &&
+        settings.splitTunnelingEnabled &&
+        settings.vpnMode == VpnMode.onlySelected &&
+        settings.includedPackages.isEmpty) {
+      state = state.copyWith(
+        connectionState: VpnState.error,
+        error: 'Выберите хотя бы одно приложение',
+      );
+      return;
+    }
 
     final socksCredentials = settings.randomCredentials
         ? XrayEngine.generateSocksCredentials()
@@ -456,65 +556,49 @@ class VpnNotifier extends Notifier<VpnState2> {
         ? (10000 + Random().nextInt(50000))
         : settings.socksPort;
 
-    final options = VpnEngineOptions(
-      socksPort: actualSocksPort,
-      httpPort: 0,
-      socksUser: socksCredentials.user,
-      socksPassword: socksCredentials.password,
-      excludedPackages: settings.splitTunnelingEnabled
-          ? (settings.vpnMode == VpnMode.allExcept
-                ? settings.excludedPackages
-                : <String>{})
-          : {},
-      includedPackages: settings.splitTunnelingEnabled
-          ? (settings.vpnMode == VpnMode.onlySelected
-                ? settings.includedPackages
-                : <String>{})
-          : {},
-      logLevel: settings.logLevel,
-      enableUdp: settings.enableUdp,
-      allowIcmp: settings.allowIcmp,
-      dnsMode: settings.dnsMode,
-      dnsServer: settings.dnsServer,
-      vpnMode: settings.splitTunnelingEnabled
-          ? settings.vpnMode
-          : VpnMode.allExcept,
-      proxyOnly: settings.proxyOnly,
-      showNotification: settings.showNotification,
-      killSwitch: settings.killSwitchEnabled,
-      routing: settings.routing,
-      sniffingEnabled: settings.sniffingEnabled,
-      mtu: settings.mtu,
-      dnsQueryStrategy: settings.dnsQueryStrategy,
-      // XTLS Vision rejects UDP/443 by design: QUIC can never pass, but browsers
-      // keep retrying it (each retry costs a full outbound handshake) and stall
-      // for ~30s before falling back to TCP. Force the ICMP fast-fail.
-      blockQuic: settings.blockQuic || _usesVisionFlow(config),
-      ipv6Enabled: settings.ipv6Enabled,
-      obsProbeIntervalSec: settings.obsProbeIntervalSec,
-      tlsFingerprint: settings.tlsFingerprint,
+    final options = _options(
+      config,
+      settings,
+      socksCredentials,
+      actualSocksPort,
     );
     state = state.copyWith(
       activeSocksPort: actualSocksPort,
       activeSocksUser: socksCredentials.user,
       activeSocksPassword: socksCredentials.password,
-      appliedFingerprint: connectionFingerprint(settings),
     );
 
+    _pendingFingerprint = connectionFingerprint(settings);
     try {
-      await _engine.connect(config, options);
+      await _engine.connect(
+        config,
+        options,
+        revision: configState.revision,
+        fingerprint: _pendingFingerprint,
+      );
       // Polling is now started in _onNativeState when connected
     } on PlatformException catch (e) {
+      if (!ref.mounted || attempt != _attempt) return;
       ref
           .read(logServiceProvider.notifier)
           .addError('Connection failed: ${e.message}');
       state = state.copyWith(connectionState: VpnState.error, error: e.message);
       _connectTimeout?.cancel();
       _connectTimeout = null;
+    } on ConnectionPlanException catch (e) {
+      if (ref.mounted && attempt == _attempt) {
+        state = state.copyWith(
+          connectionState: VpnState.error,
+          error: e.message,
+        );
+      }
     }
   }
 
   Future<void> disconnect() async {
+    _attempt++;
+    _pendingFingerprint = null;
+    _statsGeneration++;
     if (state.connectionState == VpnState.disconnected ||
         state.connectionState == VpnState.disconnecting) {
       return;
@@ -523,11 +607,14 @@ class VpnNotifier extends Notifier<VpnState2> {
     // Update state synchronously
     state = state.copyWith(connectionState: VpnState.disconnecting);
 
-    // Safety timeout — if native never confirms, force disconnected after 10s
+    // A missed native completion is uncertain; keep new starts blocked.
     _disconnectTimeout?.cancel();
     _disconnectTimeout = Timer(const Duration(seconds: 10), () {
       if (state.connectionState == VpnState.disconnecting) {
-        state = VpnState2(connectionState: VpnState.disconnected);
+        state = state.copyWith(
+          connectionState: VpnState.stopBlocked,
+          error: 'Остановка ядра не подтверждена. Дождитесь завершения.',
+        );
         _disconnectTimeout = null;
       }
     });
@@ -539,7 +626,10 @@ class VpnNotifier extends Notifier<VpnState2> {
           .read(logServiceProvider.notifier)
           .addError('Disconnect error: ${e.message}');
       // Force disconnected so the UI doesn't get stuck
-      state = VpnState2(connectionState: VpnState.disconnected);
+      state = state.copyWith(
+        connectionState: VpnState.stopBlocked,
+        error: 'Остановка ядра не подтверждена. Дождитесь завершения.',
+      );
       _disconnectTimeout?.cancel();
       _disconnectTimeout = null;
     }
@@ -549,13 +639,15 @@ class VpnNotifier extends Notifier<VpnState2> {
   /// invisible, but each tick costs two MethodChannel round-trips (one of them
   /// serialising the whole 300-point history on the platform thread).
   void onAppPaused() {
-    _statsPoller?.cancel();
+    _appActive = false;
+    _statsGeneration++;
   }
 
   /// Resumes polling (and resyncs state) when the app returns to foreground.
   Future<void> onAppResumed() async {
+    _appActive = true;
     await syncNativeState();
-    if (state.isConnected) _startStatsPolling();
+    if (state.isConnected) _loadStatsSnapshot();
   }
 
   /// Syncs Flutter state from the native service: on app start and resume, and
@@ -565,7 +657,8 @@ class VpnNotifier extends Notifier<VpnState2> {
   /// null when it couldn't be read.
   Future<VpnState?> syncNativeState() async {
     final native = await _engine.queryVpnState();
-    if (native == null) return null;
+    if (native == null || native.sessionId < _sessionId) return null;
+    _sessionId = native.sessionId;
     if (native.state == VpnState.connected && native.socksPort > 0) {
       _adoptConnected(native);
     } else {
@@ -585,20 +678,14 @@ class VpnNotifier extends Notifier<VpnState2> {
       );
     }
     state = state.copyWith(
+      appliedMode: native.mode,
+      appliedSource: native.plan['source'] as String? ?? 'unknown',
+      appliedRevision: native.plan['revision'] as int? ?? 0,
+      appliedFingerprint: native.plan['fingerprint'] as String?,
       activeSocksPort: native.socksPort,
       activeSocksUser: native.socksUser,
       activeSocksPassword: native.socksPassword,
     );
-    if (state.appliedFingerprint == null) {
-      // The exact settings at connect time are unknown; treat the current ones
-      // as applied (same as the startup restore).
-      final s = ref
-          .read(settingsProvider)
-          .maybeWhen(data: (d) => d, orElse: () => null);
-      if (s != null) {
-        state = state.copyWith(appliedFingerprint: connectionFingerprint(s));
-      }
-    }
     _onNativeState(VpnState.connected);
   }
 
@@ -612,6 +699,23 @@ class VpnNotifier extends Notifier<VpnState2> {
   }
 
   Future<void> reconnectWithNewConfig() async {
+    final settings = await ref.read(settingsProvider.future);
+    final config = ref.read(effectiveConfigProvider);
+    if (config == null) return;
+    try {
+      await _engine.validate(
+        config,
+        _options(config, settings, (
+          user: settings.socksUser,
+          password: settings.socksPassword,
+        ), settings.socksPort),
+      );
+    } catch (_) {
+      state = state.copyWith(
+        error: 'Новая конфигурация отклонена; текущее соединение сохранено',
+      );
+      return;
+    }
     if (state.isConnected || state.isConnecting) {
       await disconnect();
       // _disconnectTimeout is 10s; wait up to 12s so the forced-disconnect fires first.
@@ -654,6 +758,8 @@ class VpnNotifier extends Notifier<VpnState2> {
     return false;
   }
 
+  void cancelProbes() => _probes.cancel();
+
   Future<void> pingAllConfigs() async {
     if (_isPinging) return;
     final configState = ref
@@ -677,7 +783,7 @@ class VpnNotifier extends Notifier<VpnState2> {
     final now = DateTime.now();
     final stale = configState.configs.where((c) {
       if (c.lastPingedAt == null) return true;
-      return now.difference(c.lastPingedAt!) > const Duration(hours: 1);
+      return now.difference(c.lastPingedAt!) > const Duration(minutes: 10);
     }).toList();
     if (stale.isEmpty) return;
     _isPinging = true;
@@ -690,31 +796,72 @@ class VpnNotifier extends Notifier<VpnState2> {
 
   Future<void> _pingEndpoints(List<VpnConfig> configs) async {
     final now = DateTime.now();
-    // Prefer non-raw configs per endpoint so TCP probe works for shared servers
-    final endpoints = <String, VpnConfig>{};
-    for (final c in configs) {
-      if (c.rawXrayConfig == null) {
-        endpoints['${c.address}:${c.port}'] = c;
-      }
-    }
-    for (final c in configs) {
-      if (c.rawXrayConfig != null) {
-        endpoints.putIfAbsent('${c.address}:${c.port}', () => c);
-      }
-    }
-
-    final results = await Future.wait(
-      endpoints.entries.map((e) async {
-        final ms = await _engine.pingConfig(e.value);
-        return MapEntry(e.key, ms);
-      }),
-    );
-    final latencyMap = Map.fromEntries(results);
-
-    // Single batch update — one storage write, one state update
+    final jobs = {
+      for (final c in configs)
+        if (c.rawXrayConfig == null &&
+            c.protocol != VpnProtocol.hysteria2 &&
+            c.transport != VpnTransport.quic)
+          c.connectionIdentity: c,
+    };
     await ref
         .read(configProvider.notifier)
-        .batchUpdatePingResults(latencyMap, now);
+        .markProbes(jobs.keys.toSet(), ProbeStatus.running, now);
+    final results = await _probes.run(jobs, _engine.pingConfig);
+    if (results != null && ref.mounted) {
+      await ref
+          .read(configProvider.notifier)
+          .batchUpdatePingResults(results, now);
+    } else if (ref.mounted) {
+      await ref
+          .read(configProvider.notifier)
+          .markProbes(jobs.keys.toSet(), ProbeStatus.cancelled, now);
+    }
+  }
+
+  VpnEngineOptions _options(
+    VpnConfig config,
+    AppSettings settings,
+    ({String user, String password}) socksCredentials,
+    int actualSocksPort,
+  ) {
+    return VpnEngineOptions(
+      socksPort: actualSocksPort,
+      httpPort: 0,
+      socksUser: socksCredentials.user,
+      socksPassword: socksCredentials.password,
+      excludedPackages: settings.splitTunnelingEnabled
+          ? (settings.vpnMode == VpnMode.allExcept
+                ? settings.excludedPackages
+                : <String>{})
+          : {},
+      includedPackages: settings.splitTunnelingEnabled
+          ? (settings.vpnMode == VpnMode.onlySelected
+                ? settings.includedPackages
+                : <String>{})
+          : {},
+      logLevel: settings.logLevel,
+      enableUdp: settings.enableUdp,
+      allowIcmp: settings.allowIcmp,
+      dnsMode: settings.dnsMode,
+      dnsServer: settings.dnsServer,
+      vpnMode: settings.splitTunnelingEnabled
+          ? settings.vpnMode
+          : VpnMode.allExcept,
+      proxyOnly: settings.proxyOnly,
+      showNotification: settings.showNotification,
+      killSwitch: settings.killSwitchEnabled,
+      routing: settings.routing,
+      sniffingEnabled: settings.sniffingEnabled,
+      mtu: settings.mtu,
+      dnsQueryStrategy: settings.dnsQueryStrategy,
+      // XTLS Vision rejects UDP/443 by design: QUIC can never pass, but browsers
+      // keep retrying it (each retry costs a full outbound handshake) and stall
+      // for ~30s before falling back to TCP. Force the ICMP fast-fail.
+      blockQuic: settings.blockQuic || _usesVisionFlow(config),
+      ipv6Enabled: settings.ipv6Enabled,
+      obsProbeIntervalSec: settings.obsProbeIntervalSec,
+      tlsFingerprint: settings.tlsFingerprint,
+    );
   }
 
   Future<String?> getLogFilePath() => _engine.getLogFilePath();
@@ -739,12 +886,12 @@ final vpnProvider = NotifierProvider<VpnNotifier, VpnState2>(VpnNotifier.new);
 
 // Convenience selector for connection state
 final vpnConnectionStateProvider = Provider<VpnState>((ref) {
-  return ref.watch(vpnProvider).connectionState;
+  return ref.watch(vpnProvider.select((s) => s.connectionState));
 });
 
 // Convenience selector for stats
 final vpnStatsProvider = Provider<VpnStats>((ref) {
-  return ref.watch(vpnProvider).stats;
+  return ref.watch(vpnProvider.select((s) => s.stats));
 });
 
 /// true — настройки соединения изменены после подключения,

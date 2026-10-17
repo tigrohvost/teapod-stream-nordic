@@ -22,13 +22,13 @@ Future<void> showServerPicker(BuildContext context, WidgetRef ref) {
 class _ServerPickerSheet extends ConsumerWidget {
   const _ServerPickerSheet();
 
-  void _select(BuildContext context, WidgetRef ref, VpnConfig c) {
+  Future<void> _select(BuildContext context, WidgetRef ref, VpnConfig c) async {
+    final configs = ref.read(configProvider.notifier);
+    final vpn = ref.read(vpnProvider.notifier);
+    final state = ref.read(vpnProvider);
     Navigator.pop(context);
-    ref.read(configProvider.notifier).setActiveConfig(c.id);
-    final vpnState = ref.read(vpnProvider);
-    if (vpnState.isConnected || vpnState.isBusy) {
-      ref.read(vpnProvider.notifier).reconnectWithNewConfig();
-    }
+    await configs.setActiveConfig(c.id);
+    if (state.isConnected || state.isBusy) await vpn.reconnectWithNewConfig();
   }
 
   @override
@@ -145,7 +145,7 @@ class _PickerRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ping = config.latencyMs;
+    final ping = config.hasFreshProbe(DateTime.now()) ? config.latencyMs : null;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -181,7 +181,7 @@ class _PickerRow extends StatelessWidget {
                       textAlign: TextAlign.center,
                       style: AppTheme.mono(
                         size: 10,
-                        color: isActive ? t.accent : t.textDim,
+                        color: isActive ? t.accentText : t.textDim,
                         letterSpacing: 1,
                       ),
                     ),
@@ -202,8 +202,8 @@ class _PickerRow extends StatelessWidget {
                   if (ping != null) ...[
                     const SizedBox(width: 8),
                     Text(
-                      '${ping}ms',
-                      style: AppTheme.mono(size: 11, color: t.accent),
+                      'TCP ${ping}ms',
+                      style: AppTheme.mono(size: 11, color: t.accentText),
                     ),
                   ],
                 ],

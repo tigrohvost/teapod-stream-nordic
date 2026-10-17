@@ -730,7 +730,7 @@ class _KVRowTap extends StatelessWidget {
             ),
             Row(
               children: [
-                Text(v, style: AppTheme.mono(size: 11, color: t.accent)),
+                Text(v, style: AppTheme.mono(size: 11, color: t.accentText)),
                 const SizedBox(width: 6),
                 Text('›', style: AppTheme.mono(size: 14, color: t.textMuted)),
               ],
@@ -1105,7 +1105,7 @@ class _SqBtn extends StatelessWidget {
           label,
           style: AppTheme.mono(
             size: 10,
-            color: filled ? t.bg : t.accent,
+            color: filled ? t.bg : t.accentText,
             letterSpacing: 1,
           ),
         ),
@@ -1139,7 +1139,7 @@ class _UpdateVersionTile extends ConsumerWidget {
         'v${info.version}',
         style: AppTheme.mono(
           size: 10,
-          color: isUpdate ? t.accent : t.textMuted,
+          color: isUpdate ? t.accentText : t.textMuted,
           letterSpacing: 0.5,
         ),
       ),

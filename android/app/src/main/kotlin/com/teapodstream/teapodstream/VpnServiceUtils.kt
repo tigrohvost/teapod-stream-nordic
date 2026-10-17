@@ -1,9 +1,12 @@
 package com.teapodstream.teapodstream
 
-internal fun formatSpeed(bps: Long): String = when {
-    bps >= 1_000_000 -> "%.1f MB/s".format(bps / 1_000_000.0)
-    bps >= 1_000     -> "%.0f KB/s".format(bps / 1_000.0)
-    else             -> "$bps B/s"
+internal fun formatSpeed(bps: Long): String {
+    val bits = bps.coerceAtLeast(0) * 8.0
+    return when {
+        bits >= 1_000_000 -> "%.1f Mbit/s".format(java.util.Locale.ROOT, bits / 1_000_000)
+        bits >= 1_000 -> "%.1f kbit/s".format(java.util.Locale.ROOT, bits / 1_000)
+        else -> "${bits.toLong()} bit/s"
+    }
 }
 
 internal fun subnetMaskToPrefix(mask: String): Int {

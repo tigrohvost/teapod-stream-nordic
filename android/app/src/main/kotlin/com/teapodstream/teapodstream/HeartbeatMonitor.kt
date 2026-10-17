@@ -1,8 +1,6 @@
 package com.teapodstream.teapodstream
 
-import java.io.BufferedReader
 import java.io.InputStream
-import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -13,7 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * Every [INTERVAL_MS] it checks, in order:
  *  1. tun2socks process liveness (the SOCKS5 probe bypasses TUN, so it alone can't see a crash);
- *  2. gVisor connection-table leak ([TUN_CONN_LEAK_THRESHOLD]);
+ *  2. independent HTTP 204 destinations through SOCKS5;
  *  3. end-to-end tunnel connectivity via a SOCKS5 CONNECT + HTTP 204 probe ([probeSocks5]);
  *  4. TUN-layer stall: probe passes but no data reaches the TUN interface ([TUN_STALL_TIMEOUT_MS]).
  *
@@ -42,6 +40,7 @@ internal class HeartbeatMonitor(
         fun tunLastRxActivityMs(): Long
         fun tunStatsLine(): String
         fun hasDirectInternet(): Boolean
+        fun hasUnderlyingNetwork(): Boolean = true
         /**
          * @param afterProbeFailure true when the tunnel was declared dead by failing
          *   end-to-end probes (as opposed to a local tun2socks problem); the service
@@ -71,9 +70,6 @@ internal class HeartbeatMonitor(
         const val WARMUP_TIMEOUT_MS = 30_000L
         // Pause before each of the two quick re-probes after a single failure.
         const val RETRY_DELAY_MS = 3_000L
-        // If tun2socks has more than this many active proxy goroutines the gVisor TCP
-        // state machine is leaking connections. Trigger a reconnect to reset it.
-        const val TUN_CONN_LEAK_THRESHOLD = 200L
         // If no data has reached the TUN interface for this long while ≥2 connections
         // are active, tun2socks goroutines are stuck. lastRx moves on any TUN write
         // (ACKs included), so a quiet TUN usually just means idle apps — the timeout
@@ -86,6 +82,7 @@ internal class HeartbeatMonitor(
         const val WAKE_PROBE_IDLE_MS = 120_000L
         const val MAX_FAILURES = 3
         const val PROBE_DEST_HOST = "cp.cloudflare.com"
+        private val PROBE_HOSTS = arrayOf(PROBE_DEST_HOST, "connectivitycheck.gstatic.com")
         private const val RECONNECT_BACKOFF_BASE_MS = 15_000L
         private const val RECONNECT_BACKOFF_MAX_MS = 300_000L
 
@@ -125,6 +122,7 @@ internal class HeartbeatMonitor(
                     0 -> {}
                     2 -> {
                         stage = "socks_auth"
+                        if (user.isEmpty()) throw Exception("SOCKS credentials required")
                         if (user.isNotEmpty()) {
                             val u = user.toByteArray()
                             val p = password.toByteArray()
@@ -157,6 +155,7 @@ internal class HeartbeatMonitor(
                         if (len < 0) throw Exception("SOCKS reply truncated (no domain len)")
                         readFully(inp, len + 2)
                     }
+                    else -> throw Exception("Unsupported SOCKS address type")
                 }
 
                 stage = "http_request"
@@ -165,10 +164,14 @@ internal class HeartbeatMonitor(
                 out.flush()
 
                 stage = "http_response"
-                val reader = BufferedReader(InputStreamReader(inp))
-                val line = reader.readLine()
-                if (line == null || !line.contains("204")) {
-                    throw Exception("Invalid HTTP response: $line")
+                val status = StringBuilder()
+                while (status.length < 4096) {
+                    val byte = inp.read()
+                    if (byte == -1 || byte == 10) break
+                    status.append(byte.toChar())
+                }
+                if (!Regex("^HTTP/1\\.[01] 204(?:[ \\r]|$)").containsMatchIn(status.toString())) {
+                    throw Exception("Invalid HTTP status")
                 }
             } catch (e: ProbeException) {
                 throw e
@@ -190,11 +193,16 @@ internal class HeartbeatMonitor(
     }
 
     private var thread: Thread? = null
+    private val generation = AtomicInteger(0)
+    private val activeSockets = java.util.concurrent.ConcurrentHashMap.newKeySet<Socket>()
+    private val destination = AtomicInteger(0)
+    private fun monotonicMs() = System.nanoTime() / 1_000_000
     private val failures = AtomicInteger(0)
 
     fun start(isReconnect: Boolean = false) {
         deps.log("info", "startHeartbeat (isReconnect=$isReconnect)")
-        thread?.interrupt()
+        stop()
+        val owner = generation.incrementAndGet()
         failures.set(0)
         thread = Thread {
             // In reconnect mode: probes run every 15 s but failures are ignored until the
@@ -217,10 +225,10 @@ internal class HeartbeatMonitor(
             // false while it is deferred and the session is kept up.
             fun reconnectAfterProbeFailure(reason: String): Boolean {
                 val backoff = deps.reconnectBackoffMs()
-                val now = System.currentTimeMillis()
+                val now = monotonicMs()
                 if (backoff <= 0L || (reconnectDueAt != 0L && now >= reconnectDueAt)) {
                     deps.log("warning", reason)
-                    deps.requestReconnect(afterProbeFailure = true)
+                    if (owner == generation.get() && !Thread.currentThread().isInterrupted) deps.requestReconnect(afterProbeFailure = true)
                     return true
                 }
                 if (reconnectDueAt == 0L) {
@@ -230,14 +238,14 @@ internal class HeartbeatMonitor(
                 return false
             }
 
-            while (!Thread.currentThread().isInterrupted && deps.running) {
+            while (!Thread.currentThread().isInterrupted && deps.running && owner == generation.get()) {
                 try {
                     Thread.sleep(intervalMs)
                     if (!deps.running) break
                     // Start deadline from first actual probe — not from thread creation,
                     // which may be long before xray is ready after a slow reconnect.
                     if (!warmupDone && warmupDeadline == 0L) {
-                        warmupDeadline = System.currentTimeMillis() + warmupTimeoutMs
+                        warmupDeadline = monotonicMs() + warmupTimeoutMs
                     }
                     val port = deps.socksPort
                     if (port <= 0) continue
@@ -248,23 +256,11 @@ internal class HeartbeatMonitor(
                     // Skip in proxy-only mode: tun2socks is intentionally not started.
                     if (deps.tunModeActive && !deps.isTunRunning()) {
                         deps.log("warning", "tun2socks not running, reconnecting")
-                        deps.requestReconnect()
-                        break
+                        if (reconnectAfterProbeFailure("Local TUN runtime stopped")) break
+                        continue
                     }
 
-                    // Detect gVisor connection table leak: if the number of active proxy
-                    // goroutines is abnormally high the TCP state machine is accumulating
-                    // stale entries (TIME_WAIT / CLOSE_WAIT). Reconnect to reset gVisor.
-                    if (deps.tunModeActive) {
-                        val activeConns = deps.tunActiveConnections()
-                        if (activeConns > TUN_CONN_LEAK_THRESHOLD) {
-                            deps.log("warning", "gVisor connection leak detected (activeConns=$activeConns), reconnecting")
-                            deps.requestReconnect()
-                            break
-                        }
-                    }
-
-                    probeOverSocket(port)
+                    probeOverSocket(port, owner)
                     warmupDone = true
                     failures.set(0)
                     noInternetStreak = 0
@@ -297,9 +293,9 @@ internal class HeartbeatMonitor(
                             val activeConns by lazy { deps.tunActiveConnections() }
                             when {
                                 idleSec >= TUN_STALL_TIMEOUT_MS / 1000 && activeConns >= 2 -> {
-                                    deps.log("warning", "TUN stall: no data for ${idleSec}s (conns=$activeConns), reconnecting")
-                                    deps.requestReconnect()
-                                    break
+                                    deps.log("debug", "TUN idle for ${idleSec}s (conns=$activeConns); probe passes, retaining session")
+                                    // Idle connection count is not proof of a failed tunnel.
+                                    // The independent probe just succeeded; retain this session.
                                 }
                                 idleSec >= 60 && activeConns >= 2 && now - lastStallWarnAt >= 60_000 -> {
                                     deps.log("warning", "TUN rx idle for ${idleSec}s (conns=$activeConns)")
@@ -311,27 +307,21 @@ internal class HeartbeatMonitor(
                 } catch (_: InterruptedException) {
                     break
                 } catch (e: Exception) {
-                    // If the physical network is down it's not xray's fault — skip failure
-                    // count to prevent useless reconnect cycles during WiFi→LTE transitions.
-                    // network_changed will trigger a reconnect once the new network is ready.
-                    if (!deps.hasDirectInternet()) {
+                    if (Thread.currentThread().isInterrupted || owner != generation.get()) break
+                    if (!deps.hasUnderlyingNetwork()) {
                         noInternetStreak++
-                        deps.log("debug", "Heartbeat skipped: no direct internet (streak=$noInternetStreak)")
+                        deps.log("debug", "Underlying network unavailable (streak=$noInternetStreak)")
+                        if (!warmupDone && monotonicMs() >= warmupDeadline) {
+                            if (reconnectAfterProbeFailure("Underlying network warmup deadline expired")) break
+                        }
                         continue
                     }
-                    // Network just returned after a long absence — the tunnel session is
-                    // guaranteed stale (QUIC/TCP connection to the server was dead while we
-                    // had no route). Skip the normal 3-failure wait and reconnect immediately.
-                    if (noInternetStreak >= 3) {
-                        val absenceSec = noInternetStreak * (intervalMs / 1000)
-                        noInternetStreak = 0
-                        deps.log("warning", "Tunnel stale after ${absenceSec}s network absence, reconnecting")
-                        deps.requestReconnect()
-                        break
-                    }
+                    // Failure of an external probe means unknown/partial reachability,
+                    // not proof of an absent network. It must not reset the deadline.
+                    if (!deps.hasDirectInternet()) deps.log("debug", "Direct reachability unknown; checking VPN failure budget")
                     noInternetStreak = 0
                     if (!warmupDone) {
-                        if (warmupDeadline == 0L || System.currentTimeMillis() < warmupDeadline) {
+                        if (warmupDeadline == 0L || monotonicMs() < warmupDeadline) {
                             deps.log("debug", "Heartbeat warmup probe failed: ${e.message}")
                             continue
                         }
@@ -354,10 +344,10 @@ internal class HeartbeatMonitor(
                         continue
                     }
                     var immediateRetries = 0
-                    while (immediateRetries < 2 && !Thread.currentThread().isInterrupted) {
+                    while (immediateRetries < 2 && owner == generation.get() && !Thread.currentThread().isInterrupted) {
                         try {
                             Thread.sleep(retryDelayMs)
-                            probeOverSocket(deps.socksPort)
+                            probeOverSocket(deps.socksPort, owner)
                             warmupDone = true
                             failures.set(0)
                             reconnectDueAt = 0L
@@ -391,7 +381,10 @@ internal class HeartbeatMonitor(
 
     fun stop() {
         if (thread != null) deps.log("info", "stopHeartbeat: interrupting heartbeat thread")
+        generation.incrementAndGet()
         thread?.interrupt()
+        try { activeSockets.toList().forEach { it.close() } } catch (_: Exception) {}
+        thread?.let { if (it !== Thread.currentThread()) it.join(1000) }
         thread = null
         failures.set(0)
     }
@@ -412,13 +405,19 @@ internal class HeartbeatMonitor(
     }
 
     /** Connects to the local SOCKS proxy and runs [probeSocks5] over the socket. */
-    private fun probeOverSocket(port: Int) {
+    private fun probeOverSocket(port: Int, owner: Int = generation.get()) {
+        if (owner != generation.get()) throw InterruptedException()
         val socket = Socket()
+        activeSockets.add(socket)
+        val deadline = java.util.Timer("heartbeat-deadline", true)
+        deadline.schedule(object : java.util.TimerTask() { override fun run() { try { socket.close() } catch (_: Exception) {} } }, 10_000)
         try {
+            if (owner != generation.get()) throw InterruptedException()
             socket.soTimeout = 10000
             socket.connect(InetSocketAddress("127.0.0.1", port), 10000)
             val (user, password) = deps.socksAuth()
-            probeSocks5(socket.getInputStream(), socket.getOutputStream(), user, password)
+            probeSocks5(socket.getInputStream(), socket.getOutputStream(), user, password, PROBE_HOSTS[Math.floorMod(destination.getAndIncrement(), PROBE_HOSTS.size)])
+            if (owner != generation.get() || Thread.currentThread().isInterrupted) throw InterruptedException()
             failures.set(0)
             deps.onProbeSuccess()
             deps.log("debug", "Heartbeat OK")
@@ -429,6 +428,8 @@ internal class HeartbeatMonitor(
             deps.log("warning", "Heartbeat check failed at [tcp_connect]: ${e.message}")
             throw e
         } finally {
+            deadline.cancel()
+            activeSockets.remove(socket)
             socket.close()
         }
     }

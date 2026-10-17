@@ -1,3 +1,5 @@
+import '../widgets/pressable.dart';
+import '../../core/interfaces/vpn_engine.dart';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,14 +23,21 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final vpnState = ref.watch(vpnProvider);
+    ref.watch(
+      vpnProvider.select(
+        (v) => (v.connectionState, v.error, v.appliedMode, v.appliedSource),
+      ),
+    );
+    final vpnState = ref.read(vpnProvider);
     final effectiveConfig = ref.watch(effectiveConfigProvider);
     final version = ref
         .watch(appVersionProvider)
         .maybeWhen(data: (v) => v, orElse: () => 'v?');
     final t = Theme.of(context).extension<TeapodTokens>()!;
     final canToggle = effectiveConfig != null;
-    final pingMs = effectiveConfig?.latencyMs;
+    final pingMs = effectiveConfig?.hasFreshProbe(DateTime.now()) == true
+        ? effectiveConfig?.latencyMs
+        : null;
 
     final isConn = vpnState.isConnected;
     final isBusy = vpnState.isBusy;
@@ -40,8 +49,6 @@ class HomeScreen extends ConsumerWidget {
     final serverHint = effectiveConfig != null
         ? '${effectiveConfig.address}:${effectiveConfig.port}'
         : '—';
-
-    final history = vpnState.stats.speedHistory;
 
     final isManaged = effectiveConfig?.rawXrayConfig != null;
     final routingDirection = ref.watch(
@@ -70,17 +77,29 @@ class HomeScreen extends ConsumerWidget {
                 // Без конфигов кнопка ведёт на вкладку «Конфиги»
                 onDisabledTap: () => ref.read(tabIndexProvider.notifier).set(1),
               ),
-              _MetricsGrid(
-                t: t,
-                stats: vpnState.stats,
-                serverName: effectiveConfig?.name ?? '—',
-                serverHint: effectiveConfig != null
-                    ? '$protoLabel · $serverHint'
-                    : 'нет конфигурации',
-                isConnected: isConn,
-                pingMs: pingMs,
-                history: history,
-                onServerTap: () => showServerPicker(context, ref),
+              if (vpnState.appliedMode == 'proxyOnly' && isConn)
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text(
+                    'Статистика TUN недоступна в режиме SOCKS-прокси',
+                  ),
+                ),
+              Consumer(
+                builder: (context, ref, child) {
+                  final stats = ref.watch(vpnProvider.select((v) => v.stats));
+                  return _MetricsGrid(
+                    t: t,
+                    stats: stats,
+                    serverName: effectiveConfig?.name ?? '—',
+                    serverHint: effectiveConfig != null
+                        ? '$protoLabel · $serverHint'
+                        : 'нет конфигурации',
+                    isConnected: isConn && vpnState.appliedMode != 'proxyOnly',
+                    pingMs: pingMs,
+                    history: stats.speedHistory,
+                    onServerTap: () => showServerPicker(context, ref),
+                  );
+                },
               ),
               if (isManaged) _ManagedWarning(t: t, direction: routingDirection),
             ],
@@ -199,13 +218,28 @@ class _HeroPanel extends StatelessWidget {
             child: Column(
               children: [
                 Text(
-                  'ТУННЕЛЬ · $protoLabel',
+                  '${vpnState.appliedMode == 'proxyOnly'
+                      ? 'SOCKS-ПРОКСИ'
+                      : vpnState.appliedMode == 'onlySelected'
+                      ? 'VPN · ONLY'
+                      : vpnState.appliedMode == 'allExcept'
+                      ? 'VPN · EXCEPT'
+                      : vpnState.appliedMode == 'all'
+                      ? 'VPN · ВСЕ ПРИЛОЖЕНИЯ'
+                      : 'ПОДКЛЮЧЕНИЕ'} · $protoLabel',
                   style: AppTheme.mono(
                     size: 10,
                     color: t.textMuted,
                     letterSpacing: 1.5,
                   ),
                 ),
+                if (vpnState.appliedSource == 'managed' && isConn)
+                  Text(
+                    'УПРАВЛЯЕМАЯ КОНФИГУРАЦИЯ',
+                    style: AppTheme.mono(size: 9, color: t.textDim),
+                  ),
+                if (isConn && vpnState.error != null)
+                  Text(vpnState.error!, textAlign: TextAlign.center),
                 const SizedBox(height: 20),
                 _PowerCore(
                   t: t,
@@ -252,18 +286,24 @@ class _StateInfo extends ConsumerWidget {
         ? 'BLOCKED'
         : isConn
         ? 'ONLINE'
-        : (isConnecting
+        : (vpnState.connectionState == VpnState.awaitingPermission
+              ? 'РАЗРЕШЕНИЕ'
+              : vpnState.connectionState == VpnState.recovering
+              ? 'ВОССТАНОВЛЕНИЕ'
+              : isConnecting
               ? 'HANDSHAKE'
               : (isDisconnecting ? 'SHUTDOWN' : 'OFFLINE'));
     final stateColor = isBlocked || hasError
         ? t.danger
-        : (isConn ? t.accent : t.textDim);
+        : (isConn ? t.accentText : t.textDim);
 
     String subtitle;
     if (hasError) {
-      subtitle = 'Не удалось подключиться. Проверьте сервер и откройте журнал.';
+      subtitle = vpnState.error!;
     } else if (isBlocked) {
-      subtitle = 'kill switch · трафик заблокирован';
+      subtitle = vpnState.connectionState == VpnState.stopBlocked
+          ? 'Остановка ядра не завершена. Новый запуск заблокирован.'
+          : 'kill switch · трафик заблокирован';
     } else if (isConn) {
       final ipStr =
           ipAsync.maybeWhen(data: (d) => d?.ip, orElse: () => null) ?? '—';
@@ -273,9 +313,15 @@ class _StateInfo extends ConsumerWidget {
             orElse: () => null,
           ) ??
           '—';
-      subtitle = pingMs != null ? '${pingMs}ms · $cc · $ipStr' : '$cc · $ipStr';
+      subtitle = ipAsync.hasError
+          ? 'VPN работает · внешний IP недоступен'
+          : pingMs != null
+          ? 'TCP ${pingMs}ms · $cc · $ipStr'
+          : '$cc · $ipStr';
     } else if (isConnecting) {
-      subtitle = 'установка соединения…';
+      subtitle = vpnState.connectionState == VpnState.awaitingPermission
+          ? 'ожидание разрешения Android…'
+          : 'установка соединения…';
     } else if (isDisconnecting) {
       subtitle = 'завершение сеанса…';
     } else if (!hasConfig) {
@@ -305,7 +351,7 @@ class _StateInfo extends ConsumerWidget {
         ),
         if (isBlocked) ...[
           const SizedBox(height: 10),
-          GestureDetector(
+          Pressable(
             onTap: () => ref.read(vpnProvider.notifier).disconnect(),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
@@ -330,7 +376,8 @@ class _StateInfo extends ConsumerWidget {
             button: true,
             label: 'отменить подключение',
             excludeSemantics: true,
-            child: GestureDetector(
+            onTap: () => ref.read(vpnProvider.notifier).disconnect(),
+            child: Pressable(
               onTap: () => ref.read(vpnProvider.notifier).disconnect(),
               child: Container(
                 padding: const EdgeInsets.symmetric(
@@ -434,7 +481,7 @@ class _PowerCoreState extends State<_PowerCore>
       label: actionLabel,
       button: true,
       enabled: !busy,
-      child: GestureDetector(
+      child: Pressable(
         onTap: busy ? null : widget.onTap,
         child: SizedBox(
           width: outerSize,
@@ -687,19 +734,8 @@ class _MetricsGrid extends StatelessWidget {
     required this.onServerTap,
   });
 
-  String _bitrateValue(int bps) {
-    final bits = bps * 8;
-    if (bits < 1024) return '$bits';
-    if (bits < 1024 * 1024) return (bits / 1024).toStringAsFixed(1);
-    return (bits / (1024 * 1024)).toStringAsFixed(2);
-  }
-
-  String _bitrateUnit(int bps) {
-    final bits = bps * 8;
-    if (bits < 1024) return 'bit/s';
-    if (bits < 1024 * 1024) return 'Kbit/s';
-    return 'Mbit/s';
-  }
+  String _bitrateValue(int bps) => VpnStats.formatSpeed(bps).split(' ').first;
+  String _bitrateUnit(int bps) => VpnStats.formatSpeed(bps).split(' ').last;
 
   @override
   Widget build(BuildContext context) {
@@ -724,9 +760,8 @@ class _MetricsGrid extends StatelessWidget {
                 child: Semantics(
                   label: 'сменить сервер',
                   button: true,
-                  child: GestureDetector(
+                  child: Pressable(
                     onTap: onServerTap,
-                    behavior: HitTestBehavior.opaque,
                     child: _MetricCell(
                       t: t,
                       label: 'Сервер',
@@ -797,10 +832,8 @@ class _ManagedWarning extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isOnlySelected = direction == RoutingDirection.onlySelected;
-    final detail = isOnlySelected
-        ? 'режим «Только» по доменам и DNS-настройки не применяются · роутинг управляется сервером'
-        : 'DNS-настройки не применяются · роутинг управляется сервером';
+    const detail =
+        'Маршруты и DNS применяются локально · TLS fingerprint управляется подпиской';
 
     return Container(
       width: double.infinity,
@@ -958,9 +991,7 @@ class _SparklineRow extends StatelessWidget {
     final upTotal = VpnStats.formatBytes(stats.uploadBytes);
     final downTotal = VpnStats.formatBytes(stats.downloadBytes);
     final duration = VpnStats.formatDuration(stats.connectedDuration);
-    final peakStr = peakMbps >= 0.01
-        ? '${peakMbps.toStringAsFixed(1)}M'
-        : '0.0M';
+    final peakStr = VpnStats.formatSpeed((peakMbps * 1024 * 1024).round());
 
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 10),
@@ -971,8 +1002,10 @@ class _SparklineRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 16,
+            runSpacing: 4,
             children: [
               Text(
                 'ТРАФИК — LIVE',
@@ -994,8 +1027,11 @@ class _SparklineRow extends StatelessWidget {
             color: t.accent,
           ),
           const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 16,
+            runSpacing: 4,
             children: [
               Text(
                 '↑ $upTotal',

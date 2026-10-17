@@ -1,5 +1,7 @@
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'dart:io';
+import 'dart:async';
+import 'bounded_download.dart';
 import '../models/profile_bundle.dart';
 import '../models/connections_bundle.dart';
 
@@ -74,6 +76,7 @@ class DeeplinkRouter {
   /// Parse a deeplink URI string. Returns null if the URI is not a valid teapod import link.
   static DeeplinkParseResult? parse(String raw) {
     try {
+      if (raw.length > ConnectionsBundle.maxBytes * 2) return null;
       final trimmed = raw.trim();
       final uri = Uri.parse(trimmed);
 
@@ -87,6 +90,7 @@ class DeeplinkRouter {
       final dataParam = uri.queryParameters['data'];
       final urlParam = uri.queryParameters['url'];
 
+      if (dataParam != null && urlParam != null) return null;
       if (dataParam != null) {
         switch (type) {
           case DeeplinkType.profile:
@@ -101,6 +105,7 @@ class DeeplinkRouter {
       }
 
       if (urlParam != null) {
+        documentUri(urlParam);
         switch (type) {
           case DeeplinkType.profile:
             return DeeplinkParseResult.urlProfile(urlParam);
@@ -123,20 +128,33 @@ class DeeplinkRouter {
       return null;
     }
 
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
+    final deadline = Timer(
+      const Duration(seconds: 30),
+      () => client.close(force: true),
+    );
     try {
-      final response = await http
-          .get(Uri.parse(result.urlValue!))
-          .timeout(const Duration(seconds: 15));
+      final request = await client
+          .getUrl(documentUri(result.urlValue!))
+          .timeout(const Duration(seconds: 10));
+      final response = await request.close().timeout(
+        const Duration(seconds: 10),
+      );
       if (response.statusCode != 200) return null;
 
+      final body = await readBoundedBody(response);
       switch (result.type) {
         case DeeplinkType.profile:
-          return ProfileBundle.fromJson(_parseJson(response.body));
+          return ProfileBundle.fromJson(_parseJson(body));
         case DeeplinkType.connections:
-          return ConnectionsBundle.fromJson(_parseJson(response.body));
+          return ConnectionsBundle.fromJson(_parseJson(body));
       }
     } catch (_) {
       return null;
+    } finally {
+      deadline.cancel();
+      client.close(force: true);
     }
   }
 
