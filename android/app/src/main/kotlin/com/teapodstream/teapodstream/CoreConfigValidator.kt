@@ -18,10 +18,12 @@ internal object CoreConfigValidator {
         }
         try {
             Teapodcore.measureOutboundDelay(config, "%")
-            throw ConnectionFailure("CORE_VALIDATOR_CONTRACT", "Unexpected validator result")
         } catch (e: Exception) {
             if (e.message?.startsWith("failed to create request:") == true) return
             throw ConnectionFailure("INVALID_CORE_CONFIG", "Ядро отклонило конфигурацию")
         }
+        // The probe URL can't be valid, so success means the core changed behaviour:
+        // this adapter no longer proves anything and must be revisited.
+        throw ConnectionFailure("CORE_VALIDATOR_CONTRACT", "Unexpected validator result")
     }
 }
