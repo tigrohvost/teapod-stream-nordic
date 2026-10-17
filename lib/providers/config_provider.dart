@@ -13,6 +13,7 @@ import '../core/services/import_service.dart';
 import '../core/services/subscription_service.dart';
 import '../core/services/device_service.dart';
 import '../core/services/log_service.dart';
+import '../core/services/settings_service.dart';
 import 'settings_provider.dart';
 export '../core/models/config_state.dart';
 export '../core/services/import_service.dart'
@@ -30,6 +31,11 @@ class SubscriptionRefreshResult {
 }
 
 final configRepositoryProvider = Provider((ref) => ConfigRepository());
+
+/// Device identity for providers that limit devices (X-Hwid headers).
+final hwidInfoProvider = Provider<Future<HwidDeviceInfo?> Function()>(
+  (ref) => DeviceService.getHwidInfo,
+);
 final subscriptionServiceProvider = Provider((ref) => SubscriptionService());
 final configValidationProvider = Provider<Future<void> Function(VpnConfig)>(
   (ref) => (config) async {
@@ -66,6 +72,33 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
       );
     }
     return (checked.valid, fetched.skippedItems + checked.invalid);
+  }
+
+  /// Every subscription download sends the user's HWID and User-Agent
+  /// settings, whichever screen or import channel started it.
+  Future<SubscriptionFetchResult> Function(String) _fetcher({
+    bool allowSelfSigned = false,
+  }) {
+    Future<(AppSettings, HwidDeviceInfo?)>? identity;
+    Future<(AppSettings, HwidDeviceInfo?)> resolve() async {
+      final settings = await ref.read(settingsProvider.future);
+      final hwid = settings.hwidEnabled
+          ? await ref.read(hwidInfoProvider)()
+          : null;
+      return (settings, hwid);
+    }
+
+    return (url) async {
+      final (settings, hwid) = await (identity ??= resolve());
+      return ref
+          .read(subscriptionServiceProvider)
+          .fetchSubscription(
+            url,
+            allowSelfSigned: allowSelfSigned,
+            hwid: hwid,
+            userAgent: settings.subUserAgent,
+          );
+    };
   }
 
   void _logSkipped(String name, int skipped) {
@@ -173,18 +206,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         .firstOrNull;
     final generation = (_refreshGeneration[url] ?? 0) + 1;
     _refreshGeneration[url] = generation;
-    final settings = await ref.read(settingsProvider.future);
-    final hwid = settings.hwidEnabled
-        ? await DeviceService.getHwidInfo()
-        : null;
-    final fetched = await ref
-        .read(subscriptionServiceProvider)
-        .fetchSubscription(
-          url,
-          allowSelfSigned: allowSelfSigned,
-          hwid: hwid,
-          userAgent: settings.subUserAgent,
-        );
+    final fetched = await _fetcher(allowSelfSigned: allowSelfSigned)(url);
     final (usable, skipped) = await _usable(fetched);
     await _commit((current) {
       if (_refreshGeneration[url] != generation) return current;
@@ -270,9 +292,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         .first;
     final generation = (_refreshGeneration['replace:$id'] ?? 0) + 1;
     _refreshGeneration['replace:$id'] = generation;
-    final fetched = await ref
-        .read(subscriptionServiceProvider)
-        .fetchSubscription(url);
+    final fetched = await _fetcher()(url);
     final (usable, skipped) = await _usable(fetched);
     await _commit((c) {
       if (_refreshGeneration['replace:$id'] != generation ||
@@ -377,9 +397,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     bool allowSelfSigned = false,
   }) => ImportService(
     validateConfig: ref.read(configValidationProvider),
-    fetchSubscription: (url) => ref
-        .read(subscriptionServiceProvider)
-        .fetchSubscription(url, allowSelfSigned: allowSelfSigned),
+    fetchSubscription: _fetcher(allowSelfSigned: allowSelfSigned),
   ).prepare(bundle);
 
   Future<ImportConnectionsResult> applyImport(ImportPlan plan) async {

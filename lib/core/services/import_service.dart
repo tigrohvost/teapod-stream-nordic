@@ -136,6 +136,12 @@ class ImportService {
         url: url,
         createdAt: DateTime.now(),
         lastFetchedAt: DateTime.now(),
+        expireAt: fetched.expireAt,
+        uploadBytes: fetched.uploadBytes,
+        downloadBytes: fetched.downloadBytes,
+        totalBytes: fetched.totalBytes,
+        announce: fetched.announce,
+        announceUrl: fetched.announceUrl,
       );
       subscriptions.add(sub);
       configs.addAll(

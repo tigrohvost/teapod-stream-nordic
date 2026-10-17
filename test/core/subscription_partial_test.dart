@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:teapodstream/core/models/connections_bundle.dart';
 import 'package:teapodstream/core/models/vpn_config.dart';
 import 'package:teapodstream/core/services/config_repository.dart';
 import 'package:teapodstream/core/services/config_storage_service.dart';
@@ -31,6 +32,34 @@ class _Secure extends StorageSecureService {
 class _Settings extends SettingsNotifier {
   @override
   Future<AppSettings> build() async => const AppSettings();
+}
+
+class _HwidSettings extends SettingsNotifier {
+  @override
+  Future<AppSettings> build() async =>
+      const AppSettings(hwidEnabled: true, subUserAgent: 'Custom-UA/1');
+}
+
+class _Recording extends SubscriptionService {
+  HwidDeviceInfo? hwid;
+  String? userAgent;
+  @override
+  Future<SubscriptionFetchResult> fetchSubscription(
+    String url, {
+    bool allowSelfSigned = false,
+    HwidDeviceInfo? hwid,
+    String? userAgent,
+  }) async {
+    this.hwid = hwid;
+    this.userAgent = userAgent;
+    return SubscriptionFetchResult(
+      configs: [_trojan('fetched')],
+      profileTitle: 'Provider',
+      expireAt: DateTime(2027),
+      totalBytes: 100,
+      announce: 'news',
+    );
+  }
 }
 
 class _Remote extends SubscriptionService {
@@ -202,4 +231,46 @@ void main() {
     final state = await container.read(configProvider.future);
     expect(state.configs.single.name, 'working');
   });
+
+  test(
+    'importing a subscription link sends HWID and User-Agent and keeps metadata',
+    () async {
+      final remote = _Recording();
+      final container = ProviderContainer(
+        overrides: [
+          configRepositoryProvider.overrideWithValue(
+            ConfigRepository(secure: _Secure(ConfigState())),
+          ),
+          subscriptionServiceProvider.overrideWithValue(remote),
+          settingsProvider.overrideWith(_HwidSettings.new),
+          configValidationProvider.overrideWithValue((_) async {}),
+          hwidInfoProvider.overrideWithValue(
+            () async => const HwidDeviceInfo(
+              deviceId: 'device-1',
+              deviceModel: 'Pixel',
+              osVersion: 34,
+            ),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      await container.read(configProvider.future);
+      final notifier = container.read(configProvider.notifier);
+      final plan = await notifier.prepareImport(
+        ConnectionsBundle(
+          exportedAt: DateTime(2026),
+          subscriptionUrls: ['https://sub.example.test/s'],
+        ),
+      );
+      expect(remote.hwid?.deviceId, 'device-1');
+      expect(remote.userAgent, 'Custom-UA/1');
+      await notifier.applyImport(plan);
+      final sub = (await container.read(
+        configProvider.future,
+      )).subscriptions.single;
+      expect(sub.expireAt, DateTime(2027));
+      expect(sub.totalBytes, 100);
+      expect(sub.announce, 'news');
+    },
+  );
 }
