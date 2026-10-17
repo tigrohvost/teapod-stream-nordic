@@ -8,13 +8,32 @@ import 'package:http/http.dart' as http;
 
 class GeoDataRepository {
   static const maxFileBytes = 64 * 1024 * 1024;
+
   final Directory root;
   final http.Client Function() clientFactory;
+
+  /// Longest gap between two received chunks; a slow but moving download
+  /// is never cut off by a total deadline.
+  final Duration idleTimeout;
+
+  /// Upper bound for one file, so a trickling server can't hold the update forever.
+  final Duration fileTimeout;
+
+  /// Generations other than the active and previous one are removed only once
+  /// this old, so a download (or native install) still in staging is never hit.
+  final Duration staleGenerationAge;
   Future<DateTime>? _pending;
   http.Client? _client;
   int _generation = 0;
-  GeoDataRepository(this.root, {http.Client Function()? clientFactory})
-    : clientFactory = clientFactory ?? http.Client.new;
+  // path|size|mtime -> sha256 of files that already passed validation.
+  final _verified = <String, String>{};
+  GeoDataRepository(
+    this.root, {
+    http.Client Function()? clientFactory,
+    this.idleTimeout = const Duration(seconds: 30),
+    this.fileTimeout = const Duration(minutes: 10),
+    this.staleGenerationAge = const Duration(hours: 1),
+  }) : clientFactory = clientFactory ?? http.Client.new;
 
   void cancel() {
     _generation++;
@@ -36,10 +55,14 @@ class GeoDataRepository {
       for (final name in ['geoip.dat', 'geosite.dat']) {
         final path = '${root.path}/geo/${manifest['generation']}/$name';
         final meta = (manifest['files'] as Map)[name] as Map;
-        if (await File(path).length() != meta['size'] ||
-            await compute(_verifyGeoFile, (path, name)) != meta['sha256']) {
-          return null;
-        }
+        final stat = await File(path).stat();
+        if (stat.size != meta['size']) return null;
+        final key =
+            '$path|${stat.size}|${stat.modified.microsecondsSinceEpoch}';
+        final String digest =
+            _verified[key] ?? await compute(_verifyGeoFile, (path, name));
+        if (digest != meta['sha256']) return null;
+        _verified[key] = digest;
       }
       return manifest;
     } catch (_) {
@@ -73,9 +96,6 @@ class GeoDataRepository {
     var bytesTotal = 0;
     final watch = Stopwatch()..start();
     var nextProgress = 0;
-    final timeout = Timer(const Duration(minutes: 2), () {
-      if (_generation == generation) cancel();
-    });
     try {
       final files = <String, Object?>{};
       for (final entry in [
@@ -86,6 +106,7 @@ class GeoDataRepository {
         if (!const ['http', 'https'].contains(uri.scheme) || uri.host.isEmpty) {
           throw const FormatException('Неверный URL геобазы');
         }
+        final fileWatch = Stopwatch()..start();
         final response = await client
             .send(http.Request('GET', uri))
             .timeout(const Duration(seconds: 15));
@@ -99,11 +120,12 @@ class GeoDataRepository {
         final sink = file.openWrite();
         var size = 0;
         try {
-          await for (final chunk in response.stream.timeout(
-            const Duration(seconds: 15),
-          )) {
+          await for (final chunk in response.stream.timeout(idleTimeout)) {
             if (generation != _generation) {
               throw const HttpException('Загрузка отменена');
+            }
+            if (fileWatch.elapsed > fileTimeout) {
+              throw TimeoutException('Геобаза загружается слишком долго');
             }
             size += chunk.length;
             if (size > maxFileBytes) {
@@ -139,9 +161,11 @@ class GeoDataRepository {
         throw const HttpException('Загрузка отменена');
       }
       final now = DateTime.now();
+      final previous = await _activeGeneration();
       final manifest = jsonEncode({
         'schema': 1,
         'generation': name,
+        'previous': ?previous,
         'verifiedAt': now.toIso8601String(),
         'files': files,
       });
@@ -157,15 +181,53 @@ class GeoDataRepository {
       }
       pointer.renameSync('${root.path}/geo/active.json');
       committed = true;
+      await _removeStaleGenerations({name, ?previous});
       progress?.call(bytesTotal);
       return now;
     } finally {
-      timeout.cancel();
       client.close();
       if (identical(client, _client)) _client = null;
       if (!committed && await staging.exists()) {
         await staging.delete(recursive: true);
       }
+    }
+  }
+
+  Future<String?> _activeGeneration() async {
+    try {
+      final manifest =
+          jsonDecode(await File('${root.path}/geo/active.json').readAsString())
+              as Map<String, dynamic>;
+      final generation = manifest['generation'];
+      return generation is String &&
+              RegExp(r'^generation-[0-9]+$').hasMatch(generation) &&
+              await Directory('${root.path}/geo/$generation').exists()
+          ? generation
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Keeps the active pair and its predecessor (the native side falls back to
+  /// it); older generations and abandoned staging directories are deleted.
+  Future<void> _removeStaleGenerations(Set<String> keep) async {
+    final cutoff = DateTime.now().subtract(staleGenerationAge);
+    try {
+      await for (final entry in Directory('${root.path}/geo').list()) {
+        final name = entry.uri.pathSegments.lastWhere((s) => s.isNotEmpty);
+        final stale = (await entry.stat()).modified.isBefore(cutoff);
+        if (!stale || keep.contains(name)) continue;
+        if (entry is Directory &&
+            RegExp(r'^generation-[0-9]+$').hasMatch(name)) {
+          await entry.delete(recursive: true);
+        } else if (entry is File &&
+            RegExp(r'^active-.*\.tmp$').hasMatch(name)) {
+          await entry.delete();
+        }
+      }
+    } catch (_) {
+      // Cleanup is best effort; the active pointer is already committed.
     }
   }
 
