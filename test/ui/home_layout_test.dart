@@ -271,6 +271,23 @@ void main() {
     );
   }
 
+  testWidgets('SOCKS-only mode marks TUN counters unavailable, not zero', (
+    tester,
+  ) async {
+    await pumpScreen(
+      tester,
+      selected: longConfig,
+      vpn: const VpnState2(
+        connectionState: VpnState.connected,
+        appliedMode: 'proxyOnly',
+      ),
+    );
+    expect(find.text('00:00:00'), findsNothing);
+    expect(find.text('bit/s'), findsNothing);
+    expect(find.text('пик —'), findsOneWidget);
+    expect(find.text('↓ —'), findsOneWidget);
+  });
+
   testWidgets('empty home leads to configuration import', (tester) async {
     await pumpScreen(tester);
     await tester.tap(find.bySemanticsLabel('добавить конфигурацию'));

@@ -1185,7 +1185,7 @@ class _SquareChip extends StatelessWidget {
         ? t.line
         : t.line;
     final textColor = active
-        ? t.accent
+        ? t.accentText
         : ghost
         ? t.textMuted
         : t.textDim;

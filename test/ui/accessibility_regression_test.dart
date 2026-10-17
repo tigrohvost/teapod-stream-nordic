@@ -7,6 +7,7 @@ import 'package:teapodstream/ui/theme/app_colors.dart';
 import 'package:teapodstream/ui/theme/app_theme.dart';
 import 'package:teapodstream/ui/widgets/settings_shared.dart';
 import 'package:teapodstream/ui/widgets/live_sparkline.dart';
+import 'package:teapodstream/ui/widgets/pressable.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -98,6 +99,26 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+  });
+  testWidgets('a round button reacts only inside its circle', (tester) async {
+    var taps = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.build(Brightness.dark, AppColors.accentCyan),
+        home: Center(
+          child: Pressable(
+            shape: BoxShape.circle,
+            onTap: () => taps++,
+            child: const SizedBox(width: 200, height: 200),
+          ),
+        ),
+      ),
+    );
+    final box = tester.getRect(find.byType(Pressable));
+    await tester.tapAt(box.topLeft + const Offset(8, 8));
+    expect(taps, 0, reason: 'corner of the square box');
+    await tester.tapAt(box.center);
+    expect(taps, 1);
   });
   for (final samples in <List<double>>[
     [],

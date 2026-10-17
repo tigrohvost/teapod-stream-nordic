@@ -356,7 +356,7 @@ class _ConsoleTabBar extends ConsumerWidget {
                           textAlign: TextAlign.center,
                           style: AppTheme.mono(
                             size: 10,
-                            color: active ? t.accent : t.textMuted,
+                            color: active ? t.accentText : t.textMuted,
                             letterSpacing: 0.5,
                           ),
                         ),
