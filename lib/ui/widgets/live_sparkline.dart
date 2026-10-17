@@ -12,6 +12,28 @@ class LiveSparkline extends StatelessWidget {
     this.strokeWidth = 1.5,
   });
 
+  /// Chart vertices for [samples] in [size]: non-finite or negative samples
+  /// sit on the baseline, one sample is a centred dot, none is nothing.
+  @visibleForTesting
+  static List<Offset> pointsFor(List<double> samples, Size size) {
+    if (samples.isEmpty ||
+        size.isEmpty ||
+        !size.width.isFinite ||
+        !size.height.isFinite) {
+      return const [];
+    }
+    final clean = samples.map((v) => v.isFinite && v > 0 ? v : 0.0).toList();
+    if (clean.length == 1) return [Offset(size.width / 2, size.height / 2)];
+    final max = clean.fold<double>(0.5, (m, v) => v > m ? v : m);
+    final w = size.width;
+    final h = size.height;
+    final n = clean.length;
+    return [
+      for (var i = 0; i < n; i++)
+        Offset((i / (n - 1)) * w, h - (clean[i] / max) * (h - 4) - 2),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     return SizedBox(
@@ -41,35 +63,14 @@ class _SparklinePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (this.samples.isEmpty ||
-        size.isEmpty ||
-        !size.width.isFinite ||
-        !size.height.isFinite) {
+    final points = LiveSparkline.pointsFor(samples, size);
+    if (points.isEmpty) return;
+    if (points.length == 1) {
+      canvas.drawCircle(points.single, strokeWidth, Paint()..color = color);
       return;
     }
-    final samples = this.samples
-        .map((v) => v.isFinite && v > 0 ? v : 0.0)
-        .toList();
-    if (samples.length == 1) {
-      canvas.drawCircle(
-        Offset(size.width / 2, size.height / 2),
-        strokeWidth,
-        Paint()..color = color,
-      );
-      return;
-    }
-
-    final max = samples.fold<double>(0.5, (m, v) => v > m ? v : m);
     final w = size.width;
     final h = size.height;
-    final n = samples.length;
-
-    final points = <Offset>[];
-    for (var i = 0; i < n; i++) {
-      final x = (i / (n - 1)) * w;
-      final y = h - (samples[i] / max) * (h - 4) - 2;
-      points.add(Offset(x, y));
-    }
 
     // Build path
     final linePath = Path();
