@@ -2,6 +2,7 @@ import 'dart:async';
 import 'bounded_download.dart';
 import '../interfaces/vpn_engine.dart';
 import '../../protocols/xray/xray_config_builder.dart';
+import '../models/effective_connection_plan.dart';
 import 'dart:convert';
 import 'dart:io';
 import '../constants/app_constants.dart';
@@ -36,8 +37,13 @@ class SubscriptionFetchResult {
   final String? announceUrl;
   final HwidStatus? hwidStatus;
 
+  /// Entries the document contained but that could not be used (unsupported
+  /// scheme, malformed URI, invalid managed JSON). Comment lines don't count.
+  final int skippedItems;
+
   const SubscriptionFetchResult({
     required this.configs,
+    this.skippedItems = 0,
     this.profileTitle,
     this.expireAt,
     this.uploadBytes,
@@ -162,89 +168,33 @@ class SubscriptionService {
 
     // Detect pre-built xray JSON config array (managed subscription format).
     if (body.startsWith('[') || body.startsWith('{')) {
+      final Object? jsonData;
       try {
-        final jsonData = jsonDecode(body);
-        final items = jsonData is List ? jsonData : [jsonData];
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) {
-            throw const FormatException('Неверный элемент подписки');
-          }
-          final rawRemarks = item['remarks'] as String? ?? 'Server';
-          final remarks = rawRemarks.replaceFirst(RegExp(r'^[\s\-\—\–]+'), '');
-          final rawJson = jsonEncode(item);
-          String address = '';
-          int port = 0;
-          final outbounds = item['outbounds'] as List<dynamic>? ?? [];
-          for (final outbound in outbounds) {
-            if (outbound is! Map<String, dynamic>) continue;
-            final tag = outbound['tag'] as String? ?? '';
-            if (tag == 'direct' || tag == 'block' || tag.isEmpty) continue;
-            final settings = outbound['settings'] as Map<String, dynamic>?;
-            final vnext = settings?['vnext'] as List<dynamic>?;
-            if (vnext != null && vnext.isNotEmpty) {
-              final srv = vnext.first as Map<String, dynamic>;
-              address = srv['address'] as String? ?? '';
-              port = srv['port'] as int? ?? 0;
-              break;
-            }
-            final servers = settings?['servers'] as List<dynamic>?;
-            if (servers != null && servers.isNotEmpty) {
-              final srv = servers.first as Map<String, dynamic>;
-              address = srv['address'] as String? ?? '';
-              port = srv['port'] as int? ?? 0;
-              break;
-            }
-          }
-          configs.add(
-            VpnConfig(
-              id: 'xray_${DateTime.now().millisecondsSinceEpoch}_${configs.length}',
-              name: remarks,
-              protocol: VpnProtocol.vless,
-              address: address.isEmpty ? 'managed' : address,
-              port: port > 0 ? port : 443,
-              uuid: '',
-              security: VpnSecurity.none,
-              transport: VpnTransport.tcp,
-              createdAt: DateTime.now(),
-              rawXrayConfig: rawJson,
-            ),
-          );
-        }
-        if (configs.length > 10000) {
-          throw const FormatException('Слишком много подключений');
-        }
-        for (final config in configs) {
-          final error = config.validate();
-          if (error != null) throw FormatException(error);
-          XrayConfigBuilder.plan(
-            config,
-            const VpnEngineOptions(
-              socksPort: 10808,
-              httpPort: 10809,
-              socksUser: '',
-              socksPassword: '',
-            ),
-          );
-        }
-        if (configs.isNotEmpty) {
-          return SubscriptionFetchResult(
-            configs: configs,
-            profileTitle: meta.profileTitle,
-            expireAt: meta.expireAt,
-            uploadBytes: meta.uploadBytes,
-            downloadBytes: meta.downloadBytes,
-            totalBytes: meta.totalBytes,
-            announce: meta.announce,
-            announceUrl: meta.announceUrl,
-            hwidStatus: meta.hwidStatus,
-          );
-        }
-        throw const FormatException('Пустая подписка');
-      } on FormatException {
-        rethrow;
+        jsonData = jsonDecode(body);
       } catch (_) {
         throw const FormatException('Неверный managed-конфиг');
       }
+      final items = jsonData is List ? jsonData : [jsonData];
+      if (items.length > 10000) {
+        throw const FormatException('Слишком много подключений');
+      }
+      var skipped = 0;
+      Object? firstError;
+      for (final item in items) {
+        try {
+          final config = _managedConfig(item, configs.length);
+          _check(config);
+          configs.add(config);
+        } catch (e) {
+          // One unusable entry must not discard the rest of the subscription.
+          skipped++;
+          firstError ??= e;
+        }
+      }
+      if (configs.isEmpty) {
+        throw rejection(firstError, 'Неверный managed-конфиг');
+      }
+      return _result(configs, skipped, meta);
     }
 
     // Plain-text URI list takes priority: a body that already contains known
@@ -268,29 +218,118 @@ class SubscriptionService {
     if (lines.length > 10000) {
       throw const FormatException('Слишком много подключений');
     }
+    var skipped = 0;
+    Object? firstError;
     for (final line in lines) {
-      final config = VlessParser.parseUri(line.trim());
-      if (config == null) {
-        throw const FormatException(
-          'Подписка содержит некорректное подключение',
-        );
+      final trimmed = line.trim();
+      // Provider comments (#profile-title, #announce, …) are not entries.
+      if (trimmed.startsWith('#')) continue;
+      try {
+        final config = VlessParser.parseUri(trimmed);
+        if (config == null) {
+          throw const FormatException('Неподдерживаемое подключение');
+        }
+        _check(config);
+        configs.add(config);
+      } catch (e) {
+        // Skip unsupported or malformed lines like v1.6.6 did; the caller
+        // reports the count instead of losing the whole subscription.
+        skipped++;
+        firstError ??= e;
       }
-      configs.add(config);
     }
-    if (configs.isEmpty) throw const FormatException('Пустая подписка');
+    if (configs.isEmpty) {
+      throw rejection(
+        firstError,
+        'Подписка не содержит корректных подключений',
+      );
+    }
+    return _result(configs, skipped, meta);
+  }
 
-    return SubscriptionFetchResult(
-      configs: configs,
-      profileTitle: meta.profileTitle,
-      expireAt: meta.expireAt,
-      uploadBytes: meta.uploadBytes,
-      downloadBytes: meta.downloadBytes,
-      totalBytes: meta.totalBytes,
-      announce: meta.announce,
-      announceUrl: meta.announceUrl,
-      hwidStatus: meta.hwidStatus,
+  static const _probeOptions = VpnEngineOptions(
+    socksPort: 10808,
+    httpPort: 10809,
+    socksUser: '',
+    socksPassword: '',
+  );
+
+  /// Structural and connection-plan validation of a single entry.
+  static void _check(VpnConfig config) {
+    final error = config.validate();
+    if (error != null) throw FormatException(error);
+    XrayConfigBuilder.plan(config, _probeOptions);
+  }
+
+  /// Keeps the typed reason of the first rejected entry for the user.
+  static FormatException rejection(Object? error, String fallback) =>
+      switch (error) {
+        ConnectionPlanException(:final message) => FormatException(message),
+        FormatException(:final message) when message.isNotEmpty =>
+          FormatException('$fallback: $message'),
+        _ => FormatException(fallback),
+      };
+
+  static VpnConfig _managedConfig(Object? item, int index) {
+    if (item is! Map<String, dynamic>) {
+      throw const FormatException('Неверный элемент подписки');
+    }
+    final rawRemarks = item['remarks'] as String? ?? 'Server';
+    final remarks = rawRemarks.replaceFirst(RegExp(r'^[\s\-\—\–]+'), '');
+    final rawJson = jsonEncode(item);
+    String address = '';
+    int port = 0;
+    final outbounds = item['outbounds'] as List<dynamic>? ?? [];
+    for (final outbound in outbounds) {
+      if (outbound is! Map<String, dynamic>) continue;
+      final tag = outbound['tag'] as String? ?? '';
+      if (tag == 'direct' || tag == 'block' || tag.isEmpty) continue;
+      final settings = outbound['settings'] as Map<String, dynamic>?;
+      final vnext = settings?['vnext'] as List<dynamic>?;
+      if (vnext != null && vnext.isNotEmpty) {
+        final srv = vnext.first as Map<String, dynamic>;
+        address = srv['address'] as String? ?? '';
+        port = srv['port'] as int? ?? 0;
+        break;
+      }
+      final servers = settings?['servers'] as List<dynamic>?;
+      if (servers != null && servers.isNotEmpty) {
+        final srv = servers.first as Map<String, dynamic>;
+        address = srv['address'] as String? ?? '';
+        port = srv['port'] as int? ?? 0;
+        break;
+      }
+    }
+    return VpnConfig(
+      id: 'xray_${DateTime.now().millisecondsSinceEpoch}_$index',
+      name: remarks,
+      protocol: VpnProtocol.vless,
+      address: address.isEmpty ? 'managed' : address,
+      port: port > 0 ? port : 443,
+      uuid: '',
+      security: VpnSecurity.none,
+      transport: VpnTransport.tcp,
+      createdAt: DateTime.now(),
+      rawXrayConfig: rawJson,
     );
   }
+
+  static SubscriptionFetchResult _result(
+    List<VpnConfig> configs,
+    int skipped,
+    _HeaderMeta meta,
+  ) => SubscriptionFetchResult(
+    configs: configs,
+    skippedItems: skipped,
+    profileTitle: meta.profileTitle,
+    expireAt: meta.expireAt,
+    uploadBytes: meta.uploadBytes,
+    downloadBytes: meta.downloadBytes,
+    totalBytes: meta.totalBytes,
+    announce: meta.announce,
+    announceUrl: meta.announceUrl,
+    hwidStatus: meta.hwidStatus,
+  );
 
   static List<String> _splitLines(String s) =>
       s.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();

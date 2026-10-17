@@ -150,9 +150,8 @@ void main() {
             await request.response.flush();
           } catch (_) {}
         } else {
-          request.response.write(
-            'trojan://secret@example.test:443\ninvalid://entry',
-          );
+          // No usable entry at all: the document is refused as a whole.
+          request.response.write('invalid://entry\ntuic://x@example.test:1');
         }
         try {
           await request.response.close();

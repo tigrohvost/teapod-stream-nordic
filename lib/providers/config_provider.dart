@@ -12,10 +12,22 @@ import '../core/services/config_repository.dart';
 import '../core/services/import_service.dart';
 import '../core/services/subscription_service.dart';
 import '../core/services/device_service.dart';
+import '../core/services/log_service.dart';
 import 'settings_provider.dart';
 export '../core/models/config_state.dart';
 export '../core/services/import_service.dart'
     show ImportPlan, ImportConnectionsResult;
+
+/// Outcome of a subscription add/refresh: usable entries and how many of the
+/// document's entries were left out (unsupported, malformed or rejected).
+class SubscriptionRefreshResult {
+  final int configs;
+  final int skipped;
+  const SubscriptionRefreshResult({
+    required this.configs,
+    required this.skipped,
+  });
+}
 
 final configRepositoryProvider = Provider((ref) => ConfigRepository());
 final subscriptionServiceProvider = Provider((ref) => SubscriptionService());
@@ -38,9 +50,34 @@ final configValidationProvider = Provider<Future<void> Function(VpnConfig)>(
 class ConfigNotifier extends AsyncNotifier<ConfigState> {
   final _refreshGeneration = <String, int>{};
   ConfigRepository get _repository => ref.read(configRepositoryProvider);
-  Future<void> _validate(VpnConfig config) => ImportService(
-    validateConfig: ref.read(configValidationProvider),
-  ).validate(config);
+  ImportService get _validator =>
+      ImportService(validateConfig: ref.read(configValidationProvider));
+  Future<void> _validate(VpnConfig config) => _validator.validate(config);
+
+  /// Drops invalid entries; fails only when nothing usable remains.
+  Future<(List<VpnConfig>, int)> _usable(
+    SubscriptionFetchResult fetched,
+  ) async {
+    final checked = await _validator.validateEach(fetched.configs);
+    if (checked.valid.isEmpty) {
+      throw SubscriptionService.rejection(
+        checked.firstError,
+        'Подписка не содержит корректных подключений',
+      );
+    }
+    return (checked.valid, fetched.skippedItems + checked.invalid);
+  }
+
+  void _logSkipped(String name, int skipped) {
+    if (skipped == 0) return;
+    ref
+        .read(logServiceProvider.notifier)
+        .addWarning(
+          'Подписка «$name»: пропущено подключений: $skipped '
+          '(неподдерживаемые или некорректные)',
+          source: 'subscription',
+        );
+  }
 
   @override
   Future<ConfigState> build() => _repository.load();
@@ -110,7 +147,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     );
   }
 
-  Future<void> addSubscriptionFromUrl(
+  Future<SubscriptionRefreshResult> addSubscriptionFromUrl(
     String url, {
     String? name,
     bool allowSelfSigned = false,
@@ -136,15 +173,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
           hwid: hwid,
           userAgent: settings.subUserAgent,
         );
-    if (fetched.configs.isEmpty ||
-        fetched.configs.any((c) => c.validate() != null)) {
-      throw const FormatException(
-        'Подписка не содержит корректных подключений',
-      );
-    }
-    for (final config in fetched.configs) {
-      await _validate(config);
-    }
+    final (usable, skipped) = await _usable(fetched);
     await _commit((current) {
       if (_refreshGeneration[url] != generation) return current;
       final existing = current.subscriptions
@@ -157,21 +186,20 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
           c.connectionIdentity: c,
       };
       final keys = <String>{};
-      final fresh = fetched.configs
-          .where((c) => keys.add(c.connectionIdentity))
-          .map((c) {
-            final previous = old[c.connectionIdentity];
-            return c.copyWith(
-              id: previous?.id,
-              subscriptionId: subId,
-              latencyMs: previous?.latencyMs,
-              lastPingedAt: previous?.lastPingedAt,
-              probeStatus: previous?.probeStatus ?? ProbeStatus.unknown,
-              lastSuccessfulLatencyMs: previous?.lastSuccessfulLatencyMs,
-              lastSuccessfulPingAt: previous?.lastSuccessfulPingAt,
-            );
-          })
-          .toList();
+      final fresh = usable.where((c) => keys.add(c.connectionIdentity)).map((
+        c,
+      ) {
+        final previous = old[c.connectionIdentity];
+        return c.copyWith(
+          id: previous?.id,
+          subscriptionId: subId,
+          latencyMs: previous?.latencyMs,
+          lastPingedAt: previous?.lastPingedAt,
+          probeStatus: previous?.probeStatus ?? ProbeStatus.unknown,
+          lastSuccessfulLatencyMs: previous?.lastSuccessfulLatencyMs,
+          lastSuccessfulPingAt: previous?.lastSuccessfulPingAt,
+        );
+      }).toList();
       final sub = Subscription(
         id: subId,
         name:
@@ -209,6 +237,8 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         clearActive: active != null && carried == null,
       );
     });
+    _logSkipped(name ?? original?.name ?? fetched.profileTitle ?? '', skipped);
+    return SubscriptionRefreshResult(configs: usable.length, skipped: skipped);
   }
 
   Future<void> renameSubscription(String id, String name) => _commit(
@@ -231,15 +261,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     final fetched = await ref
         .read(subscriptionServiceProvider)
         .fetchSubscription(url);
-    if (fetched.configs.isEmpty ||
-        fetched.configs.any((c) => c.validate() != null)) {
-      throw const FormatException(
-        'Подписка не содержит корректных подключений',
-      );
-    }
-    for (final config in fetched.configs) {
-      await _validate(config);
-    }
+    final (usable, skipped) = await _usable(fetched);
     await _commit((c) {
       if (_refreshGeneration['replace:$id'] != generation ||
           !c.subscriptions.any((s) => s.id == id && s.url == original.url)) {
@@ -247,7 +269,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
       }
       _refreshGeneration[original.url] =
           (_refreshGeneration[original.url] ?? 0) + 1;
-      final configs = fetched.configs
+      final configs = usable
           .map((e) => e.copyWith(subscriptionId: id))
           .toList();
       final selected = c.activeConfig?.subscriptionId == id;
@@ -274,6 +296,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         clearActive: selected && active == null,
       );
     });
+    _logSkipped(original.name, skipped);
   }
 
   Future<void> removeSubscription(String id) async {
@@ -304,8 +327,15 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
       if (!(await future).subscriptions.any((s) => s.id == sub.id)) continue;
       try {
         await addSubscriptionFromUrl(sub.url);
-      } catch (_) {
-        /* Keep the working snapshot. */
+      } catch (e) {
+        // The working snapshot is kept; the failure must still be visible.
+        ref
+            .read(logServiceProvider.notifier)
+            .addWarning(
+              'Не удалось обновить подписку «${sub.name}»: '
+              '${e is FormatException ? e.message : e}',
+              source: 'subscription',
+            );
       }
     }
   }

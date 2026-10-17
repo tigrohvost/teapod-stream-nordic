@@ -71,7 +71,8 @@ class DeeplinkHandler {
       '${plan.label == null ? '' : '${plan.label}\n'}'
           'Добавить: ${preview.addedConfigs} подключений, ${preview.addedSubscriptions} подписок\n'
           'Пропустить дубликаты: ${preview.skippedConfigs}\n'
-          'Некорректные элементы: ${preview.invalidItems}',
+          'Некорректные элементы: ${preview.invalidItems}'
+          '${preview.skippedSubscriptionEntries == 0 ? '' : '\nПропущено в подписках: ${preview.skippedSubscriptionEntries}'}',
       source,
       canImport: preview.addedConfigs + preview.addedSubscriptions > 0,
     );
@@ -80,7 +81,8 @@ class DeeplinkHandler {
     if (context.mounted) {
       _message(
         'Добавлено: ${result.addedConfigs} подключений, '
-        '${result.addedSubscriptions} подписок; пропущено: ${result.skippedConfigs + result.invalidItems}',
+        '${result.addedSubscriptions} подписок; пропущено: '
+        '${result.skippedConfigs + result.invalidItems + result.skippedSubscriptionEntries}',
       );
     }
     return true;

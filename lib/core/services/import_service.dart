@@ -13,11 +13,15 @@ class ImportPlan {
   final List<VpnConfig> configs;
   final List<Subscription> subscriptions;
   final int invalidItems;
+
+  /// Entries skipped inside fetched subscriptions; reported, not blocking.
+  final int skippedSubscriptionEntries;
   final String? label;
   const ImportPlan({
     required this.configs,
     required this.subscriptions,
     this.invalidItems = 0,
+    this.skippedSubscriptionEntries = 0,
     this.label,
   });
 }
@@ -27,11 +31,13 @@ class ImportConnectionsResult {
   final int addedSubscriptions;
   final int skippedConfigs;
   final int invalidItems;
+  final int skippedSubscriptionEntries;
   const ImportConnectionsResult({
     required this.addedConfigs,
     required this.addedSubscriptions,
     required this.skippedConfigs,
     this.invalidItems = 0,
+    this.skippedSubscriptionEntries = 0,
   });
 }
 
@@ -61,12 +67,31 @@ class ImportService {
     await validateConfig?.call(config);
   }
 
+  /// Validates entries independently so one bad entry can't sink the rest.
+  Future<({List<VpnConfig> valid, int invalid, Object? firstError})>
+  validateEach(Iterable<VpnConfig> configs) async {
+    final valid = <VpnConfig>[];
+    var invalid = 0;
+    Object? firstError;
+    for (final config in configs) {
+      try {
+        await validate(config);
+        valid.add(config);
+      } catch (e) {
+        invalid++;
+        firstError ??= e;
+      }
+    }
+    return (valid: valid, invalid: invalid, firstError: firstError);
+  }
+
   Future<ImportPlan> prepare(ConnectionsBundle bundle) async {
     // Also validate programmatically-created bundles before the first mutation.
     ConnectionsBundle.fromJson(bundle.toJson());
     final configs = <VpnConfig>[];
     final subscriptions = <Subscription>[];
     var invalid = 0;
+    var skippedEntries = 0;
     for (final config in [
       ...bundle.configs,
       ...bundle.rawUris.map(VlessParser.parseUri),
@@ -97,15 +122,14 @@ class ImportService {
       if (subscriptions.any((s) => s.url == url)) continue;
       // Failed downloads abort preparation; no partially replaced subscriptions.
       final fetched = await fetchSubscription(url);
-      if (fetched.configs.isEmpty ||
-          fetched.configs.any((c) => c.validate() != null)) {
-        throw const FormatException(
+      final checked = await validateEach(fetched.configs);
+      if (checked.valid.isEmpty) {
+        throw SubscriptionService.rejection(
+          checked.firstError,
           'Подписка не содержит корректных подключений',
         );
       }
-      for (final config in fetched.configs) {
-        await validate(config);
-      }
+      skippedEntries += fetched.skippedItems + checked.invalid;
       final sub = Subscription(
         id: const Uuid().v4(),
         name: fetched.profileTitle ?? Uri.parse(url).host,
@@ -115,13 +139,14 @@ class ImportService {
       );
       subscriptions.add(sub);
       configs.addAll(
-        fetched.configs.map((c) => c.copyWith(subscriptionId: sub.id)),
+        checked.valid.map((c) => c.copyWith(subscriptionId: sub.id)),
       );
     }
     return ImportPlan(
       configs: configs,
       subscriptions: subscriptions,
       invalidItems: invalid,
+      skippedSubscriptionEntries: skippedEntries,
       label: bundle.label,
     );
   }
@@ -195,6 +220,7 @@ class ImportService {
         addedSubscriptions: subscriptions.length - current.subscriptions.length,
         skippedConfigs: plan.configs.length - added.length,
         invalidItems: plan.invalidItems,
+        skippedSubscriptionEntries: plan.skippedSubscriptionEntries,
       ),
     );
   }
