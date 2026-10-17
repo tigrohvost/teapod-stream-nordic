@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -111,6 +112,43 @@ void main() {
         '[{"id":"fixture"}]',
       );
       expect(prefs.getStringList('vpn_configs'), isNull);
+    },
+  );
+
+  test(
+    'v1.6.6 profile with unknown and out-of-range values still loads',
+    () async {
+      // v1.6.6 imported profile bundles without range checks.
+      FlutterSecureStorage.setMockInitialValues({
+        'profiles_v1': jsonEncode([
+          {
+            'id': 'default',
+            'name': 'Main',
+            'isDefault': true,
+            'createdAt': '2026-01-01T00:00:00.000',
+            'settings': {
+              'vpnMode': 'everythingButBanks',
+              'mtu': 100000,
+              'socksPort': 0,
+              'subAutoRefreshHours': '6',
+              'geoipUrl': 'https://owned.test/geoip.dat',
+              'killSwitchEnabled': true,
+            },
+          },
+        ]),
+      });
+      final settings = await SettingsService().load();
+      expect(settings.vpnMode, const AppSettings().vpnMode);
+      expect(settings.mtu, 9000);
+      expect(settings.socksPort, 1);
+      expect(settings.subAutoRefreshHours, 6);
+      // Valid values next to the bad ones are kept.
+      expect(settings.geoipUrl, 'https://owned.test/geoip.dat');
+      expect(settings.killSwitchEnabled, isTrue);
+      expect(
+        ProfileStorageService.takeLoadIssues(),
+        contains(contains('vpnMode')),
+      );
     },
   );
 }

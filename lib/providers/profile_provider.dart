@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/models/profile.dart';
 import '../core/models/profile_bundle.dart';
 import '../core/models/connections_bundle.dart';
+import '../core/services/log_service.dart';
 import '../core/services/profile_storage_service.dart';
 import '../core/services/settings_service.dart';
 import 'settings_provider.dart';
@@ -67,6 +68,11 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
           revision: s.revision,
         ),
       );
+    }
+    for (final issue in ProfileStorageService.takeLoadIssues()) {
+      ref
+          .read(logServiceProvider.notifier)
+          .addWarning('Настройки профиля $issue', source: 'settings');
     }
     return ProfileState(
       profiles: snapshot.profiles,

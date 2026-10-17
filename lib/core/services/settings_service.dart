@@ -284,103 +284,148 @@ class AppSettings {
     'tlsFingerprint': tlsFingerprint.name,
   };
 
-  static AppSettings fromJson(Map<String, dynamic> json) {
-    for (final entry in <String, List<String>>{
-      'vpnMode': VpnMode.values.map((e) => e.name).toList(),
-      'dnsMode': DnsMode.values.map((e) => e.name).toList(),
-      'dnsQueryStrategy': DnsQueryStrategy.values.map((e) => e.name).toList(),
-      'tlsFingerprint': TlsFingerprint.values.map((e) => e.name).toList(),
-      'logLevel': LogLevel.values.map((e) => e.name).toList(),
-      'fontScale': FontScale.values.map((e) => e.name).toList(),
-      'updateChannel': UpdateChannel.values.map((e) => e.name).toList(),
-    }.entries) {
+  static const _limits = [
+    ('socksPort', 1, 65535),
+    ('mtu', 576, 9000),
+    ('obsProbeIntervalSec', 0, 86400),
+    ('subAutoRefreshHours', 1, 8760),
+  ];
+
+  static final _enums = <String, List<Enum>>{
+    'vpnMode': VpnMode.values,
+    'dnsMode': DnsMode.values,
+    'dnsQueryStrategy': DnsQueryStrategy.values,
+    'tlsFingerprint': TlsFingerprint.values,
+    'logLevel': LogLevel.values,
+    'fontScale': FontScale.values,
+    'updateChannel': UpdateChannel.values,
+  };
+
+  /// Strict check for imported bundles: unknown or out-of-range values are
+  /// rejected with a clear message instead of being silently replaced.
+  static void validateJson(Map<String, dynamic> json) {
+    for (final entry in _enums.entries) {
       if (json.containsKey(entry.key) &&
-          !entry.value.contains(json[entry.key])) {
+          !entry.value.any((e) => e.name == json[entry.key])) {
         throw FormatException('Неизвестное значение ${entry.key}');
       }
     }
-    for (final limit in [
-      ('socksPort', 1, 65535),
-      ('mtu', 576, 9000),
-      ('obsProbeIntervalSec', 0, 86400),
-      ('subAutoRefreshHours', 1, 8760),
-    ]) {
-      final value = json[limit.$1];
-      if (value != null &&
-          (value is! int || value < limit.$2 || value > limit.$3)) {
-        throw FormatException('Неверное значение ${limit.$1}');
+    for (final (key, min, max) in _limits) {
+      final value = json[key];
+      if (value != null && (value is! int || value < min || value > max)) {
+        throw FormatException('Неверное значение $key');
       }
     }
-    final routingJson = json['routing'] as Map<String, dynamic>?;
+  }
+
+  /// Lenient parse for stored profiles: a value written by an older or newer
+  /// version never makes settings unreadable. Unknown enum values fall back to
+  /// the default, out-of-range numbers are clamped, wrong types use the
+  /// default; every correction is reported to [onIssue].
+  static AppSettings fromJson(
+    Map<String, dynamic> json, {
+    void Function(String issue)? onIssue,
+  }) {
+    T value<T>(String key, T fallback) {
+      final raw = json[key];
+      if (raw == null) return fallback;
+      if (raw is T) return raw;
+      onIssue?.call('$key: неверный тип значения');
+      return fallback;
+    }
+
+    int number(String key, int fallback) {
+      final raw = json[key];
+      if (raw == null) return fallback;
+      if (raw is! int) {
+        onIssue?.call('$key: неверный тип значения');
+        return fallback;
+      }
+      final (_, min, max) = _limits.firstWhere((l) => l.$1 == key);
+      if (raw < min || raw > max) {
+        onIssue?.call('$key: $raw вне диапазона $min–$max');
+        return raw.clamp(min, max);
+      }
+      return raw;
+    }
+
+    E choice<E extends Enum>(String key, List<E> values, E fallback) {
+      final raw = json[key];
+      if (raw == null) return fallback;
+      final match = values.where((e) => e.name == raw).firstOrNull;
+      if (match == null) onIssue?.call('$key: неизвестное значение $raw');
+      return match ?? fallback;
+    }
+
+    Set<String> names(String key) {
+      final raw = json[key];
+      if (raw == null) return {};
+      if (raw is List) return raw.whereType<String>().toSet();
+      onIssue?.call('$key: неверный тип значения');
+      return {};
+    }
+
+    var routing = const RoutingSettings();
+    final routingJson = json['routing'];
+    if (routingJson is Map<String, dynamic>) {
+      try {
+        routing = RoutingSettings.fromJson(routingJson);
+      } catch (_) {
+        onIssue?.call(
+          'routing: не удалось прочитать, используются значения по умолчанию',
+        );
+      }
+    }
     return AppSettings(
-      socksPort: json['socksPort'] as int? ?? AppConstants.defaultSocksPort,
-      logLevel: LogLevel.values.firstWhere(
-        (e) => e.name == json['logLevel'],
-        orElse: () => LogLevel.info,
+      socksPort: number('socksPort', AppConstants.defaultSocksPort),
+      logLevel: choice('logLevel', LogLevel.values, LogLevel.info),
+      excludedPackages: names('excludedPackages'),
+      includedPackages: names('includedPackages'),
+      vpnMode: choice('vpnMode', VpnMode.values, VpnMode.onlySelected),
+      splitTunnelingEnabled: value('splitTunnelingEnabled', false),
+      randomPort: value('randomPort', true),
+      autoConnect: value('autoConnect', false),
+      dnsMode: choice('dnsMode', DnsMode.values, DnsMode.proxy),
+      dnsPreset: value('dnsPreset', 'cf_udp'),
+      customDnsAddress: value('customDnsAddress', '1.1.1.1'),
+      customDnsType: value('customDnsType', 'udp'),
+      enableUdp: value('enableUdp', true),
+      allowIcmp: value('allowIcmp', true),
+      randomCredentials: value('randomCredentials', true),
+      socksUser: value('socksUser', ''),
+      socksPassword: value('socksPassword', ''),
+      proxyOnly: value('proxyOnly', false),
+      showNotification: value('showNotification', true),
+      killSwitchEnabled: value('killSwitchEnabled', false),
+      hwidEnabled: value('hwidEnabled', false),
+      ipLookupEnabled: value('ipLookupEnabled', true),
+      routing: routing,
+      updateChannel: choice(
+        'updateChannel',
+        UpdateChannel.values,
+        UpdateChannel.stable,
       ),
-      excludedPackages:
-          (json['excludedPackages'] as List<dynamic>?)
-              ?.cast<String>()
-              .toSet() ??
-          {},
-      includedPackages:
-          (json['includedPackages'] as List<dynamic>?)
-              ?.cast<String>()
-              .toSet() ??
-          {},
-      vpnMode: VpnMode.values.firstWhere(
-        (e) => e.name == json['vpnMode'],
-        orElse: () => VpnMode.onlySelected,
+      fontScale: choice('fontScale', FontScale.values, FontScale.normal),
+      geoipUrl: value('geoipUrl', GeoPresets.defaultGeoipUrl),
+      geositeUrl: value('geositeUrl', GeoPresets.defaultGeositeUrl),
+      sniffingEnabled: value('sniffingEnabled', true),
+      mtu: number('mtu', 1500),
+      subAutoRefresh: value('subAutoRefresh', false),
+      subAutoRefreshHours: number('subAutoRefreshHours', 6),
+      subUserAgent: value('subUserAgent', ''),
+      obsProbeIntervalSec: number('obsProbeIntervalSec', 600),
+      dnsQueryStrategy: choice(
+        'dnsQueryStrategy',
+        DnsQueryStrategy.values,
+        DnsQueryStrategy.ipv4Only,
       ),
-      splitTunnelingEnabled: json['splitTunnelingEnabled'] as bool? ?? false,
-      randomPort: json['randomPort'] as bool? ?? true,
-      autoConnect: json['autoConnect'] as bool? ?? false,
-      dnsMode: DnsMode.values.firstWhere(
-        (e) => e.name == json['dnsMode'],
-        orElse: () => DnsMode.proxy,
-      ),
-      dnsPreset: json['dnsPreset'] as String? ?? 'cf_udp',
-      customDnsAddress: json['customDnsAddress'] as String? ?? '1.1.1.1',
-      customDnsType: json['customDnsType'] as String? ?? 'udp',
-      enableUdp: json['enableUdp'] as bool? ?? true,
-      allowIcmp: json['allowIcmp'] as bool? ?? true,
-      randomCredentials: json['randomCredentials'] as bool? ?? true,
-      socksUser: json['socksUser'] as String? ?? '',
-      socksPassword: json['socksPassword'] as String? ?? '',
-      proxyOnly: json['proxyOnly'] as bool? ?? false,
-      showNotification: json['showNotification'] as bool? ?? true,
-      killSwitchEnabled: json['killSwitchEnabled'] as bool? ?? false,
-      hwidEnabled: json['hwidEnabled'] as bool? ?? false,
-      ipLookupEnabled: json['ipLookupEnabled'] as bool? ?? true,
-      routing: routingJson != null
-          ? RoutingSettings.fromJson(routingJson)
-          : const RoutingSettings(),
-      updateChannel: UpdateChannel.values.firstWhere(
-        (e) => e.name == json['updateChannel'],
-        orElse: () => UpdateChannel.stable,
-      ),
-      fontScale: FontScale.values.firstWhere(
-        (e) => e.name == json['fontScale'],
-        orElse: () => FontScale.normal,
-      ),
-      geoipUrl: json['geoipUrl'] as String? ?? GeoPresets.defaultGeoipUrl,
-      geositeUrl: json['geositeUrl'] as String? ?? GeoPresets.defaultGeositeUrl,
-      sniffingEnabled: json['sniffingEnabled'] as bool? ?? true,
-      mtu: json['mtu'] as int? ?? 1500,
-      subAutoRefresh: json['subAutoRefresh'] as bool? ?? false,
-      subAutoRefreshHours: json['subAutoRefreshHours'] as int? ?? 6,
-      subUserAgent: json['subUserAgent'] as String? ?? '',
-      obsProbeIntervalSec: json['obsProbeIntervalSec'] as int? ?? 600,
-      dnsQueryStrategy: DnsQueryStrategy.values.firstWhere(
-        (e) => e.name == json['dnsQueryStrategy'],
-        orElse: () => DnsQueryStrategy.ipv4Only,
-      ),
-      blockQuic: json['blockQuic'] as bool? ?? false,
-      ipv6Enabled: json['ipv6Enabled'] as bool? ?? false,
-      autoStartOnBoot: json['autoStartOnBoot'] as bool? ?? false,
-      tlsFingerprint: TlsFingerprint.values.firstWhere(
-        (e) => e.name == json['tlsFingerprint'],
-        orElse: () => TlsFingerprint.defaultFp,
+      blockQuic: value('blockQuic', false),
+      ipv6Enabled: value('ipv6Enabled', false),
+      autoStartOnBoot: value('autoStartOnBoot', false),
+      tlsFingerprint: choice(
+        'tlsFingerprint',
+        TlsFingerprint.values,
+        TlsFingerprint.defaultFp,
       ),
     );
   }

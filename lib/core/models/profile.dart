@@ -50,13 +50,19 @@ class Profile {
       'lastFetchedAt': lastFetchedAt!.toIso8601String(),
   };
 
-  factory Profile.fromJson(Map<String, dynamic> json) => Profile(
+  factory Profile.fromJson(
+    Map<String, dynamic> json, {
+    void Function(String issue)? onIssue,
+  }) => Profile(
     id: json['id'] as String,
     name: json['name'] as String,
     isDefault: json['isDefault'] as bool? ?? false,
     readonly: json['readonly'] as bool? ?? false,
     settings: AppSettings.fromJson(
       json['settings'] as Map<String, dynamic>? ?? {},
+      onIssue: onIssue == null
+          ? null
+          : (issue) => onIssue('«${json['name']}»: $issue'),
     ),
     createdAt: DateTime.parse(json['createdAt'] as String),
     sourceUrl: json['sourceUrl'] as String?,
