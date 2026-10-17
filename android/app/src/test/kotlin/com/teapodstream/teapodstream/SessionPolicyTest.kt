@@ -23,25 +23,38 @@ class SessionPolicyTest {
         })
     }
 
-    @Test fun oldStopRetainsOwnershipPastTimeout() {
+    @Test fun timedOutStopFreesQueueButBlocksStartsUntilItEnds() {
         val coordinator = SessionCoordinator()
-        val stopEntered = CountDownLatch(1)
         val releaseStop = CountDownLatch(1)
-        val blocked = CountDownLatch(1)
-        val started = AtomicInteger(0)
-        val stop = coordinator.execute {
-            coordinator.stopAndAwait(20, { blocked.countDown() }) {
-                stopEntered.countDown(); releaseStop.await()
-            }
-        }
-        assertTrue(stopEntered.await(1, TimeUnit.SECONDS))
-        val next = coordinator.execute { started.incrementAndGet() }
-        assertTrue(blocked.await(1, TimeUnit.SECONDS))
-        assertEquals(0, started.get())
-        assertFalse(next.isDone)
+        val finished = CountDownLatch(1)
+        coordinator.execute {
+            assertFalse(coordinator.stopRuntime(20, { finished.countDown() }) { releaseStop.await() })
+        }.get(1, TimeUnit.SECONDS) // a stuck stop no longer holds the session queue
+        assertTrue(coordinator.stopPending)
+        assertTrue(coordinator.runtimeBlocked)
+        coordinator.execute {}.get(1, TimeUnit.SECONDS) // disconnect/validate still run
+        assertFalse("no second call into a busy core",
+            coordinator.stopRuntime(1000, {}) { fail("stop ran concurrently") })
         releaseStop.countDown()
-        stop.get(1, TimeUnit.SECONDS); next.get(1, TimeUnit.SECONDS)
-        assertEquals(1, started.get())
+        assertTrue(finished.await(1, TimeUnit.SECONDS))
+        assertFalse(coordinator.stopPending)
+        assertFalse(coordinator.runtimeBlocked)
+    }
+
+    @Test fun promptStopNeedsNoRecovery() {
+        val coordinator = SessionCoordinator()
+        val recovered = AtomicInteger(0)
+        assertTrue(coordinator.stopRuntime(1000, { recovered.incrementAndGet() }) {})
+        coordinator.execute {}.get(1, TimeUnit.SECONDS)
+        assertEquals(0, recovered.get())
+        assertFalse(coordinator.runtimeBlocked)
+    }
+
+    @Test fun failedStopKeepsRuntimeBlocked() {
+        val coordinator = SessionCoordinator()
+        assertFalse(coordinator.stopRuntime(1000, {}) { throw IllegalStateException("core") })
+        assertFalse(coordinator.stopPending)
+        assertTrue(coordinator.runtimeBlocked)
     }
 
     @Test fun simultaneousReconnectsAreCoalescedAndOldCallbacksInvalidated() {

@@ -130,7 +130,11 @@ class XrayVpnService : VpnService() {
         // where foreign resolvers are filtered.
         private val CONNECTIVITY_CHECK_HOSTS = arrayOf("1.1.1.1", "8.8.8.8", "2606:4700:4700::1111")
         private const val STATS_INTERVAL_MS = 1_000L
-        private const val STOP_THREAD_TIMEOUT_MS = 5_000L
+        // tun2socks + xray together (1.6.6 allowed 5 s + 3 s); past it the stop keeps
+        // running in the background and only new starts wait for it.
+        private const val STOP_THREAD_TIMEOUT_MS = 10_000L
+        // A reconnect/always-on/tile start refused while a late stop drained.
+        private val restartAfterStop = AtomicBoolean(false)
         private const val RECONNECT_DEBOUNCE_MS = 2_000L
         // Failed CONNECT_QUICK reconnects are retried with linear backoff instead of
         // silently leaving the VPN off (and, with kill switch, traffic leaking).
@@ -313,6 +317,7 @@ class XrayVpnService : VpnService() {
     /** [persist] records an explicit user disconnect so boot/always-on don't undo it. */
     private fun requestStop(persist: Boolean = true) {
         if (persist) try { File(filesDir, "user_disconnected.flag").createNewFile() } catch (_: Exception) {}
+        restartAfterStop.set(false)
         coordinator.execute {
             setState("disconnecting")
             stopVpn(explicit = true)
@@ -328,6 +333,11 @@ class XrayVpnService : VpnService() {
 
     private fun startSnapshot(snapshot: NativeSnapshot, requestId: Long, reconnect: Boolean) {
         if (!coordinator.isCurrent(requestId)) return
+        if (coordinator.stopPending) {
+            // Resumed by onLateRuntimeStop once the previous stop leaves the core.
+            if (reconnect) restartAfterStop.set(true)
+            throw ConnectionFailure("NATIVE_STOP_TIMEOUT", "Ядро ещё завершает предыдущую сессию")
+        }
         if (coordinator.runtimeBlocked) throw ConnectionFailure("NATIVE_STOP_FAILED", "Перезапустите приложение: ядро не завершило остановку")
         val p = snapshot.params
         // Validate before replacing a held TUN or changing the applied policy.
@@ -824,22 +834,20 @@ class XrayVpnService : VpnService() {
                 tunInterface = null
             }
 
-            log("info", "Stopping tun2socks")
-            coordinator.stopAndAwait(STOP_THREAD_TIMEOUT_MS, {
-                connectionError("NATIVE_STOP_TIMEOUT")
-                setState("stopBlocked")
-            }) { Teapodcore.stopTun2Socks() }
-
             // Remove the creds file older versions kept for CONNECT_QUICK
             if (explicit) {
                 try { File(filesDir, "socks_creds.json").delete() } catch (_: Exception) {}
             }
 
-            log("info", "Stopping xray")
-            coordinator.stopAndAwait(STOP_THREAD_TIMEOUT_MS, {
+            log("info", "Stopping tun2socks and xray")
+            val stopped = coordinator.stopRuntime(STOP_THREAD_TIMEOUT_MS, { activeService?.onLateRuntimeStop() }) {
+                Teapodcore.stopTun2Socks()
+                Teapodcore.stopXray()
+            }
+            if (!stopped) {
+                log("warning", "Native stop not finished after ${STOP_THREAD_TIMEOUT_MS / 1000}s; new sessions wait for it")
                 connectionError("NATIVE_STOP_TIMEOUT")
-                setState("stopBlocked")
-            }) { Teapodcore.stopXray() }
+            }
 
             if (keepTunAsSink) {
                 if (reconnecting) {
@@ -872,6 +880,16 @@ class XrayVpnService : VpnService() {
                 setState("reconnecting")
             }
             log("info", "stopVpn: done (state=${if (reconnecting) "reconnecting" else if (keptTunAsSink) "blocked" else resultState})")
+        }
+    }
+
+    /** Runs on the session queue once a stop that outlived its deadline has left the core. */
+    private fun onLateRuntimeStop() {
+        log("info", "Native stop finished; new sessions are allowed again")
+        if (isRunning.get()) return
+        setState(idleState())
+        if (restartAfterStop.getAndSet(false) && !userRequestedDisconnect.get()) {
+            startService(Intent(this, XrayVpnService::class.java).setAction(ACTION_CONNECT_QUICK))
         }
     }
 
