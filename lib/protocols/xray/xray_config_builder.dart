@@ -540,17 +540,20 @@ class XrayConfigBuilder {
     return const JsonEncoder().convert(build(config, options));
   }
 
+  /// The pinned core removed `allowInsecure`; an insecure flag without a pin is
+  /// ignored and the server certificate is verified normally, as v1.6.6 did for
+  /// VLESS/Trojan. Reported via [EffectiveConnectionPlan.unsupportedSettings].
+  static bool ignoresInsecure(VpnConfig config) =>
+      config.rawXrayConfig == null &&
+      config.allowInsecure &&
+      (config.pinSHA256 == null || config.pinSHA256!.isEmpty) &&
+      (config.security == VpnSecurity.tls ||
+          config.protocol == VpnProtocol.hysteria2);
+
   static Map<String, dynamic> _buildTlsSettings(
     VpnConfig config,
     String? fingerprint,
   ) {
-    if (config.allowInsecure &&
-        (config.pinSHA256 == null || config.pinSHA256!.isEmpty)) {
-      throw const ConnectionPlanException(
-        'UNSUPPORTED_TLS_INSECURE',
-        'Закреплённое ядро требует проверку TLS: добавьте pin сертификата или отключите insecure',
-      );
-    }
     return {
       'serverName': config.sni ?? '',
       'allowInsecure': false,
@@ -969,7 +972,10 @@ class XrayConfigBuilder {
         'includedPackages': options.includedPackages.toList(),
         'excludedPackages': options.excludedPackages.toList(),
       },
-      unsupportedSettings: managed ? ['tlsFingerprint'] : [],
+      unsupportedSettings: [
+        if (managed) 'tlsFingerprint',
+        if (ignoresInsecure(config)) 'allowInsecure',
+      ],
     );
   }
 
