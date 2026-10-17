@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import zipfile
-from dependencies import load_lock, verify, ROOT
+from dependencies import BUNDLED_GENERATED, load_lock, verify, ROOT
 
 RELEASE_CERT = "05a8e6930d302cfed4817b23930e6deac77b399dbaa9b53218d08adf97c1a407"
 ABI_OFFSETS = {"armeabi-v7a": 1000, "arm64-v8a": 2000, "x86_64": 4000}
@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--apk-dir", type=Path, default=Path("build/app/outputs/flutter-apk"))
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--require-release-signature", action="store_true")
+    parser.add_argument("--require-clean-source", action="store_true",
+                        help="refuse APKs built from a dirty tree (publishing)")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.source_sha):
         raise SystemExit("Expected a full source commit SHA")
@@ -73,10 +75,14 @@ def main():
             raise SystemExit(f"Debuggable APK: {apk.name}")
         with zipfile.ZipFile(apk) as archive:
             names = set(archive.namelist())
+            binaries = 'assets/flutter_assets/assets/binaries/'
+            bundled = {name.removeprefix(binaries) for name in names if name.startswith(binaries)}
+            if extra := bundled - {'geoip.dat', 'geosite.dat'} - BUNDLED_GENERATED:
+                raise SystemExit(f"Unexpected bundled binaries in {apk.name}: {sorted(extra)}")
             build_info = json.loads(archive.read('assets/flutter_assets/assets/binaries/build-info.json'))
             if build_info['source_sha'] != args.source_sha or build_info['dependencies'] != lock:
                 raise SystemExit('APK source/dependency stamp mismatch')
-            if args.require_release_signature and build_info['dirty']:
+            if args.require_clean_source and build_info['dirty']:
                 raise SystemExit('Refusing to publish an APK built from a dirty tree')
             for key in ('geoip', 'geosite'):
                 item = lock['dependencies'][key]

@@ -12,6 +12,9 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / 'dependencies.lock.json'
+STAGING = '.dependency-staging'  # Same filesystem as the targets, outside bundled assets.
+BUNDLED = 'assets/binaries'
+BUNDLED_GENERATED = {'manifest.json', 'build-info.json', '.gitkeep'}
 
 
 def digest(path):
@@ -28,14 +31,73 @@ def select_asset(release, expected):
     return matches[0]
 
 
-def load_lock():
-    lock = json.loads(LOCK.read_text())
+def check_lock(lock):
     if lock['schema'] != 1:
         raise ValueError('Unsupported dependency lock')
     for item in lock['dependencies'].values():
         if not re.fullmatch(r'[0-9a-f]{64}', item['sha256']) or '/latest/' in item['url']:
             raise ValueError('Dependencies must have an explicit version and digest')
     return lock
+
+
+def load_lock():
+    return check_lock(json.loads(LOCK.read_text()))
+
+
+def write_lock(lock, path=None):
+    check_lock(lock)
+    Path(path or LOCK).write_text(json.dumps(lock, indent=2) + '\n')
+
+
+def github_release(repository, tag=None):
+    """A release from the GitHub API: the given tag, or the latest one."""
+    url = f'https://api.github.com/repos/{repository}/releases/' + (f'tags/{tag}' if tag else 'latest')
+    headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'Teapod-dependency-lock'}
+    if token := os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN'):
+        headers['Authorization'] = f'Bearer {token}'
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
+        return json.load(response)
+
+
+def download_sha256(url, size):
+    """Stream and hash an asset without storing it (when GitHub has no digest)."""
+    request = urllib.request.Request(url, headers={'User-Agent': 'Teapod-dependency-lock'})
+    sha, total = hashlib.sha256(), 0
+    with urllib.request.urlopen(request, timeout=30) as response:
+        while chunk := response.read(1024 * 1024):
+            total += len(chunk)
+            if total > size:
+                raise ValueError('Oversized dependency')
+            sha.update(chunk)
+    if total != size:
+        raise ValueError('Truncated dependency download')
+    return sha.hexdigest()
+
+
+def apply_release(lock, keys, release, asset_name, hasher=download_sha256):
+    """Point lock entries at a release, taking each asset's SHA-256 from GitHub
+    when it publishes one and hashing the download otherwise."""
+    tag = release['tag_name']
+    for key in keys:
+        item = lock['dependencies'][key]
+        asset = select_asset(release, asset_name(item, tag))
+        published = asset.get('digest') or ''
+        sha256 = published[7:] if re.fullmatch(r'sha256:[0-9a-f]{64}', published) else \
+            hasher(asset['browser_download_url'], asset['size'])
+        item.update(version=tag, asset=asset['name'], url=asset['browser_download_url'],
+                    size=asset['size'], sha256=sha256)
+    return lock
+
+
+def bump_geodata(lock, release, hasher=download_sha256):
+    # Both files always come from one release so they stay a matching pair.
+    return apply_release(lock, ['geoip', 'geosite'], release, lambda item, _: item['asset'], hasher)
+
+
+def bump_core(lock, release, hasher=download_sha256):
+    # The fat AAR only, not the per-ABI variants.
+    return apply_release(lock, ['core'], release,
+                         lambda _, tag: f'teapod-core-{tag.removeprefix("v")}.aar', hasher)
 
 
 def verify(path, item):
@@ -45,11 +107,22 @@ def verify(path, item):
 
 def fetch(item):
     path = ROOT / item['path']
+    # Older versions staged downloads next to the target; in assets/binaries a
+    # leftover would be bundled into the APK.
+    for stale in path.parent.glob(f'{path.name}.*.part'):
+        stale.unlink()
     if path.exists():
-        verify(path, item)  # A tampered cache is an error, never silently accepted.
-        return
+        try:
+            verify(path, item)
+            return
+        except ValueError:
+            # After a lock bump or damage the cached file is replaced by a
+            # verified download; it is never used as is.
+            print(f'Cached {item["asset"]} differs from dependencies.lock.json; downloading {item["version"]}')
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=path.name + '.', suffix='.part', dir=path.parent)
+    staging = ROOT / STAGING
+    staging.mkdir(exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=path.name + '.', suffix='.part', dir=staging)
     temporary = Path(temporary)
     try:
         request = urllib.request.Request(item['url'], headers={'User-Agent': 'Teapod-dependency-lock'})
@@ -65,9 +138,20 @@ def fetch(item):
             out.flush()
             os.fsync(out.fileno())
         verify(temporary, item)
+        os.chmod(temporary, 0o644)  # mkstemp creates 0600.
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def check_bundled_directory(lock):
+    """Everything in assets/binaries is packed into the APK."""
+    directory = ROOT / BUNDLED
+    allowed = {Path(item['path']).name for item in lock['dependencies'].values()
+               if Path(item['path']).parent == Path(BUNDLED)} | BUNDLED_GENERATED
+    extra = sorted(p.name for p in directory.iterdir() if p.name not in allowed) if directory.is_dir() else []
+    if extra:
+        raise ValueError(f'Unexpected files in {BUNDLED} would be bundled into the APK: {", ".join(extra)}')
 
 
 def geo_manifest(lock):
@@ -99,7 +183,8 @@ def validate_toolchain_sources(lock):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['fetch', 'verify', 'toolchain'])
+    parser.add_argument('action', choices=['fetch', 'verify', 'toolchain', 'bump-geodata', 'bump-core'])
+    parser.add_argument('--tag', help='release tag for bump-* (default: the latest release)')
     args = parser.parse_args()
     lock = load_lock()
     validate_toolchain_sources(lock)
@@ -107,9 +192,19 @@ def main():
         for key, value in lock['toolchain'].items():
             print(f'TSN_{key.upper()}_VERSION={value}')
         return
+    if args.action.startswith('bump-'):
+        key = 'geoip' if args.action == 'bump-geodata' else 'core'
+        before = lock['dependencies'][key]['version']
+        release = github_release(lock['dependencies'][key]['repository'], args.tag)
+        (bump_geodata if key == 'geoip' else bump_core)(lock, release)
+        write_lock(lock)
+        print(f'{args.action}: {before} -> {release["tag_name"]} in dependencies.lock.json')
+        print('Next: ./build.sh binaries, run the tests (and a device smoke for a core), then commit the lock.')
+        return
     for item in lock['dependencies'].values():
         fetch(item) if args.action == 'fetch' else verify(ROOT / item['path'], item)
         print(f'Verified {item["asset"]} ({item["version"]})')
+    check_bundled_directory(lock)
     geo_manifest(lock)
     source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip())

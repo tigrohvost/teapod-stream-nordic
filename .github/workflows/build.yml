@@ -128,7 +128,8 @@ jobs:
           echo "::error::ANDROID_KEYSTORE_BASE64 secret is not set — cannot publish a signed release."
           exit 1
 
-      - name: Read and verify locked Java toolchain
+      # Exports TSN_*_VERSION for every following step (Java, Flutter, NDK, CMake).
+      - name: Read and verify locked toolchain
         run: python3 tools/dependencies.py toolchain >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
@@ -136,9 +137,6 @@ jobs:
           distribution: temurin
           java-version: ${{ env.TSN_JAVA_VERSION }}
           cache: gradle
-
-      - name: Read and verify locked toolchain
-        run: python3 tools/dependencies.py toolchain >> "$GITHUB_ENV"
 
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
@@ -226,7 +224,7 @@ jobs:
           DIR=build/app/outputs/symbols
           if [[ -d "$DIR" ]]; then
             ZIP="$PWD/build/app/outputs/teapod-stream-symbols-${{ steps.meta.outputs.version }}.zip"
-            (cd "$DIR" && zip -qr "$ZIP" .)
+            python3 tools/package_symbols.py "$DIR" "$ZIP"
             echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
             ls -lh "$ZIP"
           fi

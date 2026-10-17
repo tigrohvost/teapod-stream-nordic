@@ -13,6 +13,34 @@ def run(*args):
     return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT).strip()
 
 
+def api_json(*args):
+    """gh api output as JSON; stderr stays separate so warnings can't corrupt it."""
+    result = subprocess.run(['gh', 'api', *args], text=True, capture_output=True)
+    if result.returncode:
+        raise SystemExit(f'GitHub API request failed: {result.stderr.strip()}')
+    return json.loads(result.stdout)
+
+
+def find_release(repo, tag):
+    """The release for tag, draft or published, or None.
+
+    GET /releases/tags/{tag} never returns drafts, so a retried run would not
+    see its own half-uploaded draft and would create a second one.
+    """
+    pages = api_json('--paginate', '--slurp', f'repos/{repo}/releases?per_page=100')
+    matches = [r for page in pages for r in page if r.get('tag_name') == tag]
+    if len(matches) > 1:
+        raise SystemExit(f'Several releases use {tag}; delete the stale drafts before retrying')
+    return matches[0] if matches else None
+
+
+def check_draft_source(release, source_sha):
+    # A draft has no git tag yet, so the ls-remote check can't cover it.
+    if release['draft'] and release.get('target_commitish') != source_sha:
+        raise SystemExit(f'Draft {release["tag_name"]} targets {release.get("target_commitish")}, '
+                         f'not {source_sha}; delete it or publish from that commit')
+
+
 def check_assets(expected, actual):
     for name, digest in actual.items():
         if name not in expected or expected[name] != digest:
@@ -36,7 +64,7 @@ def main():
     if run('git', 'rev-parse', 'HEAD') != args.source_sha or run('git', 'status', '--porcelain'):
         raise SystemExit('Publication requires the exact clean source commit')
     subprocess.run(['python3', 'tools/verify_release_apks.py', '--source-sha', args.source_sha,
-                    '--require-release-signature'], check=True)
+                    '--require-release-signature', '--require-clean-source'], check=True)
     directory = Path('build/app/outputs/flutter-apk')
     manifest = json.loads((directory / 'release-manifest.json').read_text())
     version = manifest['version']
@@ -54,20 +82,19 @@ def main():
     if remote_sha and remote_sha != args.source_sha:
         raise SystemExit('Release tag points at another source commit')
     repo = run('gh', 'repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner')
-    response = subprocess.run(['gh', 'api', f'repos/{repo}/releases/tags/{tag}'], text=True, capture_output=True)
-    if response.returncode:
-        if '404' not in response.stderr:
-            raise SystemExit('Could not determine remote release state')
-        release = None
-    else:
-        release = json.loads(response.stdout)
+    release = find_release(repo, tag)
     present = {}
     if release:
+        check_draft_source(release, args.source_sha)
         with tempfile.TemporaryDirectory(prefix='teapod-release-') as temp:
             for asset in release['assets']:
                 name = asset['name']
                 if name not in expected:
                     raise SystemExit(f'Unexpected remote asset: {name}')
+                if release['draft'] and asset.get('state', 'uploaded') != 'uploaded':
+                    # An interrupted upload leaves a stub that blocks re-uploading the name.
+                    run('gh', 'release', 'delete-asset', tag, name, '--yes')
+                    continue
                 run('gh', 'release', 'download', tag, '--pattern', name, '--dir', temp)
                 present[name] = hashlib.sha256((Path(temp) / name).read_bytes()).hexdigest()
         check_assets(expected, present)
