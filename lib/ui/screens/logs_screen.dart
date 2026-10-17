@@ -93,6 +93,13 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
         c.rawUri ?? '',
         c.publicKey ?? '',
         c.obfsPassword ?? '',
+        c.wsPath ?? '',
+        c.wsHost ?? '',
+        c.grpcServiceName ?? '',
+        c.shortId ?? '',
+        c.spiderX ?? '',
+        c.postQuantumKey ?? '',
+        ...DiagnosticRedactor.secretsFromXrayJson(c.rawXrayConfig),
       ],
     ];
     final report = DiagnosticRedactor.redact(
