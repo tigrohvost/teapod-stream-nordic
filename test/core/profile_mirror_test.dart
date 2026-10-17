@@ -17,9 +17,7 @@ void main() {
 
   setUp(() {
     FlutterSecureStorage.setMockInitialValues({});
-    SharedPreferences.setMockInitialValues({
-      'auto_start_on_boot': false,
-    });
+    SharedPreferences.setMockInitialValues({'auto_start_on_boot': false});
   });
 
   test(

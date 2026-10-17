@@ -60,9 +60,8 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
 
   List<VpnConfig> _applySort(List<VpnConfig> configs) {
     if (!_sortByPing) return configs;
-    return [...configs]..sort((a, b) {
-      return compareProbeResults(a, b, DateTime.now());
-    });
+    // Stable: servers with equal probe results keep the provider's order.
+    return sortByProbe(configs, DateTime.now());
   }
 
   // ── Build ──────────────────────────────────────────────────────

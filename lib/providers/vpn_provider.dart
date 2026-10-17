@@ -347,6 +347,8 @@ class VpnNotifier extends Notifier<VpnState2> {
             'EMPTY_ALLOWED_APPS' => 'Выберите хотя бы одно приложение',
             'PREFIX_REQUIRES_TUN' =>
               'Prefix transport доступен только в режиме VPN',
+            'GEODATA_UNAVAILABLE' =>
+              'Геобазы повреждены или недоступны. Обновите их в настройках маршрутизации.',
             'NATIVE_STOP_TIMEOUT' || 'NATIVE_STOP_FAILED' =>
               'Остановка ядра не завершена. Новое подключение пока недоступно.',
             _ => 'Не удалось применить конфигурацию ($code)',
