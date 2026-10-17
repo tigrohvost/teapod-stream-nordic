@@ -226,7 +226,7 @@ jobs:
           DIR=build/app/outputs/symbols
           if [[ -d "$DIR" ]]; then
             ZIP="$PWD/build/app/outputs/teapod-stream-symbols-${{ steps.meta.outputs.version }}.zip"
-            (cd "$DIR" && zip -qr "$ZIP" .)
+            python3 tools/package_symbols.py "$DIR" "$ZIP"
             echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
             ls -lh "$ZIP"
           fi
