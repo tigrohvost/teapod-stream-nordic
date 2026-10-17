@@ -133,7 +133,11 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
       ),
     );
     if (confirmed != true) return;
-    final tmp = await TemporaryExportStore.create(report, extension: 'txt');
+    final tmp = await TemporaryExportStore.create(
+      report,
+      prefix: 'teapod_report_',
+      extension: 'txt',
+    );
     await Share.shareXFiles([
       XFile(tmp.path, mimeType: 'text/plain'),
     ], subject: 'TeapodStream Diagnostics');

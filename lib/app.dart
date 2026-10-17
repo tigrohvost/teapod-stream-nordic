@@ -102,7 +102,9 @@ class _AppShellState extends ConsumerState<_AppShell>
   @override
   void initState() {
     super.initState();
-    TemporaryExportStore.cleanup().ignore();
+    // No share can be in flight in a fresh process: drop every leftover
+    // export, including share_plus's copies of backups with secrets.
+    TemporaryExportStore.cleanup(olderThan: Duration.zero).ignore();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _replayImports();
