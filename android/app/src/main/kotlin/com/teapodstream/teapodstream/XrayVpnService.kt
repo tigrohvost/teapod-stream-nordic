@@ -349,6 +349,11 @@ class XrayVpnService : VpnService() {
         if (!coordinator.isCurrent(requestId)) return
         sessionId = requestId
         userRequestedDisconnect.set(false)
+        if (!reconnect) {
+            // An explicit connect starts fresh instead of inheriting up to 5 min of backoff.
+            reconnectAttempts.set(0)
+            unhealthyReconnects.set(0)
+        }
         File(filesDir, "user_disconnected.flag").delete()
         showNotification = p.showNotification
         activePlanInfo = p.planInfo
@@ -573,10 +578,13 @@ class XrayVpnService : VpnService() {
                 val attempt = reconnectAttempts.get()
                 val delayMs = RECONNECT_RETRY_BASE_MS * attempt
                 log("warning", "Reconnect attempt $attempt/$MAX_RECONNECT_ATTEMPTS failed, retrying in ${delayMs}ms")
-                try { Thread.sleep(delayMs) } catch (_: InterruptedException) { return }
-                if (coordinator.isCurrent(startOwner) && !userRequestedDisconnect.get() && !isRunning.get()) {
-                    startService(Intent(this, XrayVpnService::class.java).setAction(ACTION_CONNECT_QUICK))
-                }
+                // Scheduled rather than slept on the session queue, so a disconnect
+                // never waits behind it; disconnect/destroy invalidate startOwner.
+                networkChangeHandler.postDelayed({
+                    if (coordinator.isCurrent(startOwner) && !userRequestedDisconnect.get() && !isRunning.get()) {
+                        startService(Intent(this, XrayVpnService::class.java).setAction(ACTION_CONNECT_QUICK))
+                    }
+                }, delayMs)
             }
         }
     }
@@ -1181,6 +1189,7 @@ class XrayVpnService : VpnService() {
             if (userRequestedDisconnect.get() || !isRunning.get()) return@reconnect
             val snapshot = try { NativeSnapshotStore(filesDir).load() } catch (_: Exception) { null }
             if (snapshot == null) { connectionError("INVALID_SNAPSHOT"); return@reconnect }
+            reconnectAttempts.set(0) // each reconnect cycle gets its own retry budget
             stopVpn(resultState = "connecting", reconnecting = true)
             val deadline = android.os.SystemClock.elapsedRealtime() + 30_000
             while (coordinator.isCurrent(owner) && !userRequestedDisconnect.get() &&
