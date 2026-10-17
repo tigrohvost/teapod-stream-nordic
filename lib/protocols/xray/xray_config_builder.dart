@@ -586,13 +586,23 @@ class XrayConfigBuilder {
           in (cfg['outbounds'] as List? ?? []).whereType<Map>()) {
         final stream = outbound['streamSettings'];
         final tls = stream is Map ? stream['tlsSettings'] : null;
-        if (tls is Map &&
-            (tls.containsKey('pinnedPeerCertificateChainSha256') ||
-                tls.containsKey('echSettings'))) {
+        // The old pin key would silently drop certificate pinning: refuse it.
+        if (tls is Map && tls.containsKey('pinnedPeerCertificateChainSha256')) {
           throw const ConnectionPlanException(
             'UNSUPPORTED_TLS_FIELDS',
-            'Подписка использует устаревшие поля TLS pin/ECH; обновите её у поставщика',
+            'Подписка использует устаревшее поле TLS pin; обновите её у поставщика',
           );
+        }
+        // echSettings was never an Xray key (the core ignored it); drop it and
+        // report it in unsupportedSettings instead of refusing the server.
+        if (tls is Map) tls.remove('echSettings');
+      }
+      // Xray routes to the first outbound by default even without a tag, and
+      // nothing can reference an untagged one: tag them so app rules can.
+      for (final outbound
+          in (cfg['outbounds'] as List? ?? []).whereType<Map>()) {
+        if (outbound['tag'] is! String || (outbound['tag'] as String).isEmpty) {
+          outbound['tag'] = _uniqueTag(cfg, 'teapod-untagged');
         }
       }
 
@@ -683,7 +693,7 @@ class XrayConfigBuilder {
           result.addAll(out == 'direct' ? {'outboundTag': directTag} : target);
           return result;
         }),
-        if (options.routing.direction == RoutingDirection.onlySelected) ...[
+        if (options.routing.direction == RoutingDirection.onlySelected)
           {
             'type': 'field',
             'domain': [
@@ -694,18 +704,34 @@ class XrayConfigBuilder {
             ],
             ...target,
           },
-          {
-            'type': 'field',
-            'inboundTag': [socksTag],
-            'outboundTag': directTag,
-          },
-        ],
       ];
       final serverRouting = cfg['routing'] as Map<String, dynamic>? ?? {};
+      final serverRules = serverRouting['rules'] as List? ?? [];
+      // "Only selected" sends everything else direct, which used to skip the
+      // server's own rules entirely. Its blocking rules must still apply.
+      final blackholes = {
+        for (final o in (cfg['outbounds'] as List).whereType<Map>())
+          if (o['protocol'] == 'blackhole') o['tag'],
+      };
+      final onlySelected =
+          options.routing.direction == RoutingDirection.onlySelected;
       cfg['routing'] = {
         ...serverRouting,
         if (_needsIpResolution(options.routing)) 'domainStrategy': 'IPOnDemand',
-        'rules': [...appRules, ...(serverRouting['rules'] as List? ?? [])],
+        'rules': [
+          ...appRules,
+          if (onlySelected) ...[
+            ...serverRules.whereType<Map>().where(
+              (r) => blackholes.contains(r['outboundTag']),
+            ),
+            {
+              'type': 'field',
+              'inboundTag': [socksTag],
+              'outboundTag': directTag,
+            },
+          ],
+          ...serverRules,
+        ],
       };
       validateReferences(cfg);
 
@@ -871,7 +897,9 @@ class XrayConfigBuilder {
         final prefixes = (balancer['selector'] as List? ?? []).cast<String>();
         final matches = outbounds
             .where(
-              (o) => prefixes.any((s) => (o['tag'] as String).startsWith(s)),
+              (o) =>
+                  o['tag'] is String &&
+                  prefixes.any((s) => (o['tag'] as String).startsWith(s)),
             )
             .toList();
         if (matches.any((o) => !proxy(o['tag'] as String))) {
@@ -905,11 +933,14 @@ class XrayConfigBuilder {
 
   static void validateReferences(Map<String, dynamic> cfg) {
     final outbounds = (cfg['outbounds'] as List).cast<Map>();
-    final tags = outbounds.map((o) => o['tag']).toSet();
-    if (tags.contains(null) || tags.length != outbounds.length) {
+    // Untagged outbounds are valid Xray (nothing can reference them); only
+    // duplicates among tagged ones and dangling references are errors.
+    final tagged = outbounds.map((o) => o['tag']).whereType<String>().toList();
+    final tags = tagged.toSet();
+    if (tags.length != tagged.length) {
       throw const ConnectionPlanException(
         'INVALID_OUTBOUND_TAGS',
-        'Теги подключений отсутствуют или повторяются',
+        'Теги подключений повторяются',
       );
     }
     final routing = cfg['routing'] as Map? ?? {};
@@ -974,6 +1005,8 @@ class XrayConfigBuilder {
       },
       unsupportedSettings: [
         if (managed) 'tlsFingerprint',
+        if (managed && config.rawXrayConfig!.contains('"echSettings"'))
+          'echSettings',
         if (ignoresInsecure(config)) 'allowInsecure',
       ],
     );
