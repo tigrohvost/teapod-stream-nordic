@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import zipfile
+from dependencies import load_lock, verify, ROOT
 
 RELEASE_CERT = "05a8e6930d302cfed4817b23930e6deac77b399dbaa9b53218d08adf97c1a407"
 ABI_OFFSETS = {"armeabi-v7a": 1000, "arm64-v8a": 2000, "x86_64": 4000}
@@ -38,6 +39,11 @@ def main():
     candidates = [path for path in (sdk / "build-tools").iterdir()
                   if (path / "apksigner").exists() and (path / "aapt").exists()]
     build_tools = max(candidates, key=lambda path: tuple(map(int, re.findall(r"\d+", path.name))))
+    lock = load_lock()
+    for item in lock['dependencies'].values():
+        verify(ROOT / item['path'], item)
+    with zipfile.ZipFile('android/app/libs/teapod-core.aar') as core:
+        native_hashes = {abi: hashlib.sha256(core.read(f'jni/{abi}/libgojni.so')).hexdigest() for abi in ABI_OFFSETS}
     files = []
     signer = None
     for abi, offset in ABI_OFFSETS.items():
@@ -67,6 +73,17 @@ def main():
             raise SystemExit(f"Debuggable APK: {apk.name}")
         with zipfile.ZipFile(apk) as archive:
             names = set(archive.namelist())
+            build_info = json.loads(archive.read('assets/flutter_assets/assets/binaries/build-info.json'))
+            if build_info['source_sha'] != args.source_sha or build_info['dependencies'] != lock:
+                raise SystemExit('APK source/dependency stamp mismatch')
+            if args.require_release_signature and build_info['dirty']:
+                raise SystemExit('Refusing to publish an APK built from a dirty tree')
+            for key in ('geoip', 'geosite'):
+                item = lock['dependencies'][key]
+                if hashlib.sha256(archive.read('assets/flutter_assets/' + item['path'])).hexdigest() != item['sha256']:
+                    raise SystemExit('Bundled geodata differs from dependency lock')
+            if hashlib.sha256(archive.read(f'lib/{abi}/libgojni.so')).hexdigest() != native_hashes[abi]:
+                raise SystemExit('Bundled core differs from dependency lock')
             required = {
                 f"lib/{abi}/libapp.so", f"lib/{abi}/libflutter.so", f"lib/{abi}/libgojni.so",
                 "assets/flutter_assets/assets/binaries/geoip.dat",
@@ -89,8 +106,11 @@ def main():
     manifest = {
         "version": version, "source_sha": args.source_sha,
         "signer_sha256": signer,
-        "teapod_core": Path(".github/teapod-core-version.txt").read_text().strip(),
+        "teapod_core": lock['dependencies']['core']['version'],
         "teapod_core_sha256": digest(Path("android/app/libs/teapod-core.aar")),
+        "dependencies": lock,
+        "actual_inputs": {key: {"sha256": digest(ROOT / item['path']), "size": (ROOT / item['path']).stat().st_size}
+                          for key, item in lock['dependencies'].items()},
         "apks": files,
     }
     (args.apk_dir / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

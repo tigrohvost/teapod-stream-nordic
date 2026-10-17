@@ -1,142 +1,26 @@
 name: Watch teapod-core
-
-# teapod-core ships as a prebuilt AAR pinned by teapod-core-version.txt,
-# so a new core never reaches users on its own. This watcher bumps the
-# patch version and publishes a release whenever the core moves.
-
 on:
   schedule:
     - cron: '0 */6 * * *'
   workflow_dispatch:
-
+permissions:
+  contents: read
 concurrency:
   group: watch-core
   cancel-in-progress: false
-
-env:
-  GH_REPO: ${{ github.repository }}
-
 jobs:
-  check:
-    name: Check for a new core
+  candidate:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      bumped: ${{ steps.check.outputs.bumped }}
-      tag: ${{ steps.check.outputs.tag }}
-      version: ${{ steps.check.outputs.version }}
-      core: ${{ steps.check.outputs.core }}
-      commit: ${{ steps.check.outputs.commit }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: master
-
-      - name: Compare the released core against the recorded one
-        id: check
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Record candidate for review (never promote automatically)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          STATE=.github/teapod-core-version.txt
-          CORE=$(gh release view -R Wendor/teapod-core --json tagName -q .tagName)
-          PREV=$(cat "$STATE" 2>/dev/null || true)
-          echo "core=$CORE" >> "$GITHUB_OUTPUT"
-          echo "released core: $CORE, recorded: ${PREV:-<none>}"
-
-          git config user.name  'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          # First run: record the current core without cutting a release, so
-          # enabling this workflow does not immediately publish one.
-          if [[ -z "$PREV" ]]; then
-            echo "$CORE" > "$STATE"
-            git add "$STATE"
-            git commit -m "chore: record teapod-core $CORE as the current core"
-            git push origin HEAD:master
-            echo "bumped=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Recorded teapod-core $CORE. The next core release will trigger a build."
-            exit 0
-          fi
-
-          if [[ "$PREV" == "$CORE" ]]; then
-            echo "bumped=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::teapod-core $CORE is already released."
-            exit 0
-          fi
-
-          VERSION=$(grep '^version:' pubspec.yaml | head -1 | cut -d' ' -f2 | cut -d'+' -f1)
-          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
-          # versionCode follows the existing scheme: major*10000 + minor*100 +
-          # patch, so the patch has to stay below 100.
-          if (( PATCH >= 99 )); then
-            echo "::error::Patch $VERSION is at the limit of the versionCode scheme — bump the minor by hand."
-            exit 1
-          fi
-          PATCH=$(( PATCH + 1 ))
-          NEW="$MAJOR.$MINOR.$PATCH"
-          CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
-
-          sed -i "s/^version: .*/version: $NEW+$CODE/" pubspec.yaml
-          echo "$CORE" > "$STATE"
-          git add pubspec.yaml "$STATE"
-          git commit -m "chore: release $NEW with teapod-core $CORE"
-          git tag -a "v$NEW" -m "TeapodStream Nordic $NEW (teapod-core $CORE)"
-          git push origin HEAD:master "refs/tags/v$NEW"
-
-          echo "bumped=true" >> "$GITHUB_OUTPUT"
-          echo "tag=refs/tags/v$NEW" >> "$GITHUB_OUTPUT"
-          echo "version=$NEW" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "::notice::teapod-core $CORE -> releasing $NEW"
-
-  # Pushing a tag with GITHUB_TOKEN does not start another workflow, so the
-  # build is called directly instead of waiting for the tag trigger.
-  release:
-    name: Build and publish
-    needs: check
-    if: needs.check.outputs.bumped == 'true'
-    permissions:
-      contents: write
-    uses: ./.github/workflows/build.yml
-    with:
-      publish_release: true
-      ref: ${{ needs.check.outputs.tag }}
-    secrets: inherit
-
-  # The bump and the tag are pushed before the build runs, so a failed build
-  # would otherwise leave master on a version that has no release and a tag
-  # that points at nothing published. Undo both and let the next run retry.
-  rollback:
-    name: Roll back the failed release
-    needs: [check, release]
-    if: always() && needs.check.outputs.bumped == 'true' && needs.release.result != 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+          gh api repos/Wendor/teapod-core/releases/latest > candidate-core.json
+          python3 tools/core_candidate.py candidate-core.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          ref: master
-          fetch-depth: 0
-
-      - name: Report the failure
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TITLE="teapod-core ${{ needs.check.outputs.core }}: релиз ${{ needs.check.outputs.version }} не собрался"
-          FOUND=$(gh issue list --state open --search "$TITLE in:title" --json number -q '.[0].number')
-          if [[ -z "$FOUND" ]]; then
-            gh issue create --title "$TITLE" --body "Автоматический релиз на ядро \`${{ needs.check.outputs.core }}\` не собрался: [прогон](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
-
-          Бамп версии откачен, тег \`v${{ needs.check.outputs.version }}\` удалён. Следующая проверка попробует снова через 6 часов."
-          fi
-
-      - name: Undo the bump and drop the tag
-        run: |
-          git config user.name  'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git push origin --delete "v${{ needs.check.outputs.version }}" || true
-          git revert --no-edit "${{ needs.check.outputs.commit }}"
-          git push origin HEAD:master
+          name: core-candidate
+          path: candidate-dependencies.lock.json
+          if-no-files-found: ignore

@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "toolchain": {
+    "flutter": "3.41.9",
+    "java": "17",
+    "ndk": "28.2.13676358",
+    "cmake": "3.22.1",
+    "gradle": "8.14",
+    "agp": "8.11.1",
+    "kotlin": "2.2.20"
+  },
+  "dependencies": {
+    "core": {
+      "version": "v1.1.15",
+      "asset": "teapod-core-1.1.15.aar",
+      "url": "https://github.com/Wendor/teapod-core/releases/download/v1.1.15/teapod-core-1.1.15.aar",
+      "sha256": "df699414098a91da67d1fdffdbccbd93edc344b307d26746ece148e9f8250dc9",
+      "size": 39862585,
+      "repository": "Wendor/teapod-core",
+      "path": "android/app/libs/teapod-core.aar"
+    },
+    "geoip": {
+      "version": "202610172205",
+      "asset": "geoip.dat",
+      "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202610172205/geoip.dat",
+      "sha256": "010bfc2e353c5e34e23156004944444ca260bae999e73171bdd7974056557959",
+      "size": 16587403,
+      "repository": "Loyalsoldier/v2ray-rules-dat",
+      "path": "assets/binaries/geoip.dat"
+    },
+    "geosite": {
+      "version": "202610172205",
+      "asset": "geosite.dat",
+      "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202610172205/geosite.dat",
+      "sha256": "15272a5503020d67199bec2e5b1c26b8de98ed0c9fe65d390a5ecd66acf1b430",
+      "size": 11214628,
+      "repository": "Loyalsoldier/v2ray-rules-dat",
+      "path": "assets/binaries/geosite.dat"
+    }
+  }
+}

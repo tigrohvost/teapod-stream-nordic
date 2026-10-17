@@ -8,6 +8,10 @@ on:
     branches: [master]
   workflow_dispatch:
     inputs:
+      source_sha:
+        description: 'Exact source commit to build (optional)'
+        type: string
+        default: ''
       publish_release:
         description: 'Publish a GitHub Release v<pubspec version> with the built APKs'
         type: boolean
@@ -40,9 +44,6 @@ concurrency:
 
 env:
   GH_REPO: ${{ github.repository }}
-  FLUTTER_VERSION: '3.41.9'
-  NDK_VERSION: '28.2.13676358'
-  CMAKE_VERSION: '3.22.1'
 
 jobs:
   analyze:
@@ -53,15 +54,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          ref: ${{ inputs.source_sha || inputs.ref || github.sha }}
 
       - name: Record the tested source commit
         id: source
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Read and verify locked toolchain
+        run: python3 tools/dependencies.py toolchain >> "$GITHUB_ENV"
+
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+          flutter-version: ${{ env.TSN_FLUTTER_VERSION }}
           channel: stable
           cache: true
 
@@ -73,6 +77,7 @@ jobs:
       - run: flutter pub get --enforce-lockfile
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
+      - run: python3 -m unittest discover -s test/tools -p 'test_*.py'
 
   build:
     name: Release APK
@@ -123,15 +128,21 @@ jobs:
           echo "::error::ANDROID_KEYSTORE_BASE64 secret is not set — cannot publish a signed release."
           exit 1
 
+      - name: Read and verify locked Java toolchain
+        run: python3 tools/dependencies.py toolchain >> "$GITHUB_ENV"
+
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ env.TSN_JAVA_VERSION }}
           cache: gradle
+
+      - name: Read and verify locked toolchain
+        run: python3 tools/dependencies.py toolchain >> "$GITHUB_ENV"
 
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+          flutter-version: ${{ env.TSN_FLUTTER_VERSION }}
           channel: stable
           cache: true
 
@@ -139,49 +150,18 @@ jobs:
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
-          "$SDKMANAGER" "ndk;$NDK_VERSION" "cmake;$CMAKE_VERSION"
+          "$SDKMANAGER" "ndk;$TSN_NDK_VERSION" "cmake;$TSN_CMAKE_VERSION"
 
-      - name: Resolve pinned teapod-core release
-        id: core
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG=$(tr -d '\r\n' < .github/teapod-core-version.txt)
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
-            echo "::error::Invalid pinned teapod-core release: $TAG"
-            exit 1
-          fi
-          gh release view "$TAG" -R Wendor/teapod-core > /dev/null
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Cache teapod-core AAR
+      - name: Cache locked binary inputs
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: android/app/libs/teapod-core.aar
-          key: teapod-core-${{ steps.core.outputs.tag }}
+          path: |
+            android/app/libs/teapod-core.aar
+            assets/binaries/*.dat
+          key: binary-inputs-${{ hashFiles('dependencies.lock.json') }}
 
-      # Fat AAR only: teapod-core-<version>.aar, not the per-ABI variants.
-      - name: Download teapod-core AAR
-        id: aar
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ ! -s android/app/libs/teapod-core.aar ]]; then
-            mkdir -p android/app/libs
-            gh release download "${{ steps.core.outputs.tag }}" -R Wendor/teapod-core \
-              --pattern 'teapod-core-[0-9]*.aar' \
-              --output android/app/libs/teapod-core.aar --clobber
-          fi
-          ls -lh android/app/libs/teapod-core.aar
-          echo "sha256=$(sha256sum android/app/libs/teapod-core.aar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Download geodata
-        run: |
-          mkdir -p assets/binaries
-          BASE=https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download
-          curl -fL --retry 3 -o assets/binaries/geoip.dat   "$BASE/geoip.dat"
-          curl -fL --retry 3 -o assets/binaries/geosite.dat "$BASE/geosite.dat"
-          ls -lh assets/binaries
+      - name: Fetch and verify locked inputs (including cache hits)
+        run: python3 tools/dependencies.py fetch
 
       - name: Configure release signing
         if: env.HAS_KEYSTORE == 'true'
@@ -270,47 +250,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: Publish GitHub Release
+      - name: Publish verified assets through a resumable draft
         if: steps.meta.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ steps.meta.outputs.tag }}"
-          VERSION="${{ steps.meta.outputs.version }}"
-          SOURCE_SHA=$(git rev-parse HEAD)
-          # Reusable workflows retain the caller's GITHUB_SHA. The release
-          # must point at the checked out and tested commit instead.
-          if [[ -n "$(git ls-remote origin "refs/tags/$TAG")" ]]; then
-            git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
-            if [[ "$(git rev-parse "$TAG^{commit}")" != "$SOURCE_SHA" ]]; then
-              echo "::error::Release tag $TAG does not point at the built source"
-              exit 1
-            fi
-          fi
-          ASSETS=(build/app/outputs/flutter-apk/release-manifest.json build/app/outputs/flutter-apk/SHA256SUMS)
-          for ABI in arm64-v8a armeabi-v7a x86_64; do
-            APK="build/app/outputs/flutter-apk/teapod-stream-$ABI.apk"
-            if [[ -f "$APK" ]]; then
-              ASSETS+=("$APK")
-            fi
-          done
-          SYMBOLS="${{ steps.symbols.outputs.zip }}"
-          if [[ -n "$SYMBOLS" && -f "$SYMBOLS" ]]; then
-            ASSETS+=("$SYMBOLS")
-          fi
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" "${ASSETS[@]}" --clobber
-          else
-            FLAGS=(--title "TeapodStream Nordic $VERSION" --generate-notes --target "$SOURCE_SHA")
-            # --notes is prepended to the generated notes. The core is a
-            # prebuilt binary pulled at build time, so pin down which one this
-            # release actually shipped.
-            FLAGS+=(--notes "Ядро teapod-core \`${{ steps.core.outputs.tag }}\`, sha256 \`${{ steps.aar.outputs.sha256 }}\`.")
-            if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
-              FLAGS+=(--prerelease)
-            fi
-            gh release create "$TAG" "${FLAGS[@]}" "${ASSETS[@]}"
-          fi
+          FLAGS=()
+          if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then FLAGS+=(--prerelease); fi
+          python3 tools/publish_release.py --source-sha "$(git rev-parse HEAD)" "${FLAGS[@]}"
 
       - name: Remove temporary signing files
         if: always()
