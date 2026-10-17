@@ -12,12 +12,30 @@ import '../core/services/config_repository.dart';
 import '../core/services/import_service.dart';
 import '../core/services/subscription_service.dart';
 import '../core/services/device_service.dart';
+import '../core/services/log_service.dart';
+import '../core/services/settings_service.dart';
 import 'settings_provider.dart';
 export '../core/models/config_state.dart';
 export '../core/services/import_service.dart'
     show ImportPlan, ImportConnectionsResult;
 
+/// Outcome of a subscription add/refresh: usable entries and how many of the
+/// document's entries were left out (unsupported, malformed or rejected).
+class SubscriptionRefreshResult {
+  final int configs;
+  final int skipped;
+  const SubscriptionRefreshResult({
+    required this.configs,
+    required this.skipped,
+  });
+}
+
 final configRepositoryProvider = Provider((ref) => ConfigRepository());
+
+/// Device identity for providers that limit devices (X-Hwid headers).
+final hwidInfoProvider = Provider<Future<HwidDeviceInfo?> Function()>(
+  (ref) => DeviceService.getHwidInfo,
+);
 final subscriptionServiceProvider = Provider((ref) => SubscriptionService());
 final configValidationProvider = Provider<Future<void> Function(VpnConfig)>(
   (ref) => (config) async {
@@ -38,16 +56,96 @@ final configValidationProvider = Provider<Future<void> Function(VpnConfig)>(
 class ConfigNotifier extends AsyncNotifier<ConfigState> {
   final _refreshGeneration = <String, int>{};
   ConfigRepository get _repository => ref.read(configRepositoryProvider);
-  Future<void> _validate(VpnConfig config) => ImportService(
-    validateConfig: ref.read(configValidationProvider),
-  ).validate(config);
+  ImportService get _validator =>
+      ImportService(validateConfig: ref.read(configValidationProvider));
+  Future<void> _validate(VpnConfig config) => _validator.validate(config);
+
+  /// Drops invalid entries; fails only when nothing usable remains.
+  Future<(List<VpnConfig>, int)> _usable(
+    SubscriptionFetchResult fetched,
+  ) async {
+    final checked = await _validator.validateEach(fetched.configs);
+    if (checked.valid.isEmpty) {
+      throw SubscriptionService.rejection(
+        checked.firstError,
+        'Подписка не содержит корректных подключений',
+      );
+    }
+    return (checked.valid, fetched.skippedItems + checked.invalid);
+  }
+
+  /// Every subscription download sends the user's HWID and User-Agent
+  /// settings, whichever screen or import channel started it.
+  Future<SubscriptionFetchResult> Function(String) _fetcher({
+    bool allowSelfSigned = false,
+  }) {
+    Future<(AppSettings, HwidDeviceInfo?)>? identity;
+    Future<(AppSettings, HwidDeviceInfo?)> resolve() async {
+      final settings = await ref.read(settingsProvider.future);
+      final hwid = settings.hwidEnabled
+          ? await ref.read(hwidInfoProvider)()
+          : null;
+      return (settings, hwid);
+    }
+
+    return (url) async {
+      final (settings, hwid) = await (identity ??= resolve());
+      return ref
+          .read(subscriptionServiceProvider)
+          .fetchSubscription(
+            url,
+            allowSelfSigned: allowSelfSigned,
+            hwid: hwid,
+            userAgent: settings.subUserAgent,
+          );
+    };
+  }
+
+  void _logSkipped(String name, int skipped) {
+    if (skipped == 0) return;
+    ref
+        .read(logServiceProvider.notifier)
+        .addWarning(
+          'Подписка «$name»: пропущено подключений: $skipped '
+          '(неподдерживаемые или некорректные)',
+          source: 'subscription',
+        );
+  }
 
   @override
-  Future<ConfigState> build() => _repository.load();
+  Future<ConfigState> build() async {
+    var state = await _repository.load();
+    _reportRecovery();
+    if (state.configs.any((c) => c.probeStatus == ProbeStatus.running)) {
+      // The app was killed mid-batch: those results will never arrive.
+      ConfigState settle(ConfigState s) => s.copyWith(
+        configs: [
+          for (final c in s.configs)
+            c.probeStatus == ProbeStatus.running
+                ? c.copyWith(probeStatus: ProbeStatus.unknown)
+                : c,
+        ],
+      );
+      try {
+        state = await _repository.commit(settle);
+      } catch (_) {
+        state = settle(state);
+      }
+    }
+    return state;
+  }
+
+  /// A recovered snapshot must be visible, not silently replaced.
+  void _reportRecovery() {
+    final notice = _repository.takeRecoveryNotice();
+    if (notice == null) return;
+    ref.read(logServiceProvider.notifier).addError(notice, source: 'storage');
+  }
 
   Future<void> _commit(ConfigState Function(ConfigState) update) async {
     await future;
     final next = await _repository.commit(update);
+    _reportRecovery();
     if (ref.mounted && next.revision >= (state.value?.revision ?? -1)) {
       state = AsyncData(next);
     }
@@ -110,7 +208,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     );
   }
 
-  Future<void> addSubscriptionFromUrl(
+  Future<SubscriptionRefreshResult> addSubscriptionFromUrl(
     String url, {
     String? name,
     bool allowSelfSigned = false,
@@ -124,27 +222,8 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         .firstOrNull;
     final generation = (_refreshGeneration[url] ?? 0) + 1;
     _refreshGeneration[url] = generation;
-    final settings = await ref.read(settingsProvider.future);
-    final hwid = settings.hwidEnabled
-        ? await DeviceService.getHwidInfo()
-        : null;
-    final fetched = await ref
-        .read(subscriptionServiceProvider)
-        .fetchSubscription(
-          url,
-          allowSelfSigned: allowSelfSigned,
-          hwid: hwid,
-          userAgent: settings.subUserAgent,
-        );
-    if (fetched.configs.isEmpty ||
-        fetched.configs.any((c) => c.validate() != null)) {
-      throw const FormatException(
-        'Подписка не содержит корректных подключений',
-      );
-    }
-    for (final config in fetched.configs) {
-      await _validate(config);
-    }
+    final fetched = await _fetcher(allowSelfSigned: allowSelfSigned)(url);
+    final (usable, skipped) = await _usable(fetched);
     await _commit((current) {
       if (_refreshGeneration[url] != generation) return current;
       final existing = current.subscriptions
@@ -157,21 +236,20 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
           c.connectionIdentity: c,
       };
       final keys = <String>{};
-      final fresh = fetched.configs
-          .where((c) => keys.add(c.connectionIdentity))
-          .map((c) {
-            final previous = old[c.connectionIdentity];
-            return c.copyWith(
-              id: previous?.id,
-              subscriptionId: subId,
-              latencyMs: previous?.latencyMs,
-              lastPingedAt: previous?.lastPingedAt,
-              probeStatus: previous?.probeStatus ?? ProbeStatus.unknown,
-              lastSuccessfulLatencyMs: previous?.lastSuccessfulLatencyMs,
-              lastSuccessfulPingAt: previous?.lastSuccessfulPingAt,
-            );
-          })
-          .toList();
+      final fresh = usable.where((c) => keys.add(c.connectionIdentity)).map((
+        c,
+      ) {
+        final previous = old[c.connectionIdentity];
+        return c.copyWith(
+          id: previous?.id,
+          subscriptionId: subId,
+          latencyMs: previous?.latencyMs,
+          lastPingedAt: previous?.lastPingedAt,
+          probeStatus: previous?.probeStatus ?? ProbeStatus.unknown,
+          lastSuccessfulLatencyMs: previous?.lastSuccessfulLatencyMs,
+          lastSuccessfulPingAt: previous?.lastSuccessfulPingAt,
+        );
+      }).toList();
       final sub = Subscription(
         id: subId,
         name:
@@ -209,6 +287,8 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         clearActive: active != null && carried == null,
       );
     });
+    _logSkipped(name ?? original?.name ?? fetched.profileTitle ?? '', skipped);
+    return SubscriptionRefreshResult(configs: usable.length, skipped: skipped);
   }
 
   Future<void> renameSubscription(String id, String name) => _commit(
@@ -228,18 +308,8 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         .first;
     final generation = (_refreshGeneration['replace:$id'] ?? 0) + 1;
     _refreshGeneration['replace:$id'] = generation;
-    final fetched = await ref
-        .read(subscriptionServiceProvider)
-        .fetchSubscription(url);
-    if (fetched.configs.isEmpty ||
-        fetched.configs.any((c) => c.validate() != null)) {
-      throw const FormatException(
-        'Подписка не содержит корректных подключений',
-      );
-    }
-    for (final config in fetched.configs) {
-      await _validate(config);
-    }
+    final fetched = await _fetcher()(url);
+    final (usable, skipped) = await _usable(fetched);
     await _commit((c) {
       if (_refreshGeneration['replace:$id'] != generation ||
           !c.subscriptions.any((s) => s.id == id && s.url == original.url)) {
@@ -247,7 +317,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
       }
       _refreshGeneration[original.url] =
           (_refreshGeneration[original.url] ?? 0) + 1;
-      final configs = fetched.configs
+      final configs = usable
           .map((e) => e.copyWith(subscriptionId: id))
           .toList();
       final selected = c.activeConfig?.subscriptionId == id;
@@ -274,6 +344,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         clearActive: selected && active == null,
       );
     });
+    _logSkipped(original.name, skipped);
   }
 
   Future<void> removeSubscription(String id) async {
@@ -304,8 +375,15 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
       if (!(await future).subscriptions.any((s) => s.id == sub.id)) continue;
       try {
         await addSubscriptionFromUrl(sub.url);
-      } catch (_) {
-        /* Keep the working snapshot. */
+      } catch (e) {
+        // The working snapshot is kept; the failure must still be visible.
+        ref
+            .read(logServiceProvider.notifier)
+            .addWarning(
+              'Не удалось обновить подписку «${sub.name}»: '
+              '${e is FormatException ? e.message : e}',
+              source: 'subscription',
+            );
       }
     }
   }
@@ -333,12 +411,11 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
   Future<ImportPlan> prepareImport(
     ConnectionsBundle bundle, {
     bool allowSelfSigned = false,
+    bool activateSingle = false,
   }) => ImportService(
     validateConfig: ref.read(configValidationProvider),
-    fetchSubscription: (url) => ref
-        .read(subscriptionServiceProvider)
-        .fetchSubscription(url, allowSelfSigned: allowSelfSigned),
-  ).prepare(bundle);
+    fetchSubscription: _fetcher(allowSelfSigned: allowSelfSigned),
+  ).prepare(bundle, activateSingle: activateSingle);
 
   Future<ImportConnectionsResult> applyImport(ImportPlan plan) async {
     late ImportConnectionsResult result;
@@ -362,6 +439,16 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     Set<String> identities,
     ProbeStatus status,
     DateTime started,
+  ) async {
+    // Managed-only groups produce empty batches; don't rewrite the snapshot.
+    if (identities.isEmpty) return;
+    await _markProbes(identities, status, started);
+  }
+
+  Future<void> _markProbes(
+    Set<String> identities,
+    ProbeStatus status,
+    DateTime started,
   ) => _commit(
     (c) => c.copyWith(
       configs: c.configs
@@ -381,6 +468,14 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
   );
 
   Future<void> batchUpdatePingResults(
+    Map<String, int?> results,
+    DateTime pingedAt,
+  ) async {
+    if (results.isEmpty) return;
+    await _applyPingResults(results, pingedAt);
+  }
+
+  Future<void> _applyPingResults(
     Map<String, int?> results,
     DateTime pingedAt,
   ) => _commit(
@@ -429,31 +524,54 @@ final configProvider = AsyncNotifierProvider<ConfigNotifier, ConfigState>(
   ConfigNotifier.new,
 );
 
+/// Ordering for automatic selection and "sort by ping":
+/// 1. a fresh successful probe, by its latency;
+/// 2. the last successful latency we know (probe running, stale or
+///    cancelled), by that latency;
+/// 3. everything else.
+/// Ties keep the provider's order (use [sortByProbe]); never an identity
+/// hash, which made the choice arbitrary while probes were running.
 int compareProbeResults(VpnConfig a, VpnConfig b, DateTime now) {
-  final aFresh = a.hasFreshProbe(now), bFresh = b.hasFreshProbe(now);
-  if (aFresh != bFresh) return aFresh ? -1 : 1;
-  if (aFresh) {
-    final latency = a.latencyMs!.compareTo(b.latencyMs!);
-    if (latency != 0) return latency;
-  }
-  return a.connectionIdentity.compareTo(b.connectionIdentity);
+  int? lastKnown(VpnConfig c) =>
+      c.probeStatus == ProbeStatus.failed ? null : c.lastSuccessfulLatencyMs;
+  int rank(VpnConfig c) => c.hasFreshProbe(now)
+      ? 0
+      : lastKnown(c) != null
+      ? 1
+      : 2;
+  final ra = rank(a), rb = rank(b);
+  if (ra != rb) return ra.compareTo(rb);
+  return switch (ra) {
+    0 => a.latencyMs!.compareTo(b.latencyMs!),
+    1 => lastKnown(a)!.compareTo(lastKnown(b)!),
+    _ => 0,
+  };
+}
+
+/// Stable [compareProbeResults] sort: equal entries keep the provider order.
+List<VpnConfig> sortByProbe(Iterable<VpnConfig> configs, DateTime now) {
+  final indexed = configs.indexed.toList()
+    ..sort((a, b) {
+      final byProbe = compareProbeResults(a.$2, b.$2, now);
+      return byProbe != 0 ? byProbe : a.$1.compareTo(b.$1);
+    });
+  return [for (final (_, config) in indexed) config];
 }
 
 final effectiveConfigProvider = Provider<VpnConfig?>((ref) {
   final cs = ref.watch(configProvider).value;
   if (cs == null) return null;
   if (cs.activeSubscriptionId != null) {
-    final now = DateTime.now();
-    final candidates =
-        cs.configs
-            .where(
-              (c) =>
-                  c.subscriptionId == cs.activeSubscriptionId &&
-                  c.probeStatus != ProbeStatus.failed,
-            )
-            .toList()
-          ..sort((a, b) => compareProbeResults(a, b, now));
-    return candidates.firstOrNull;
+    final group = cs.configs
+        .where((c) => c.subscriptionId == cs.activeSubscriptionId)
+        .toList();
+    final healthy = group.where((c) => c.probeStatus != ProbeStatus.failed);
+    // If every probe failed (e.g. measured while offline) still offer the
+    // provider's first server instead of disabling connect.
+    return sortByProbe(
+      healthy.isEmpty ? group : healthy,
+      DateTime.now(),
+    ).firstOrNull;
   }
   return cs.activeConfig;
 });

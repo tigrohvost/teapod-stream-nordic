@@ -16,6 +16,7 @@ class DeeplinkHandler {
   Future<bool> handleUri(String uri, {bool allowSelfSigned = false}) async {
     Object? bundle;
     String? source;
+    var pastedLinks = false;
     if (uri.trim().startsWith('teapod://')) {
       final parsed = DeeplinkRouter.parse(uri);
       if (parsed == null) {
@@ -33,6 +34,7 @@ class DeeplinkHandler {
       );
     } else {
       bundle = ImportService.fromText(uri);
+      pastedLinks = !uri.trimLeft().startsWith('{');
     }
     if (bundle == null) {
       throw const FormatException('Не удалось загрузить данные по ссылке');
@@ -60,6 +62,7 @@ class DeeplinkHandler {
     final plan = await notifier.prepareImport(
       bundle as ConnectionsBundle,
       allowSelfSigned: allowSelfSigned,
+      activateSingle: pastedLinks,
     );
     final current = await ref.read(configProvider.future);
     final preview = ImportService.apply(current, plan).$2;
@@ -71,16 +74,20 @@ class DeeplinkHandler {
       '${plan.label == null ? '' : '${plan.label}\n'}'
           'Добавить: ${preview.addedConfigs} подключений, ${preview.addedSubscriptions} подписок\n'
           'Пропустить дубликаты: ${preview.skippedConfigs}\n'
-          'Некорректные элементы: ${preview.invalidItems}',
+          'Некорректные элементы: ${preview.invalidItems}'
+          '${preview.skippedSubscriptionEntries == 0 ? '' : '\nПропущено в подписках: ${preview.skippedSubscriptionEntries}'}',
       source,
-      canImport: preview.addedConfigs + preview.addedSubscriptions > 0,
+      canImport:
+          preview.addedConfigs + preview.addedSubscriptions > 0 ||
+          plan.activate,
     );
     if (!confirmed || !context.mounted) return false;
     final result = await notifier.applyImport(plan);
     if (context.mounted) {
       _message(
         'Добавлено: ${result.addedConfigs} подключений, '
-        '${result.addedSubscriptions} подписок; пропущено: ${result.skippedConfigs + result.invalidItems}',
+        '${result.addedSubscriptions} подписок; пропущено: '
+        '${result.skippedConfigs + result.invalidItems + result.skippedSubscriptionEntries}',
       );
     }
     return true;

@@ -159,8 +159,10 @@ void main() {
         throwsStateError,
       );
       expect((await second.load()).configs.length, 2);
+      // A tampered snapshot is kept aside instead of being a dead end.
       secure.raw = secure.raw.replaceFirst('renamed', 'tampered');
-      await expectLater(second.load(), throwsFormatException);
+      await second.load();
+      expect(second.takeRecoveryNotice(), contains('повреждён'));
     },
   );
 
@@ -252,8 +254,19 @@ void main() {
       () => ProfileBundle.fromJson({...profile.toJson(), 'version': 99}),
       throwsFormatException,
     );
+    // Imports stay strict; stored settings are read leniently.
     expect(
-      () => AppSettings.fromJson({'vpnMode': 'unknown'}),
+      () => AppSettings.validateJson({'vpnMode': 'unknown'}),
+      throwsFormatException,
+    );
+    expect(
+      () => ProfileBundle.fromJson({
+        ...profile.toJson(),
+        'profile': {
+          ...profile.profile.toJson(),
+          'settings': {'vpnMode': 'unknown'},
+        },
+      }),
       throwsFormatException,
     );
   });

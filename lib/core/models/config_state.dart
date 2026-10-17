@@ -77,6 +77,37 @@ class ConfigState {
     'activeSubscriptionId': activeSubscriptionId,
   };
 
+  /// Like [ConfigState.fromJson], but an entry that fails to parse is dropped
+  /// instead of making the whole snapshot unreadable. Returns how many were
+  /// dropped so the caller can keep the raw snapshot aside.
+  static (ConfigState, int) fromJsonLenient(Map<String, dynamic> json) {
+    if (json['schema'] != 1) {
+      throw const FormatException('Unsupported connection snapshot');
+    }
+    var dropped = 0;
+    List<T> each<T>(Object? list, T Function(Map<String, dynamic>) parse) {
+      final result = <T>[];
+      for (final item in list is List ? list : const []) {
+        try {
+          result.add(parse(item as Map<String, dynamic>));
+        } catch (_) {
+          dropped++;
+        }
+      }
+      return result;
+    }
+
+    final state = ConfigState(
+      revision: json['revision'] as int? ?? 0,
+      configs: each(json['configs'], VpnConfig.fromJson),
+      subscriptions: each(json['subscriptions'], Subscription.fromJson),
+      pins: each(json['pins'], PinnedRef.fromJson),
+      activeConfigId: json['activeConfigId'] as String?,
+      activeSubscriptionId: json['activeSubscriptionId'] as String?,
+    );
+    return (state, dropped);
+  }
+
   factory ConfigState.fromJson(Map<String, dynamic> json) {
     if (json['schema'] != 1) {
       throw const FormatException('Unsupported connection snapshot');

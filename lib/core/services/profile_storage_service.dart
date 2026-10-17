@@ -12,6 +12,19 @@ typedef ProfileSnapshot = ({
 
 class ProfileStorageService {
   final _secure = StorageSecureService();
+
+  /// Corrections applied while reading stored settings (unknown or
+  /// out-of-range values); drained and logged by the profile provider.
+  static final _issues = <String>{};
+  static List<String> takeLoadIssues() {
+    final issues = _issues.toList();
+    _issues.clear();
+    return issues;
+  }
+
+  static Profile _parse(Object? json) =>
+      Profile.fromJson(json as Map<String, dynamic>, onIssue: _issues.add);
+
   static Future<void> _tail = Future.value();
   Future<T> _serial<T>(Future<T> Function() task) {
     final result = _tail.then((_) => task());
@@ -29,9 +42,7 @@ class ProfileStorageService {
     if (json is List) {
       final prefs = await SharedPreferences.getInstance();
       return (
-        profiles: json
-            .map((p) => Profile.fromJson(p as Map<String, dynamic>))
-            .toList(),
+        profiles: json.map(_parse).toList(),
         activeProfileId: prefs.getString('active_profile_id') ?? 'default',
         revision: 0,
       );
@@ -40,9 +51,7 @@ class ProfileStorageService {
       throw const FormatException('Неверный снимок профилей');
     }
     return (
-      profiles: (json['profiles'] as List)
-          .map((p) => Profile.fromJson(p as Map<String, dynamic>))
-          .toList(),
+      profiles: (json['profiles'] as List).map(_parse).toList(),
       activeProfileId: json['activeProfileId'] as String,
       revision: json['revision'] as int,
     );

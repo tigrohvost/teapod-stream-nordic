@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'profile.dart';
+import '../services/settings_service.dart';
 import 'vpn_config.dart';
 import 'connections_bundle.dart';
 import '../services/config_storage_service.dart' show Subscription;
@@ -46,6 +47,12 @@ class ProfileBundle {
       'configs': json['configs'] ?? [],
       'subscriptions': json['subscriptions'] ?? [],
     });
+    // Imports stay strict: a foreign bundle with unknown values is refused
+    // with a clear message instead of being silently normalized.
+    final profileJson = json['profile'] as Map<String, dynamic>;
+    AppSettings.validateJson(
+      profileJson['settings'] as Map<String, dynamic>? ?? const {},
+    );
     return ProfileBundle(
       version: json['version'] as int? ?? 1,
       exportedAt: DateTime.parse(json['exportedAt'] as String),
