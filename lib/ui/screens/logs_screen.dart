@@ -75,7 +75,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
     }
     final configs = (await ref.read(configProvider.future));
     final settings = await ref.read(settingsProvider.future);
-    final mode = ref.read(vpnProvider).appliedMode;
+    final mode = ref.read(vpnProvider.notifier).lastAppliedMode;
     final failure = ref.read(vpnProvider).error ?? 'нет';
     final versions = await XrayEngine().getBinaryVersions();
     final package = await PackageInfo.fromPlatform();
