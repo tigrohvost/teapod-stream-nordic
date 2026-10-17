@@ -290,6 +290,11 @@ class XrayVpnService : VpnService() {
                     if (intent?.action != ACTION_CONNECT_QUICK && File(filesDir, "user_disconnected.flag").exists()) {
                         setState(idleState()); return@execute
                     }
+                    // START_STICKY restart in the process that just saw onRevoke: wait for
+                    // an explicit connect (always-on restarts carry an intent and still run).
+                    if (intent == null && userRequestedDisconnect.get()) {
+                        setState(idleState()); return@execute
+                    }
                     NativeSnapshotStore(filesDir).load()
                 }
                 if (snapshot == null) { setState(idleState()); openApp(); return@execute }
@@ -305,8 +310,9 @@ class XrayVpnService : VpnService() {
         return START_STICKY
     }
 
-    private fun requestStop() {
-        try { File(filesDir, "user_disconnected.flag").createNewFile() } catch (_: Exception) {}
+    /** [persist] records an explicit user disconnect so boot/always-on don't undo it. */
+    private fun requestStop(persist: Boolean = true) {
+        if (persist) try { File(filesDir, "user_disconnected.flag").createNewFile() } catch (_: Exception) {}
         coordinator.execute {
             setState("disconnecting")
             stopVpn(explicit = true)
@@ -751,7 +757,13 @@ class XrayVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        disconnectActive()
+        // Android revoked the VPN (another VPN app, system settings) — not a user
+        // disconnect. Stop this session and suppress sticky restarts in this process,
+        // but leave the persisted flag alone so always-on and boot auto-start keep working.
+        log("info", "VPN revoked by system")
+        userRequestedDisconnect.set(true)
+        coordinator.invalidate()
+        requestStop(persist = false)
     }
 
     /** Закрывает TUN-sink kill switch'а, если сервис уже остановлен. */
