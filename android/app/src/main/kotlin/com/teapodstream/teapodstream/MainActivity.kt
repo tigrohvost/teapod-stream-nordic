@@ -64,8 +64,7 @@ class MainActivity : FlutterActivity() {
                                     call.argument<String>("ssPrefix"),
                                     call.argument<List<String>>("includedPackages") ?: emptyList(),
                                     android.os.Process.myUid()) { packageManager.getPackageUid(it, 0) }
-                                XrayVpnService.prepareBinaries(this)
-                                teapodcore.Teapodcore.initCoreEnv(NativeGeoStore.path(this), "")
+                                teapodcore.Teapodcore.initCoreEnv(NativeGeoStore.activePath(this), "")
                                 CoreConfigValidator.validate(config)
                                 runOnUiThread { result.success(null) }
                             } catch (e: Exception) {

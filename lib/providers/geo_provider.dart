@@ -59,6 +59,11 @@ class GeoNotifier extends Notifier<GeoState> {
               lastUpdated: DateTime.tryParse(
                 manifest['verifiedAt'] as String? ?? '',
               ),
+              // Set by the native store when it replaced a damaged active pair.
+              updateError: manifest['restoredFrom'] == null
+                  ? null
+                  : 'Геобаза была повреждена и заменена последней проверенной '
+                        'копией. Обновите геобазы.',
             );
     } catch (_) {
       if (ref.mounted) state = GeoMissing();

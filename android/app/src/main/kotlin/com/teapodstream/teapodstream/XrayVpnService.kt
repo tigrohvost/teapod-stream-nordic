@@ -343,8 +343,8 @@ class XrayVpnService : VpnService() {
         // Validate before replacing a held TUN or changing the applied policy.
         AllowedApplications.validatePolicy(p.vpnMode, p.proxyOnly, p.ssPrefix, p.includedPackages,
             android.os.Process.myUid()) { packageManager.getPackageUid(it, 0) }
-        prepareBinaries(this)
-        Teapodcore.initCoreEnv(NativeGeoStore.path(this), "")
+        // Also covers startVpn below: the geodata path is set once per start.
+        Teapodcore.initCoreEnv(NativeGeoStore.activePath(this, ::log), "")
         CoreConfigValidator.validate(snapshot.config)
         if (!coordinator.isCurrent(requestId)) return
         sessionId = requestId
@@ -444,14 +444,6 @@ class XrayVpnService : VpnService() {
             } else {
                 xrayConfig
             }
-
-            // Save the config as received, not finalConfig: CONNECT_QUICK re-applies
-            // ssPrefix on load, and a saved copy already pointing at this session's
-            // 127.0.0.1:<port> prefix proxy would chain the next one to a dead port.
-            prepareBinaries(this)
-
-            // Set up xray asset path before starting
-            Teapodcore.initCoreEnv(NativeGeoStore.path(this), "")
 
             if (proxyOnly) {
                 // Proxy-only mode: start Xray SOCKS proxy without TUN tunnel or tun2socks

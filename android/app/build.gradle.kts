@@ -87,6 +87,8 @@ android {
 dependencies {
     implementation(files("libs/teapod-core.aar"))
     testImplementation("junit:junit:4.13.2")
+    // android.jar only stubs org.json; unit tests of the native stores need the real one.
+    testImplementation("org.json:json:20240303")
 }
 
 flutter {
