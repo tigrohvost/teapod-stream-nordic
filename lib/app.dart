@@ -102,7 +102,9 @@ class _AppShellState extends ConsumerState<_AppShell>
   @override
   void initState() {
     super.initState();
-    TemporaryExportStore.cleanup().ignore();
+    // No share can be in flight in a fresh process: drop every leftover
+    // export, including share_plus's copies of backups with secrets.
+    TemporaryExportStore.cleanup(olderThan: Duration.zero).ignore();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _replayImports();
@@ -354,7 +356,7 @@ class _ConsoleTabBar extends ConsumerWidget {
                           textAlign: TextAlign.center,
                           style: AppTheme.mono(
                             size: 10,
-                            color: active ? t.accent : t.textMuted,
+                            color: active ? t.accentText : t.textMuted,
                             letterSpacing: 0.5,
                           ),
                         ),

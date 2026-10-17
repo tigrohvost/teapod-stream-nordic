@@ -75,7 +75,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
     }
     final configs = (await ref.read(configProvider.future));
     final settings = await ref.read(settingsProvider.future);
-    final mode = ref.read(vpnProvider).appliedMode;
+    final mode = ref.read(vpnProvider.notifier).lastAppliedMode;
     final failure = ref.read(vpnProvider).error ?? 'нет';
     final versions = await XrayEngine().getBinaryVersions();
     final package = await PackageInfo.fromPlatform();
@@ -93,6 +93,13 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
         c.rawUri ?? '',
         c.publicKey ?? '',
         c.obfsPassword ?? '',
+        c.wsPath ?? '',
+        c.wsHost ?? '',
+        c.grpcServiceName ?? '',
+        c.shortId ?? '',
+        c.spiderX ?? '',
+        c.postQuantumKey ?? '',
+        ...DiagnosticRedactor.secretsFromXrayJson(c.rawXrayConfig),
       ],
     ];
     final report = DiagnosticRedactor.redact(
@@ -126,7 +133,11 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
       ),
     );
     if (confirmed != true) return;
-    final tmp = await TemporaryExportStore.create(report, extension: 'txt');
+    final tmp = await TemporaryExportStore.create(
+      report,
+      prefix: 'teapod_report_',
+      extension: 'txt',
+    );
     await Share.shareXFiles([
       XFile(tmp.path, mimeType: 'text/plain'),
     ], subject: 'TeapodStream Diagnostics');

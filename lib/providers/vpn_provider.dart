@@ -61,10 +61,14 @@ class VpnState2 {
       isDisconnecting ||
       connectionState == VpnState.stopBlocked;
 
+  static const _keep = Object();
+
+  /// [error] is kept unless passed; pass null to clear it. Stats ticks call
+  /// copyWith every second and must not wipe a visible error.
   VpnState2 copyWith({
     VpnState? connectionState,
     VpnStats? stats,
-    String? error,
+    Object? error = _keep,
     String? appliedMode,
     String? appliedSource,
     int? appliedRevision,
@@ -76,7 +80,7 @@ class VpnState2 {
     return VpnState2(
       connectionState: connectionState ?? this.connectionState,
       stats: stats ?? this.stats,
-      error: error,
+      error: identical(error, _keep) ? this.error : error as String?,
       appliedMode: appliedMode ?? this.appliedMode,
       appliedSource: appliedSource ?? this.appliedSource,
       appliedRevision: appliedRevision ?? this.appliedRevision,
@@ -117,6 +121,15 @@ class VpnNotifier extends Notifier<VpnState2> {
   Timer? _subRefreshTimer;
   bool _isPinging = false;
   DateTime? _connectedAt;
+  // A "stop not confirmed" error is about the stop itself: once native
+  // reports disconnected, the stop did finish and the error is stale.
+  bool _stopErrorShown = false;
+  String _lastAppliedMode = 'unknown';
+
+  /// The mode of the current session, or of the last one after it ended —
+  /// diagnostics are usually exported after a failure or disconnect.
+  String get lastAppliedMode =>
+      state.appliedMode != 'unknown' ? state.appliedMode : _lastAppliedMode;
 
   @override
   VpnState2 build() {
@@ -255,7 +268,18 @@ class VpnNotifier extends Notifier<VpnState2> {
     if (_statsVisible == visible) return;
     _statsVisible = visible;
     _statsGeneration++;
-    if (visible && state.isConnected) _loadStatsSnapshot();
+    if (visible && state.isConnected) {
+      _dropStaleHistory();
+      _loadStatsSnapshot();
+    }
+  }
+
+  /// Points from before a pause/hidden period must not be joined to new
+  /// ones as if no time had passed. The native snapshot normally refills the
+  /// chart; if it loses the race with a live event, the chart restarts.
+  void _dropStaleHistory() {
+    if (state.stats.speedHistory.isEmpty) return;
+    state = state.copyWith(stats: state.stats.copyWith(speedHistory: const []));
   }
 
   void _handleEvent(Map<String, dynamic> event) {
@@ -328,6 +352,8 @@ class VpnNotifier extends Notifier<VpnState2> {
             _ => 'Не удалось применить конфигурацию ($code)',
           },
         );
+        _stopErrorShown =
+            code == 'NATIVE_STOP_TIMEOUT' || code == 'NATIVE_STOP_FAILED';
       case 'stats':
         if (_appActive && _statsVisible && state.isConnected) {
           _handleStats(event);
@@ -357,7 +383,12 @@ class VpnNotifier extends Notifier<VpnState2> {
 
   void _onNativeState(VpnState nativeState, {bool isReconnect = false}) {
     if (nativeState == VpnState.connected) {
-      state = state.copyWith(appliedFingerprint: _pendingFingerprint);
+      // A fresh connection clears errors of the attempt; re-adopting a live
+      // session (resume, replay) keeps e.g. a rejected-config notice.
+      state = state.copyWith(
+        appliedFingerprint: _pendingFingerprint,
+        error: state.connectionState == VpnState.connected ? state.error : null,
+      );
       _pendingFingerprint = null;
       _connectedAt ??= DateTime.now();
       _connectTimeout?.cancel();
@@ -399,6 +430,7 @@ class VpnNotifier extends Notifier<VpnState2> {
             connectionState: VpnState.stopBlocked,
             error: 'Остановка ядра не подтверждена. Дождитесь завершения.',
           );
+          _stopErrorShown = true;
           _disconnectTimeout = null;
         }
       });
@@ -411,18 +443,24 @@ class VpnNotifier extends Notifier<VpnState2> {
         nativeState == VpnState.blocked ||
         nativeState == VpnState.stopBlocked) {
       _pendingFingerprint = null;
+      if (state.appliedMode != 'unknown') _lastAppliedMode = state.appliedMode;
+      final stopFinished =
+          nativeState == VpnState.disconnected && _stopErrorShown;
+      if (nativeState != VpnState.stopBlocked) _stopErrorShown = false;
       // Reset stats on disconnect/error/blocked
       _statsGeneration++;
       state = VpnState2(
         connectionState: nativeState,
         // Reset stats including speedHistory
         stats: const VpnStats(),
-        error:
-            state.error ??
-            (nativeState == VpnState.error ? 'Ошибка подключения' : null),
+        error: stopFinished
+            ? null
+            : state.error ??
+                  (nativeState == VpnState.error ? 'Ошибка подключения' : null),
       );
     } else {
-      state = state.copyWith(connectionState: nativeState);
+      // A new phase starts without the previous phase's error.
+      state = state.copyWith(connectionState: nativeState, error: null);
     }
   }
 
@@ -480,6 +518,7 @@ class VpnNotifier extends Notifier<VpnState2> {
     if (state.isBusy || state.isConnected) return;
 
     final attempt = ++_attempt;
+    _stopErrorShown = false;
     state = state.copyWith(
       connectionState: VpnState.awaitingPermission,
       error: null,
@@ -605,7 +644,10 @@ class VpnNotifier extends Notifier<VpnState2> {
     }
 
     // Update state synchronously
-    state = state.copyWith(connectionState: VpnState.disconnecting);
+    state = state.copyWith(
+      connectionState: VpnState.disconnecting,
+      error: null,
+    );
 
     // A missed native completion is uncertain; keep new starts blocked.
     _disconnectTimeout?.cancel();
@@ -615,6 +657,7 @@ class VpnNotifier extends Notifier<VpnState2> {
           connectionState: VpnState.stopBlocked,
           error: 'Остановка ядра не подтверждена. Дождитесь завершения.',
         );
+        _stopErrorShown = true;
         _disconnectTimeout = null;
       }
     });
@@ -630,6 +673,7 @@ class VpnNotifier extends Notifier<VpnState2> {
         connectionState: VpnState.stopBlocked,
         error: 'Остановка ядра не подтверждена. Дождитесь завершения.',
       );
+      _stopErrorShown = true;
       _disconnectTimeout?.cancel();
       _disconnectTimeout = null;
     }
@@ -645,9 +689,13 @@ class VpnNotifier extends Notifier<VpnState2> {
 
   /// Resumes polling (and resyncs state) when the app returns to foreground.
   Future<void> onAppResumed() async {
+    final wasPaused = !_appActive;
     _appActive = true;
     await syncNativeState();
-    if (state.isConnected) _loadStatsSnapshot();
+    if (state.isConnected) {
+      if (wasPaused) _dropStaleHistory();
+      _loadStatsSnapshot();
+    }
   }
 
   /// Syncs Flutter state from the native service: on app start and resume, and

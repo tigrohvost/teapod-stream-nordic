@@ -70,7 +70,8 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
   @override
   Widget build(BuildContext context) {
     final configStateAsync = ref.watch(configProvider);
-    final vpnState = ref.watch(vpnProvider);
+    // Only the connection state: the whole VpnState2 changes every stats tick.
+    final connectionState = ref.watch(vpnConnectionStateProvider);
     final t = Theme.of(context).extension<TeapodTokens>()!;
 
     ref.listen<AsyncValue<ConfigState>>(configProvider, (prev, next) {
@@ -144,7 +145,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
                     style: AppTheme.mono(size: 12, color: t.danger),
                   ),
                 ),
-                data: (cs) => _buildBody(context, cs, vpnState, t),
+                data: (cs) => _buildBody(context, cs, connectionState, t),
               ),
             ),
           ],
@@ -156,20 +157,20 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
   Widget _buildBody(
     BuildContext context,
     ConfigState cs,
-    VpnState2 vpnState,
+    VpnState connectionState,
     TeapodTokens t,
   ) {
     if (cs.configs.isEmpty && cs.subscriptions.isEmpty) {
       return _EmptyState(onAdd: () => _openAddConfig(context));
     }
-    if (_hideGroups) return _buildFlatList(context, cs, vpnState, t);
-    return _buildGroupedList(context, cs, vpnState, t);
+    if (_hideGroups) return _buildFlatList(context, cs, connectionState, t);
+    return _buildGroupedList(context, cs, connectionState, t);
   }
 
   Widget _buildFlatList(
     BuildContext context,
     ConfigState cs,
-    VpnState2 vpnState,
+    VpnState connectionState,
     TeapodTokens t,
   ) {
     final allConfigs = _applySort([
@@ -211,7 +212,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
   Widget _buildGroupedList(
     BuildContext context,
     ConfigState cs,
-    VpnState2 vpnState,
+    VpnState connectionState,
     TeapodTokens t,
   ) {
     final standalone = _applySort(cs.standaloneConfigs);
@@ -306,7 +307,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
             activeConfigId: cs.activeConfigId,
             isActiveSubscription: cs.activeSubscriptionId == subs[i].id,
             isExpanded: _expandedSubs.contains(subs[i].id),
-            vpnState: vpnState.connectionState,
+            vpnState: connectionState,
             canReorderGroup: canReorderSubs,
             sortMode: _sortMode && !_sortByPing,
             onToggle: () {

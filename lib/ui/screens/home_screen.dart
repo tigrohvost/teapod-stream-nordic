@@ -78,10 +78,12 @@ class HomeScreen extends ConsumerWidget {
                 onDisabledTap: () => ref.read(tabIndexProvider.notifier).set(1),
               ),
               if (vpnState.appliedMode == 'proxyOnly' && isConn)
-                const Padding(
-                  padding: EdgeInsets.all(12),
+                Padding(
+                  padding: const EdgeInsets.all(12),
                   child: Text(
                     'Статистика TUN недоступна в режиме SOCKS-прокси',
+                    textAlign: TextAlign.center,
+                    style: AppTheme.mono(size: 10, color: t.textMuted),
                   ),
                 ),
               Consumer(
@@ -95,6 +97,9 @@ class HomeScreen extends ConsumerWidget {
                         ? '$protoLabel · $serverHint'
                         : 'нет конфигурации',
                     isConnected: isConn && vpnState.appliedMode != 'proxyOnly',
+                    // SOCKS-only has no TUN counters: show "—", not zeros.
+                    statsAvailable:
+                        !(isConn && vpnState.appliedMode == 'proxyOnly'),
                     pingMs: pingMs,
                     history: stats.speedHistory,
                     onServerTap: () => showServerPicker(context, ref),
@@ -239,7 +244,11 @@ class _HeroPanel extends StatelessWidget {
                     style: AppTheme.mono(size: 9, color: t.textDim),
                   ),
                 if (isConn && vpnState.error != null)
-                  Text(vpnState.error!, textAlign: TextAlign.center),
+                  Text(
+                    vpnState.error!,
+                    textAlign: TextAlign.center,
+                    style: AppTheme.mono(size: 10, color: t.danger),
+                  ),
                 const SizedBox(height: 20),
                 _PowerCore(
                   t: t,
@@ -483,6 +492,7 @@ class _PowerCoreState extends State<_PowerCore>
       enabled: !busy,
       child: Pressable(
         onTap: busy ? null : widget.onTap,
+        shape: BoxShape.circle,
         child: SizedBox(
           width: outerSize,
           height: outerSize,
@@ -719,6 +729,7 @@ class _MetricsGrid extends StatelessWidget {
   final String serverName;
   final String serverHint;
   final bool isConnected;
+  final bool statsAvailable;
   final int? pingMs;
   final List<SpeedPoint> history;
   final VoidCallback onServerTap;
@@ -729,13 +740,16 @@ class _MetricsGrid extends StatelessWidget {
     required this.serverName,
     required this.serverHint,
     required this.isConnected,
+    this.statsAvailable = true,
     required this.pingMs,
     required this.history,
     required this.onServerTap,
   });
 
-  String _bitrateValue(int bps) => VpnStats.formatSpeed(bps).split(' ').first;
-  String _bitrateUnit(int bps) => VpnStats.formatSpeed(bps).split(' ').last;
+  String _bitrateValue(int bps) =>
+      statsAvailable ? VpnStats.formatSpeed(bps).split(' ').first : '—';
+  String? _bitrateUnit(int bps) =>
+      statsAvailable ? VpnStats.formatSpeed(bps).split(' ').last : null;
 
   @override
   Widget build(BuildContext context) {
@@ -816,6 +830,7 @@ class _MetricsGrid extends StatelessWidget {
           stats: stats,
           samples: sparkSamples,
           peakMbps: peakDown,
+          available: statsAvailable,
         ),
       ],
     );
@@ -978,20 +993,28 @@ class _SparklineRow extends StatelessWidget {
   final VpnStats stats;
   final List<double> samples;
   final double peakMbps;
+  final bool available;
 
   const _SparklineRow({
     required this.t,
     required this.stats,
     required this.samples,
     required this.peakMbps,
+    this.available = true,
   });
 
   @override
   Widget build(BuildContext context) {
-    final upTotal = VpnStats.formatBytes(stats.uploadBytes);
-    final downTotal = VpnStats.formatBytes(stats.downloadBytes);
-    final duration = VpnStats.formatDuration(stats.connectedDuration);
-    final peakStr = VpnStats.formatSpeed((peakMbps * 1024 * 1024).round());
+    final upTotal = available ? VpnStats.formatBytes(stats.uploadBytes) : '—';
+    final downTotal = available
+        ? VpnStats.formatBytes(stats.downloadBytes)
+        : '—';
+    final duration = available
+        ? VpnStats.formatDuration(stats.connectedDuration)
+        : '—';
+    final peakStr = available
+        ? VpnStats.formatSpeed((peakMbps * 1024 * 1024).round())
+        : '—';
 
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 10),

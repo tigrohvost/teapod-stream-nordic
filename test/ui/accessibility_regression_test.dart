@@ -7,6 +7,7 @@ import 'package:teapodstream/ui/theme/app_colors.dart';
 import 'package:teapodstream/ui/theme/app_theme.dart';
 import 'package:teapodstream/ui/widgets/settings_shared.dart';
 import 'package:teapodstream/ui/widgets/live_sparkline.dart';
+import 'package:teapodstream/ui/widgets/pressable.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -99,22 +100,65 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
-  for (final samples in <List<double>>[
-    [],
-    [1],
-    [1, 2],
-    [double.nan, double.infinity, -1],
-  ]) {
-    testWidgets('sparkline safely paints $samples', (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SizedBox(
-            width: 200,
-            child: LiveSparkline(samples: samples, color: Colors.blue),
+  testWidgets('a round button reacts only inside its circle', (tester) async {
+    var taps = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.build(Brightness.dark, AppColors.accentCyan),
+        home: Center(
+          child: Pressable(
+            shape: BoxShape.circle,
+            onTap: () => taps++,
+            child: const SizedBox(width: 200, height: 200),
           ),
         ),
-      );
-      expect(tester.takeException(), isNull);
-    });
-  }
+      ),
+    );
+    final box = tester.getRect(find.byType(Pressable));
+    await tester.tapAt(box.topLeft + const Offset(8, 8));
+    expect(taps, 0, reason: 'corner of the square box');
+    await tester.tapAt(box.center);
+    expect(taps, 1);
+  });
+  test('sparkline points stay finite and inside the chart', () {
+    const size = Size(200, 42);
+    expect(LiveSparkline.pointsFor([], size), isEmpty);
+    expect(LiveSparkline.pointsFor([1], size), [const Offset(100, 21)]);
+
+    final two = LiveSparkline.pointsFor([1, 2], size);
+    expect(two.map((p) => p.dx), [0, 200]);
+    expect(two.last.dy, lessThan(two.first.dy), reason: 'higher is faster');
+    expect(two.last.dy, 2, reason: 'peak touches the top padding');
+
+    final garbage = LiveSparkline.pointsFor([
+      double.nan,
+      double.infinity,
+      -1,
+    ], size);
+    expect(garbage, hasLength(3));
+    for (final p in garbage) {
+      expect(p.dx.isFinite && p.dy.isFinite, isTrue);
+      expect(p.dy, 40, reason: 'invalid samples sit on the baseline');
+    }
+    expect(
+      LiveSparkline.pointsFor([1, 2], const Size(double.infinity, 42)),
+      isEmpty,
+    );
+  });
+  testWidgets('sparkline paints invalid samples without errors', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 200,
+          child: LiveSparkline(
+            samples: const [double.nan, double.infinity, -1],
+            color: Colors.blue,
+          ),
+        ),
+      ),
+    );
+    expect(tester.takeException(), isNull);
+  });
 }

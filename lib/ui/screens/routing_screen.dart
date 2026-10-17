@@ -22,7 +22,7 @@ class RoutingScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settingsAsync = ref.watch(settingsProvider);
-    final isConnected = ref.watch(vpnProvider).isConnected;
+    final isConnected = ref.watch(vpnProvider.select((v) => v.isConnected));
     final geoState = ref.watch(geoProvider);
     final geoMissing = geoState is GeoMissing || geoState is GeoError;
 
@@ -1185,7 +1185,7 @@ class _SquareChip extends StatelessWidget {
         ? t.line
         : t.line;
     final textColor = active
-        ? t.accent
+        ? t.accentText
         : ghost
         ? t.textMuted
         : t.textDim;

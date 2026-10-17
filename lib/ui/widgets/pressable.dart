@@ -9,6 +9,9 @@ class Pressable extends StatefulWidget {
 
   /// Цвет подсветки; по умолчанию `TeapodTokens.accentFade`.
   final Color? pressedColor;
+
+  /// Форма подсветки и области нажатия; circle — для круглых кнопок.
+  final BoxShape shape;
   final Widget child;
 
   const Pressable({
@@ -16,6 +19,7 @@ class Pressable extends StatefulWidget {
     this.onTap,
     this.onLongPress,
     this.pressedColor,
+    this.shape = BoxShape.rectangle,
     required this.child,
   });
 
@@ -36,6 +40,25 @@ class _PressableState extends State<Pressable> {
     final t = Theme.of(context).extension<TeapodTokens>()!;
     final color = widget.pressedColor ?? t.accentFade;
     final interactive = widget.onTap != null || widget.onLongPress != null;
+    Widget detector = GestureDetector(
+      onTap: widget.onTap,
+      onLongPress: widget.onLongPress,
+      onTapDown: interactive ? (_) => _set(true) : null,
+      onTapUp: interactive ? (_) => _set(false) : null,
+      onTapCancel: interactive ? () => _set(false) : null,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 90),
+        decoration: BoxDecoration(
+          color: _pressed || _focused ? color : Colors.transparent,
+          shape: widget.shape,
+        ),
+        child: widget.child,
+      ),
+    );
+    // ClipOval also limits hit testing to the circle: corners of the square
+    // box around a round button are not part of it.
+    if (widget.shape == BoxShape.circle) detector = ClipOval(child: detector);
     return FocusableActionDetector(
       enabled: interactive,
       onShowFocusHighlight: (value) => setState(() => _focused = value),
@@ -54,19 +77,7 @@ class _PressableState extends State<Pressable> {
       child: Semantics(
         button: interactive,
         enabled: interactive,
-        child: GestureDetector(
-          onTap: widget.onTap,
-          onLongPress: widget.onLongPress,
-          onTapDown: interactive ? (_) => _set(true) : null,
-          onTapUp: interactive ? (_) => _set(false) : null,
-          onTapCancel: interactive ? () => _set(false) : null,
-          behavior: HitTestBehavior.opaque,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 90),
-            color: _pressed || _focused ? color : Colors.transparent,
-            child: widget.child,
-          ),
-        ),
+        child: detector,
       ),
     );
   }

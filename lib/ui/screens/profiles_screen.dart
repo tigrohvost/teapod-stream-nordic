@@ -576,7 +576,7 @@ void _showExportSheet(
             _ExportRow(
               t: t,
               label: 'Шаблон файлом',
-              hint: '${profile.name.toLowerCase().replaceAll(' ', '_')}.json',
+              hint: 'teapod_template_….json · без секретов',
               onTap: () async {
                 Navigator.pop(ctx);
                 await _shareAsFile(context, profile, bundle);
@@ -616,6 +616,7 @@ void _showExportSheet(
                   ref
                       .read(profileProvider.notifier)
                       .exportBundle(profile.id, includeConnections: true),
+                  fullBackup: true,
                 );
               },
             ),
@@ -627,17 +628,27 @@ void _showExportSheet(
   );
 }
 
+/// Template and full backup must stay distinguishable after they leave the
+/// app: different file names, share text and a `kind` marker (ignored by
+/// ProfileBundle.fromJson on import).
 Future<void> _shareAsFile(
   BuildContext context,
   Profile profile,
-  ProfileBundle bundle,
-) async {
+  ProfileBundle bundle, {
+  bool fullBackup = false,
+}) async {
   final file = await TemporaryExportStore.create(
-    const JsonEncoder.withIndent('  ').convert(bundle.toJson()),
+    const JsonEncoder.withIndent(
+      '  ',
+    ).convert({...bundle.toJson(), 'kind': fullBackup ? 'backup' : 'template'}),
+    prefix: fullBackup ? 'teapod_backup_' : 'teapod_template_',
   );
-  await Share.shareXFiles([
-    XFile(file.path),
-  ], text: 'Teapod profile: ${profile.name}');
+  await Share.shareXFiles(
+    [XFile(file.path)],
+    text: fullBackup
+        ? 'Teapod: полная резервная копия «${profile.name}» (содержит пароли и ключи)'
+        : 'Teapod: шаблон профиля «${profile.name}» (без секретов)',
+  );
 }
 
 void _confirmDelete(
