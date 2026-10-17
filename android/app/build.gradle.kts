@@ -48,6 +48,10 @@ android {
         jniLibs {
             // x86 is not supported by teapod-core
             excludes.add("lib/x86/**")
+            // teapod-core ships libgojni.so already stripped; AGP's re-strip still
+            // rewrites the ELF header, so the APK would no longer carry the bytes
+            // pinned in dependencies.lock.json (verify_release_apks.py compares them).
+            keepDebugSymbols.add("**/libgojni.so")
         }
     }
 
