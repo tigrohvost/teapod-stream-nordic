@@ -70,8 +70,11 @@ class PublishResumeTests(unittest.TestCase):
         with patch.object(sys, 'argv', ['publish_release.py', '--source-sha', SHA]), \
                 patch.object(publish_release, 'run', self.fake_run), \
                 patch.object(publish_release, 'api_json', return_value=pages), \
-                patch.object(publish_release.subprocess, 'run'):
+                patch.object(publish_release.subprocess, 'run') as verifier:
             publish_release.main()
+        command = verifier.call_args.args[0]
+        self.assertIn('--require-release-signature', command)
+        self.assertIn('--require-clean-source', command)
 
     def commands(self, verb):
         return [c for c in self.calls if c[:3] == ('gh', 'release', verb)]

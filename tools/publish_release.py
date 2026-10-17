@@ -64,7 +64,7 @@ def main():
     if run('git', 'rev-parse', 'HEAD') != args.source_sha or run('git', 'status', '--porcelain'):
         raise SystemExit('Publication requires the exact clean source commit')
     subprocess.run(['python3', 'tools/verify_release_apks.py', '--source-sha', args.source_sha,
-                    '--require-release-signature'], check=True)
+                    '--require-release-signature', '--require-clean-source'], check=True)
     directory = Path('build/app/outputs/flutter-apk')
     manifest = json.loads((directory / 'release-manifest.json').read_text())
     version = manifest['version']

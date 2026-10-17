@@ -3,15 +3,26 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 fail() { echo "$*" >&2; exit 1; }
-command -v python3 >/dev/null || fail 'Python 3 is required'
+command -v python3 >/dev/null || fail 'Python 3.11+ is required'
+# tools/*.py use hashlib.file_digest (3.11+).
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
+  || fail "Python 3.11+ is required, found $(python3 --version 2>&1)"
+
+lock_value() {
+  python3 -c 'import json,sys; print(json.load(open("dependencies.lock.json"))["toolchain"][sys.argv[1]])' "$1"
+}
 
 setup_environment() {
+  local java_version flutter_version
+  java_version="$(lock_value java)"
+  flutter_version="$(lock_value flutter)"
+  local java_help="Install JDK $java_version (e.g. Temurin: https://adoptium.net/temurin/releases/?version=$java_version) and point JAVA_HOME at it"
   if [[ -z "${JAVA_HOME:-}" ]]; then
     if [[ "$(uname -s)" == Darwin && -x /usr/libexec/java_home ]]; then
-      JAVA_HOME="$(/usr/libexec/java_home -v 17)"
+      JAVA_HOME="$(/usr/libexec/java_home -v "$java_version")"
     elif command -v java >/dev/null; then
       JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")"
-    else fail 'Set JAVA_HOME to a JDK 17 installation'; fi
+    else fail "No JDK found. $java_help"; fi
   fi
   if [[ -z "${ANDROID_HOME:-}" ]]; then
     ANDROID_HOME="${ANDROID_SDK_ROOT:-}"
@@ -25,10 +36,17 @@ setup_environment() {
   fi
   ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
   export JAVA_HOME ANDROID_HOME ANDROID_SDK_ROOT
-  [[ -x "$JAVA_HOME/bin/java" && -d "$ANDROID_HOME/platforms" ]] || fail 'JDK or Android SDK is missing'
-  command -v flutter >/dev/null || fail 'Add the locked Flutter SDK to PATH'
-  python3 -c 'import json,os,subprocess,re; lock=json.load(open("dependencies.lock.json")); out=subprocess.check_output([os.environ["JAVA_HOME"]+"/bin/java","-version"],stderr=subprocess.STDOUT,text=True); assert re.search(r"version \""+lock["toolchain"]["java"]+r"[.\"]",out), "JDK does not match dependencies.lock.json"'
-  flutter --version --machine | python3 -c 'import json,sys; v=json.load(sys.stdin); lock=json.load(open("dependencies.lock.json")); assert v["frameworkVersion"] == lock["toolchain"]["flutter"], "Flutter SDK does not match dependencies.lock.json"'
+  [[ -x "$JAVA_HOME/bin/java" ]] || fail "JAVA_HOME=$JAVA_HOME has no bin/java. $java_help"
+  [[ -d "$ANDROID_HOME/platforms" ]] || fail "No Android SDK at ANDROID_HOME=$ANDROID_HOME"
+  local found
+  found="$("$JAVA_HOME/bin/java" -version 2>&1 | head -1)"
+  [[ "$found" =~ version\ \"$java_version[.\"] ]] \
+    || fail "JDK $java_version is required (dependencies.lock.json), JAVA_HOME has: $found. $java_help"
+  command -v flutter >/dev/null \
+    || fail "Flutter $flutter_version is required: https://docs.flutter.dev/release/archive — add its bin/ to PATH"
+  found="$(flutter --version --machine | python3 -c 'import json,sys; print(json.load(sys.stdin)["frameworkVersion"])')"
+  [[ "$found" == "$flutter_version" ]] \
+    || fail "Flutter $flutter_version is required (dependencies.lock.json), PATH has $found"
 }
 
 prepare() {
@@ -54,7 +72,10 @@ case "${1:-help}" in
         mv "build/app/outputs/flutter-apk/app-$abi-release.apk" "build/app/outputs/flutter-apk/teapod-stream-$abi.apk"
       done
       (cd android && ./gradlew :app:testReleaseUnitTest)
+      # A local release may come from a dirty tree; only publishing (CI) requires a clean one.
       python3 tools/verify_release_apks.py --source-sha "$(git rev-parse HEAD)" --require-release-signature
+      [[ -z "$(git status --porcelain)" ]] \
+        || echo 'Note: built from uncommitted changes — fine locally, not publishable.' >&2
     fi
     ;;
   run|run-release)
