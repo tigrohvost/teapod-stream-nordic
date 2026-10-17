@@ -21,6 +21,11 @@ internal class NativeSnapshotStore(private val dir: File) {
         catch (e: Exception) { file.failWrite(stream); throw e }
     }
 
+    /** Whether a connection can be restored without the UI (boot, tile, always-on). */
+    fun hasStoredConnection(): Boolean =
+        File(dir, "connection_good.json").exists() || File(dir, "connection_good.json.bak").exists() ||
+            (File(dir, "xray_config.json").exists() && File(dir, "last_connection_meta.json").exists())
+
     fun load(): NativeSnapshot? {
         val file = AtomicFile(File(dir, "connection_good.json"))
         if (!file.baseFile.exists() && !File(dir, "connection_good.json.bak").exists()) {

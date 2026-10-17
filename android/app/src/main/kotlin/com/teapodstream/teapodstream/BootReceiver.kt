@@ -17,8 +17,9 @@ class BootReceiver : BroadcastReceiver() {
         // Don't auto-start if user explicitly disconnected before reboot
         if (File(context.filesDir, "user_disconnected.flag").exists()) return
 
-        // Don't auto-start if there's no saved connection config
-        if (!File(context.filesDir, "xray_config.json").exists()) return
+        // Don't auto-start without a stored connection (current snapshot or the
+        // pre-snapshot xray_config.json + params pair).
+        if (!NativeSnapshotStore(context.filesDir).hasStoredConnection()) return
 
         context.startForegroundService(
             Intent(context, XrayVpnService::class.java).apply {
