@@ -74,14 +74,18 @@ class HeartbeatLoopTest {
 
         override val running: Boolean get() = up
         @Volatile var directReachable = true
+        @Volatile var underlyingNetwork = true
+        @Volatile var tunRunning = true
         @Volatile var activeConnections = 0L
+        @Volatile var lastRxMs = 0L
         override val tunModeActive = true
         override fun socksAuth() = "" to ""
-        override fun isTunRunning() = true
+        override fun isTunRunning() = tunRunning
         override fun tunActiveConnections() = activeConnections
-        override fun tunLastRxActivityMs() = 0L
+        override fun tunLastRxActivityMs() = lastRxMs
         override fun tunStatsLine() = ""
         override fun hasDirectInternet() = directReachable
+        override fun hasUnderlyingNetwork() = underlyingNetwork
         override fun requestReconnect(afterProbeFailure: Boolean) {
             if (afterProbeFailure) streak.incrementAndGet()
             reconnects.add(System.currentTimeMillis())
@@ -95,8 +99,13 @@ class HeartbeatLoopTest {
     private var monitor: HeartbeatMonitor? = null
     private var deps: FakeDeps? = null
 
-    private fun start(isReconnect: Boolean = false, streak: Int = 0, backoff: (Int) -> Long): FakeDeps {
-        val d = FakeDeps(proxy.port, backoff).also { it.streak.set(streak) }
+    private fun start(
+        isReconnect: Boolean = false,
+        streak: Int = 0,
+        setup: (FakeDeps) -> Unit = {},
+        backoff: (Int) -> Long,
+    ): FakeDeps {
+        val d = FakeDeps(proxy.port, backoff).also { it.streak.set(streak); setup(it) }
         deps = d
         monitor = HeartbeatMonitor(d, intervalMs = 50, warmupTimeoutMs = 100, retryDelayMs = 10)
             .also { it.start(isReconnect) }
@@ -144,16 +153,57 @@ class HeartbeatLoopTest {
         assertTrue(at!! - startedAt >= 1_000L)
     }
     @Test fun `unknown direct reachability never disables warmup deadline`() {
-        val d = start(isReconnect = true) { 0L }
-        d.directReachable = false
+        // 1.6.6 skipped every failure while its TCP/53 check failed, so a network that
+        // filters it never recovered a dead tunnel.
+        val d = start(isReconnect = true, setup = { it.directReachable = false }) { 0L }
+        assertNotNull(d.reconnects.poll(3, TimeUnit.SECONDS))
+    }
+
+    @Test fun `missing underlying network defers recovery until it returns`() {
+        val d = start(setup = { it.underlyingNetwork = false }) { 0L }
+        assertNull("nothing to reconnect over", d.reconnects.poll(500, TimeUnit.MILLISECONDS))
+        d.underlyingNetwork = true
         assertNotNull(d.reconnects.poll(3, TimeUnit.SECONDS))
     }
 
     @Test fun `more than 200 healthy connections do not cause reconnect`() {
         proxy.healthy = true
-        val d = start { 0L }
-        d.activeConnections = 500
-        assertNull(d.reconnects.poll(500, TimeUnit.MILLISECONDS))
+        val d = start(setup = { it.activeConnections = 500; it.lastRxMs = System.currentTimeMillis() }) { 0L }
+        repeat(10) {
+            d.lastRxMs = System.currentTimeMillis()
+            assertNull(d.reconnects.poll(50, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    @Test fun `stalled TUN reconnects although the probe passes`() {
+        proxy.healthy = true
+        val d = start(setup = {
+            it.activeConnections = 2
+            it.lastRxMs = System.currentTimeMillis() - HeartbeatMonitor.TUN_STALL_TIMEOUT_MS - 5_000
+        }) { 0L }
+        assertNotNull(d.reconnects.poll(3, TimeUnit.SECONDS))
+        assertEquals("a stall is not a probe failure", 0, d.streak.get())
+    }
+
+    @Test fun `a repeating stall backs off`() {
+        proxy.healthy = true
+        val d = start(setup = {
+            it.activeConnections = 2
+            it.lastRxMs = System.currentTimeMillis() - HeartbeatMonitor.TUN_STALL_TIMEOUT_MS - 5_000
+        }) { 0L }
+        assertNotNull(d.reconnects.poll(3, TimeUnit.SECONDS))
+        monitor!!.start() // the reconnected session, still without TUN traffic
+        assertNull("next stall waits out the backoff", d.reconnects.poll(500, TimeUnit.MILLISECONDS))
+        d.lastRxMs = System.currentTimeMillis() - HeartbeatMonitor.TUN_STALL_TIMEOUT_MS -
+            HeartbeatMonitor.backoffForStreak(1) - 5_000
+        assertNotNull(d.reconnects.poll(3, TimeUnit.SECONDS))
+    }
+
+    @Test fun `dead tun2socks restarts without probe-failure backoff`() {
+        proxy.healthy = true
+        val d = start(streak = 3, setup = { it.tunRunning = false }) { if (it > 0) 60_000L else 0L }
+        assertNotNull(d.reconnects.poll(1, TimeUnit.SECONDS))
+        assertEquals("a local fault does not grow the unreachable-server streak", 3, d.streak.get())
     }
 
 }

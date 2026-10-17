@@ -11,9 +11,10 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * Every [INTERVAL_MS] it checks, in order:
  *  1. tun2socks process liveness (the SOCKS5 probe bypasses TUN, so it alone can't see a crash);
- *  2. independent HTTP 204 destinations through SOCKS5;
- *  3. end-to-end tunnel connectivity via a SOCKS5 CONNECT + HTTP 204 probe ([probeSocks5]);
- *  4. TUN-layer stall: probe passes but no data reaches the TUN interface ([TUN_STALL_TIMEOUT_MS]).
+ *  2. end-to-end tunnel connectivity via a SOCKS5 CONNECT + HTTP 204 probe ([probeSocks5]),
+ *     alternating between independent destinations;
+ *  3. TUN-layer stall: probe passes but no data reaches the TUN interface ([TUN_STALL_TIMEOUT_MS]),
+ *     with its own backoff so a quiet-but-healthy tunnel isn't rebuilt over and over.
  *
  * All interaction with the service and the Go core goes through [Deps], so the
  * monitor can be unit-tested with fakes.
@@ -198,6 +199,9 @@ internal class HeartbeatMonitor(
     private val destination = AtomicInteger(0)
     private fun monotonicMs() = System.nanoTime() / 1_000_000
     private val failures = AtomicInteger(0)
+    // TUN-stall reconnects that were not followed by fresh TUN traffic. Survives
+    // restarts of the loop (one per session) so a repeating stall backs off.
+    private val stallReconnects = AtomicInteger(0)
 
     fun start(isReconnect: Boolean = false) {
         deps.log("info", "startHeartbeat (isReconnect=$isReconnect)")
@@ -255,9 +259,11 @@ internal class HeartbeatMonitor(
                     // has crashed or its goroutines are deadlocked.
                     // Skip in proxy-only mode: tun2socks is intentionally not started.
                     if (deps.tunModeActive && !deps.isTunRunning()) {
+                        // A dead tun2socks is a local fault, not an unreachable server:
+                        // restart now rather than wait out the probe-failure backoff.
                         deps.log("warning", "tun2socks not running, reconnecting")
-                        if (reconnectAfterProbeFailure("Local TUN runtime stopped")) break
-                        continue
+                        if (owner == generation.get()) deps.requestReconnect(afterProbeFailure = false)
+                        break
                     }
 
                     probeOverSocket(port, owner)
@@ -265,6 +271,7 @@ internal class HeartbeatMonitor(
                     failures.set(0)
                     noInternetStreak = 0
                     reconnectDueAt = 0L
+                    if (isTunRxFresh()) stallReconnects.set(0)
                     successCount++
                     if (successCount % 5 == 0) {
                         val activeConns = if (deps.tunModeActive) deps.tunActiveConnections() else 0L
@@ -291,11 +298,16 @@ internal class HeartbeatMonitor(
                             val now = System.currentTimeMillis()
                             val idleSec = (now - lastRx) / 1000
                             val activeConns by lazy { deps.tunActiveConnections() }
+                            val stallSec = (TUN_STALL_TIMEOUT_MS + backoffForStreak(stallReconnects.get())) / 1000
                             when {
-                                idleSec >= TUN_STALL_TIMEOUT_MS / 1000 && activeConns >= 2 -> {
-                                    deps.log("debug", "TUN idle for ${idleSec}s (conns=$activeConns); probe passes, retaining session")
-                                    // Idle connection count is not proof of a failed tunnel.
-                                    // The independent probe just succeeded; retain this session.
+                                // The probe bypasses tun2socks, so it can't see this: no
+                                // progress on the TUN for longer than xray keeps idle
+                                // connections, while connections are still held.
+                                idleSec >= stallSec && activeConns >= 2 -> {
+                                    deps.log("warning", "TUN stall: no data for ${idleSec}s (conns=$activeConns), reconnecting")
+                                    stallReconnects.incrementAndGet()
+                                    if (owner == generation.get()) deps.requestReconnect(afterProbeFailure = false)
+                                    break
                                 }
                                 idleSec >= 60 && activeConns >= 2 && now - lastStallWarnAt >= 60_000 -> {
                                     deps.log("warning", "TUN rx idle for ${idleSec}s (conns=$activeConns)")
