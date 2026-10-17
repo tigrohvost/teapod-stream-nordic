@@ -314,7 +314,10 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
       );
     });
     if (!applied) return null;
-    if (_current?.activeProfileId == id) {
+    final active = _current?.activeProfile;
+    if (active?.id == id) {
+      // BootReceiver reads the preferences mirror, not the profile snapshot.
+      await SettingsService().save(active!.settings, updateProfile: false);
       ref.invalidate(settingsProvider);
       await ref.read(settingsProvider.future);
     }
