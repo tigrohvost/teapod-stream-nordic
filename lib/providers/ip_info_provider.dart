@@ -24,7 +24,10 @@ class IpInfo {
 class IpInfoNotifier extends AsyncNotifier<IpInfo?> {
   @override
   Future<IpInfo?> build() async {
-    final enabled = ref.watch(settingsProvider).value?.ipLookupEnabled ?? false;
+    // Only the lookup toggle: any other settings change must not re-query.
+    final enabled = ref.watch(
+      settingsProvider.select((s) => s.value?.ipLookupEnabled ?? false),
+    );
     if (!enabled) return null;
     final connectionState = ref.watch(vpnConnectionStateProvider);
     if (connectionState == VpnState.connected) {
