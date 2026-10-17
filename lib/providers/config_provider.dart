@@ -114,8 +114,24 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
 
   @override
   Future<ConfigState> build() async {
-    final state = await _repository.load();
+    var state = await _repository.load();
     _reportRecovery();
+    if (state.configs.any((c) => c.probeStatus == ProbeStatus.running)) {
+      // The app was killed mid-batch: those results will never arrive.
+      ConfigState settle(ConfigState s) => s.copyWith(
+        configs: [
+          for (final c in s.configs)
+            c.probeStatus == ProbeStatus.running
+                ? c.copyWith(probeStatus: ProbeStatus.unknown)
+                : c,
+        ],
+      );
+      try {
+        state = await _repository.commit(settle);
+      } catch (_) {
+        state = settle(state);
+      }
+    }
     return state;
   }
 
@@ -423,6 +439,16 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
     Set<String> identities,
     ProbeStatus status,
     DateTime started,
+  ) async {
+    // Managed-only groups produce empty batches; don't rewrite the snapshot.
+    if (identities.isEmpty) return;
+    await _markProbes(identities, status, started);
+  }
+
+  Future<void> _markProbes(
+    Set<String> identities,
+    ProbeStatus status,
+    DateTime started,
   ) => _commit(
     (c) => c.copyWith(
       configs: c.configs
@@ -442,6 +468,14 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
   );
 
   Future<void> batchUpdatePingResults(
+    Map<String, int?> results,
+    DateTime pingedAt,
+  ) async {
+    if (results.isEmpty) return;
+    await _applyPingResults(results, pingedAt);
+  }
+
+  Future<void> _applyPingResults(
     Map<String, int?> results,
     DateTime pingedAt,
   ) => _commit(
@@ -490,31 +524,54 @@ final configProvider = AsyncNotifierProvider<ConfigNotifier, ConfigState>(
   ConfigNotifier.new,
 );
 
+/// Ordering for automatic selection and "sort by ping":
+/// 1. a fresh successful probe, by its latency;
+/// 2. the last successful latency we know (probe running, stale or
+///    cancelled), by that latency;
+/// 3. everything else.
+/// Ties keep the provider's order (use [sortByProbe]); never an identity
+/// hash, which made the choice arbitrary while probes were running.
 int compareProbeResults(VpnConfig a, VpnConfig b, DateTime now) {
-  final aFresh = a.hasFreshProbe(now), bFresh = b.hasFreshProbe(now);
-  if (aFresh != bFresh) return aFresh ? -1 : 1;
-  if (aFresh) {
-    final latency = a.latencyMs!.compareTo(b.latencyMs!);
-    if (latency != 0) return latency;
-  }
-  return a.connectionIdentity.compareTo(b.connectionIdentity);
+  int? lastKnown(VpnConfig c) =>
+      c.probeStatus == ProbeStatus.failed ? null : c.lastSuccessfulLatencyMs;
+  int rank(VpnConfig c) => c.hasFreshProbe(now)
+      ? 0
+      : lastKnown(c) != null
+      ? 1
+      : 2;
+  final ra = rank(a), rb = rank(b);
+  if (ra != rb) return ra.compareTo(rb);
+  return switch (ra) {
+    0 => a.latencyMs!.compareTo(b.latencyMs!),
+    1 => lastKnown(a)!.compareTo(lastKnown(b)!),
+    _ => 0,
+  };
+}
+
+/// Stable [compareProbeResults] sort: equal entries keep the provider order.
+List<VpnConfig> sortByProbe(Iterable<VpnConfig> configs, DateTime now) {
+  final indexed = configs.indexed.toList()
+    ..sort((a, b) {
+      final byProbe = compareProbeResults(a.$2, b.$2, now);
+      return byProbe != 0 ? byProbe : a.$1.compareTo(b.$1);
+    });
+  return [for (final (_, config) in indexed) config];
 }
 
 final effectiveConfigProvider = Provider<VpnConfig?>((ref) {
   final cs = ref.watch(configProvider).value;
   if (cs == null) return null;
   if (cs.activeSubscriptionId != null) {
-    final now = DateTime.now();
-    final candidates =
-        cs.configs
-            .where(
-              (c) =>
-                  c.subscriptionId == cs.activeSubscriptionId &&
-                  c.probeStatus != ProbeStatus.failed,
-            )
-            .toList()
-          ..sort((a, b) => compareProbeResults(a, b, now));
-    return candidates.firstOrNull;
+    final group = cs.configs
+        .where((c) => c.subscriptionId == cs.activeSubscriptionId)
+        .toList();
+    final healthy = group.where((c) => c.probeStatus != ProbeStatus.failed);
+    // If every probe failed (e.g. measured while offline) still offer the
+    // provider's first server instead of disabling connect.
+    return sortByProbe(
+      healthy.isEmpty ? group : healthy,
+      DateTime.now(),
+    ).firstOrNull;
   }
   return cs.activeConfig;
 });
