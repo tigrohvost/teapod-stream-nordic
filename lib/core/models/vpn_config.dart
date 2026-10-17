@@ -276,10 +276,7 @@ class VpnConfig {
     createdAt: DateTime.parse(json['createdAt'] as String),
     rawUri: json['rawUri'] as String?,
     latencyMs: json['latencyMs'] as int?,
-    probeStatus: ProbeStatus.values.byName(
-      json['probeStatus'] as String? ??
-          (json['latencyMs'] != null ? 'success' : 'unknown'),
-    ),
+    probeStatus: _probeStatus(json),
     lastSuccessfulLatencyMs:
         json['lastSuccessfulLatencyMs'] as int? ?? json['latencyMs'] as int?,
     lastSuccessfulPingAt: DateTime.tryParse(
@@ -300,6 +297,14 @@ class VpnConfig {
     ech: json['ech'] as String?,
     rawXrayConfig: json['rawXrayConfig'] as String?,
   );
+
+  static ProbeStatus _probeStatus(Map<String, dynamic> json) {
+    final name =
+        json['probeStatus'] as String? ??
+        (json['latencyMs'] != null ? 'success' : 'unknown');
+    // Unknown names (newer/older app) must not make a saved config unreadable.
+    return ProbeStatus.values.asNameMap()[name] ?? ProbeStatus.unknown;
+  }
 
   String toJsonString() => jsonEncode(toJson());
   factory VpnConfig.fromJsonString(String s) =>

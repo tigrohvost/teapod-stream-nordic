@@ -80,11 +80,23 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
   }
 
   @override
-  Future<ConfigState> build() => _repository.load();
+  Future<ConfigState> build() async {
+    final state = await _repository.load();
+    _reportRecovery();
+    return state;
+  }
+
+  /// A recovered snapshot must be visible, not silently replaced.
+  void _reportRecovery() {
+    final notice = _repository.takeRecoveryNotice();
+    if (notice == null) return;
+    ref.read(logServiceProvider.notifier).addError(notice, source: 'storage');
+  }
 
   Future<void> _commit(ConfigState Function(ConfigState) update) async {
     await future;
     final next = await _repository.commit(update);
+    _reportRecovery();
     if (ref.mounted && next.revision >= (state.value?.revision ?? -1)) {
       state = AsyncData(next);
     }

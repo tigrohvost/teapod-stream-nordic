@@ -24,6 +24,10 @@ class StorageSecureService {
   Future<void> writeConnectionsSnapshot(String json) =>
       _storage.write(key: _connectionsSnapshotKey, value: json);
 
+  /// Keeps an unreadable snapshot aside instead of overwriting it.
+  Future<void> writeDamagedConnectionsSnapshot(String raw) =>
+      _storage.write(key: '${_connectionsSnapshotKey}_damaged', value: raw);
+
   Future<String?> readProfilesRaw() => _storage.read(key: _profilesKey);
   Future<void> writeProfilesRaw(String json) =>
       _storage.write(key: _profilesKey, value: json);

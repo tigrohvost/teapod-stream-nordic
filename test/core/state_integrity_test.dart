@@ -159,8 +159,10 @@ void main() {
         throwsStateError,
       );
       expect((await second.load()).configs.length, 2);
+      // A tampered snapshot is kept aside instead of being a dead end.
       secure.raw = secure.raw.replaceFirst('renamed', 'tampered');
-      await expectLater(second.load(), throwsFormatException);
+      await second.load();
+      expect(second.takeRecoveryNotice(), contains('повреждён'));
     },
   );
 
