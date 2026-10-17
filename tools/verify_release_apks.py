@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import zipfile
-from dependencies import load_lock, verify, ROOT
+from dependencies import BUNDLED_GENERATED, load_lock, verify, ROOT
 
 RELEASE_CERT = "05a8e6930d302cfed4817b23930e6deac77b399dbaa9b53218d08adf97c1a407"
 ABI_OFFSETS = {"armeabi-v7a": 1000, "arm64-v8a": 2000, "x86_64": 4000}
@@ -73,6 +73,10 @@ def main():
             raise SystemExit(f"Debuggable APK: {apk.name}")
         with zipfile.ZipFile(apk) as archive:
             names = set(archive.namelist())
+            binaries = 'assets/flutter_assets/assets/binaries/'
+            bundled = {name.removeprefix(binaries) for name in names if name.startswith(binaries)}
+            if extra := bundled - {'geoip.dat', 'geosite.dat'} - BUNDLED_GENERATED:
+                raise SystemExit(f"Unexpected bundled binaries in {apk.name}: {sorted(extra)}")
             build_info = json.loads(archive.read('assets/flutter_assets/assets/binaries/build-info.json'))
             if build_info['source_sha'] != args.source_sha or build_info['dependencies'] != lock:
                 raise SystemExit('APK source/dependency stamp mismatch')

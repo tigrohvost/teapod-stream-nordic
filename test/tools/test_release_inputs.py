@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -12,6 +13,15 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 import dependencies
 import publish_release
+
+
+class Response(io.BytesIO):
+    status = 200
+
+
+def files(root):
+    return sorted(p for p in Path(root).rglob('*') if p.is_file())
+
 
 class ReleaseInputTests(unittest.TestCase):
     def test_symbols_require_every_architecture_and_nonempty_content(self):
@@ -36,23 +46,52 @@ class ReleaseInputTests(unittest.TestCase):
         for invalid in [[], {'assets': []}, {'assets': release['assets'] * 2}, {'assets': [{'name': 'core.aar', 'browser_download_url': 'http://untrusted'}]}]:
             with self.assertRaises(ValueError): dependencies.select_asset(invalid, 'core.aar')
 
-    def test_corrupt_cached_dependency_fails_without_network_or_replacement(self):
+    GOOD = {'path': 'libs/core', 'asset': 'core.aar', 'version': 'v2', 'size': 4,
+            'sha256': hashlib.sha256(b'good').hexdigest(), 'url': 'https://example.test/core'}
+
+    def test_stale_cached_dependency_is_replaced_by_a_verified_download(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            (root / 'core').write_bytes(b'tampered')
-            expected = {'path': 'core', 'asset': 'core.aar', 'size': 4, 'sha256': hashlib.sha256(b'good').hexdigest()}
-            with patch.object(dependencies, 'ROOT', root), patch.object(dependencies.urllib.request, 'urlopen') as download:
-                with self.assertRaises(ValueError): dependencies.fetch(expected)
-                download.assert_not_called()
-                self.assertEqual((root / 'core').read_bytes(), b'tampered')
+            (root / 'libs').mkdir()
+            (root / 'libs/core').write_bytes(b'from an older lock')
+            with patch.object(dependencies, 'ROOT', root), patch.object(dependencies.urllib.request, 'urlopen', return_value=Response(b'good')):
+                dependencies.fetch(self.GOOD)
+            self.assertEqual((root / 'libs/core').read_bytes(), b'good')
+            self.assertEqual((root / 'libs/core').stat().st_mode & 0o777, 0o644)
+            self.assertEqual(files(root), [root / 'libs/core'])
+
+    def test_bad_download_never_replaces_the_cached_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'libs').mkdir()
+            (root / 'libs/core').write_bytes(b'tampered')
+            with patch.object(dependencies, 'ROOT', root), patch.object(dependencies.urllib.request, 'urlopen', return_value=Response(b'evil')):
+                with self.assertRaises(ValueError): dependencies.fetch(self.GOOD)
+            self.assertEqual((root / 'libs/core').read_bytes(), b'tampered')
+            self.assertEqual(files(root), [root / 'libs/core'])
 
     def test_failed_download_leaves_no_committed_or_partial_file(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            item = {'path': 'core', 'asset': 'core.aar', 'size': 4, 'sha256': 'a' * 64, 'url': 'https://example.test/core'}
             with patch.object(dependencies, 'ROOT', root), patch.object(dependencies.urllib.request, 'urlopen', side_effect=TimeoutError):
-                with self.assertRaises(TimeoutError): dependencies.fetch(item)
-                self.assertEqual(list(root.iterdir()), [])
+                with self.assertRaises(TimeoutError): dependencies.fetch(self.GOOD)
+            self.assertEqual(files(root), [])
+
+    def test_leftover_part_files_are_removed_and_unknown_bundled_files_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            binaries = root / 'assets/binaries'
+            binaries.mkdir(parents=True)
+            (binaries / 'geoip.dat').write_bytes(b'good')
+            (binaries / 'geoip.dat.x1y2.part').write_bytes(b'half')  # interrupted older run
+            item = dict(self.GOOD, path='assets/binaries/geoip.dat', asset='geoip.dat')
+            lock = {'dependencies': {'geoip': item}}
+            with patch.object(dependencies, 'ROOT', root):
+                dependencies.fetch(item)
+                dependencies.check_bundled_directory(lock)
+                (binaries / 'notes.txt').write_text('would ship in the APK')
+                with self.assertRaises(ValueError): dependencies.check_bundled_directory(lock)
+            self.assertFalse((binaries / 'geoip.dat.x1y2.part').exists())
 
     def test_locked_gradle_toolchain_is_consistent(self):
         lock = dependencies.load_lock()

@@ -12,6 +12,9 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / 'dependencies.lock.json'
+STAGING = '.dependency-staging'  # Same filesystem as the targets, outside bundled assets.
+BUNDLED = 'assets/binaries'
+BUNDLED_GENERATED = {'manifest.json', 'build-info.json', '.gitkeep'}
 
 
 def digest(path):
@@ -45,11 +48,22 @@ def verify(path, item):
 
 def fetch(item):
     path = ROOT / item['path']
+    # Older versions staged downloads next to the target; in assets/binaries a
+    # leftover would be bundled into the APK.
+    for stale in path.parent.glob(f'{path.name}.*.part'):
+        stale.unlink()
     if path.exists():
-        verify(path, item)  # A tampered cache is an error, never silently accepted.
-        return
+        try:
+            verify(path, item)
+            return
+        except ValueError:
+            # After a lock bump or damage the cached file is replaced by a
+            # verified download; it is never used as is.
+            print(f'Cached {item["asset"]} differs from dependencies.lock.json; downloading {item["version"]}')
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=path.name + '.', suffix='.part', dir=path.parent)
+    staging = ROOT / STAGING
+    staging.mkdir(exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=path.name + '.', suffix='.part', dir=staging)
     temporary = Path(temporary)
     try:
         request = urllib.request.Request(item['url'], headers={'User-Agent': 'Teapod-dependency-lock'})
@@ -65,9 +79,20 @@ def fetch(item):
             out.flush()
             os.fsync(out.fileno())
         verify(temporary, item)
+        os.chmod(temporary, 0o644)  # mkstemp creates 0600.
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def check_bundled_directory(lock):
+    """Everything in assets/binaries is packed into the APK."""
+    directory = ROOT / BUNDLED
+    allowed = {Path(item['path']).name for item in lock['dependencies'].values()
+               if Path(item['path']).parent == Path(BUNDLED)} | BUNDLED_GENERATED
+    extra = sorted(p.name for p in directory.iterdir() if p.name not in allowed) if directory.is_dir() else []
+    if extra:
+        raise ValueError(f'Unexpected files in {BUNDLED} would be bundled into the APK: {", ".join(extra)}')
 
 
 def geo_manifest(lock):
@@ -110,6 +135,7 @@ def main():
     for item in lock['dependencies'].values():
         fetch(item) if args.action == 'fetch' else verify(ROOT / item['path'], item)
         print(f'Verified {item["asset"]} ({item["version"]})')
+    check_bundled_directory(lock)
     geo_manifest(lock)
     source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip())

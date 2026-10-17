@@ -35,6 +35,7 @@ android/captures/
 android/app/src/main/jniLibs/
 android/app/libs/*.aar
 assets/binaries/
+/.dependency-staging/
 
 # ─────────────────────────────────────────
 #  IDE
