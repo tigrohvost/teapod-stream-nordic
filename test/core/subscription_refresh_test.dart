@@ -2,7 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:teapodstream/core/models/vpn_config.dart';
 import 'package:teapodstream/providers/config_provider.dart';
 
-VpnConfig _cfg(String id, String name, String address, {int port = 443}) => VpnConfig(
+VpnConfig _cfg(String id, String name, String address, {int port = 443}) =>
+    VpnConfig(
       id: id,
       name: name,
       protocol: VpnProtocol.vless,

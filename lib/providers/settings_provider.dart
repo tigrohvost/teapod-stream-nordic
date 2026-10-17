@@ -9,7 +9,8 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   Future<AppSettings> build() => _service.load();
 
   Future<void> save(AppSettings settings) async {
-    final profileState = ref.read(profileProvider)
+    final profileState = ref
+        .read(profileProvider)
         .maybeWhen(data: (d) => d, orElse: () => null);
     if (profileState?.isReadonly == true) return;
 
@@ -23,16 +24,22 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   Future<void> cleanGhostPackages(Set<String> installedPackages) async {
     final current = state.maybeWhen(data: (d) => d, orElse: () => null);
     if (current == null) return;
-    final newIncluded = current.includedPackages.intersection(installedPackages);
-    final newExcluded = current.excludedPackages.intersection(installedPackages);
+    final newIncluded = current.includedPackages.intersection(
+      installedPackages,
+    );
+    final newExcluded = current.excludedPackages.intersection(
+      installedPackages,
+    );
     if (newIncluded.length == current.includedPackages.length &&
         newExcluded.length == current.excludedPackages.length) {
       return;
     }
-    await save(current.copyWith(
-      includedPackages: newIncluded,
-      excludedPackages: newExcluded,
-    ));
+    await save(
+      current.copyWith(
+        includedPackages: newIncluded,
+        excludedPackages: newExcluded,
+      ),
+    );
   }
 
   Future<void> toggleExcludedPackage(String package) async {
@@ -48,5 +55,6 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   }
 }
 
-final settingsProvider =
-    AsyncNotifierProvider<SettingsNotifier, AppSettings>(SettingsNotifier.new);
+final settingsProvider = AsyncNotifierProvider<SettingsNotifier, AppSettings>(
+  SettingsNotifier.new,
+);

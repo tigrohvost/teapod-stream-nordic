@@ -8,10 +8,12 @@ import 'pressable.dart';
 void showReadonlySnack(BuildContext context) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
-    ..showSnackBar(const SnackBar(
-      content: Text('Профиль только для чтения'),
-      duration: Duration(seconds: 2),
-    ));
+    ..showSnackBar(
+      const SnackBar(
+        content: Text('Профиль только для чтения'),
+        duration: Duration(seconds: 2),
+      ),
+    );
 }
 
 // ── Row: toggle ───────────────────────────────────────────────────
@@ -41,7 +43,8 @@ class SetRowToggle extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
         decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: t.lineSoft))),
+          border: Border(bottom: BorderSide(color: t.lineSoft)),
+        ),
         child: Row(
           children: [
             Expanded(
@@ -51,8 +54,14 @@ class SetRowToggle extends StatelessWidget {
                   Text(title, style: AppTheme.sans(size: 14, color: t.text)),
                   if (hint != null) ...[
                     const SizedBox(height: 3),
-                    Text(hint!,
-                        style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5)),
+                    Text(
+                      hint!,
+                      style: AppTheme.mono(
+                        size: 10,
+                        color: t.textMuted,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
                   ],
                 ],
               ),
@@ -77,7 +86,12 @@ class SetSquareSwitch extends StatelessWidget {
   final bool value;
   final void Function(bool)? onChanged;
 
-  const SetSquareSwitch({super.key, required this.t, required this.value, this.onChanged});
+  const SetSquareSwitch({
+    super.key,
+    required this.t,
+    required this.value,
+    this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -133,7 +147,8 @@ class SetRowChev extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
         decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: last ? t.line : t.lineSoft))),
+          border: Border(bottom: BorderSide(color: last ? t.line : t.lineSoft)),
+        ),
         child: Row(
           children: [
             Expanded(
@@ -143,9 +158,15 @@ class SetRowChev extends StatelessWidget {
                   Text(title, style: AppTheme.sans(size: 14, color: t.text)),
                   if (hint != null) ...[
                     const SizedBox(height: 3),
-                    Text(hint!,
-                        style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5),
-                        overflow: TextOverflow.ellipsis),
+                    Text(
+                      hint!,
+                      style: AppTheme.mono(
+                        size: 10,
+                        color: t.textMuted,
+                        letterSpacing: 0.5,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ],
                 ],
               ),
@@ -178,7 +199,9 @@ class SetInlineField extends StatelessWidget {
   Widget build(BuildContext context) {
     final row = Container(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.lineSoft)),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -231,14 +254,23 @@ class SetCredField extends StatelessWidget {
         decoration: InputDecoration(
           hintText: hint,
           hintStyle: AppTheme.mono(size: 11, color: t.textMuted),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical: 6,
+          ),
           isDense: true,
           enabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
+            borderSide: BorderSide(color: t.line),
+            borderRadius: BorderRadius.zero,
+          ),
           focusedBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
+            borderSide: BorderSide(color: t.accent),
+            borderRadius: BorderRadius.zero,
+          ),
           disabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
+            borderSide: BorderSide(color: t.lineSoft),
+            borderRadius: BorderRadius.zero,
+          ),
         ),
       ),
     );
@@ -279,14 +311,23 @@ class SetNumField extends StatelessWidget {
         decoration: InputDecoration(
           hintText: hint,
           hintStyle: AppTheme.mono(size: 12, color: t.textMuted),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical: 6,
+          ),
           isDense: true,
           enabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.line), borderRadius: BorderRadius.zero),
+            borderSide: BorderSide(color: t.line),
+            borderRadius: BorderRadius.zero,
+          ),
           focusedBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.accent), borderRadius: BorderRadius.zero),
+            borderSide: BorderSide(color: t.accent),
+            borderRadius: BorderRadius.zero,
+          ),
           disabledBorder: OutlineInputBorder(
-              borderSide: BorderSide(color: t.lineSoft), borderRadius: BorderRadius.zero),
+            borderSide: BorderSide(color: t.lineSoft),
+            borderRadius: BorderRadius.zero,
+          ),
         ),
       ),
     );
@@ -325,23 +366,31 @@ class SetSegSquare extends StatelessWidget {
             selected: active,
             enabled: !locked,
             child: GestureDetector(
-            onTap: locked ? () => showReadonlySnack(context) : () => onChanged(val),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: active ? t.accentSoft : Colors.transparent,
-                border: Border(
-                  right: idx < opts.length - 1
-                      ? BorderSide(color: t.line)
-                      : BorderSide.none,
+              onTap: locked
+                  ? () => showReadonlySnack(context)
+                  : () => onChanged(val),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: active ? t.accentSoft : Colors.transparent,
+                  border: Border(
+                    right: idx < opts.length - 1
+                        ? BorderSide(color: t.line)
+                        : BorderSide.none,
+                  ),
+                ),
+                child: Text(
+                  lab,
+                  style: AppTheme.mono(
+                    size: 11,
+                    color: active ? t.accent : t.textDim,
+                    letterSpacing: 0.5,
+                  ),
                 ),
               ),
-              child: Text(lab,
-                  style: AppTheme.mono(
-                      size: 11,
-                      color: active ? t.accent : t.textDim,
-                      letterSpacing: 0.5)),
-            ),
             ),
           );
         }).toList(),

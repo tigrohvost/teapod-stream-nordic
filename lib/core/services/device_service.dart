@@ -50,7 +50,10 @@ class DeviceService {
       final result = await _channel.invokeMethod<Map>('getDeviceInfo');
       if (result != null) {
         _cachedDeviceInfo = Map<String, dynamic>.from(result);
-        await _storage.write(key: _deviceInfoKey, value: jsonEncode(_cachedDeviceInfo));
+        await _storage.write(
+          key: _deviceInfoKey,
+          value: jsonEncode(_cachedDeviceInfo),
+        );
         return _cachedDeviceInfo!;
       }
     } catch (_) {}

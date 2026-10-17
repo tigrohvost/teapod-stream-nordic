@@ -13,10 +13,7 @@ class ProfileState {
   final List<Profile> profiles;
   final String activeProfileId;
 
-  const ProfileState({
-    required this.profiles,
-    required this.activeProfileId,
-  });
+  const ProfileState({required this.profiles, required this.activeProfileId});
 
   Profile? get activeProfile =>
       profiles.where((p) => p.id == activeProfileId).firstOrNull;
@@ -81,8 +78,10 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
     if (current == null) return;
 
     final settings = copyFromCurrent
-        ? (ref.read(settingsProvider).maybeWhen(
-            data: (d) => d, orElse: () => null) ?? const AppSettings())
+        ? (ref
+                  .read(settingsProvider)
+                  .maybeWhen(data: (d) => d, orElse: () => null) ??
+              const AppSettings())
         : const AppSettings();
 
     final id = 'profile_${DateTime.now().millisecondsSinceEpoch}';
@@ -140,13 +139,17 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
     state = AsyncData(current.copyWith(profiles: profiles));
   }
 
-  ProfileBundle exportBundle(String profileId, {bool includeConnections = false}) {
+  ProfileBundle exportBundle(
+    String profileId, {
+    bool includeConnections = false,
+  }) {
     final current = _current!;
     final profile = current.profiles.firstWhere((p) => p.id == profileId);
     if (!includeConnections) {
       return ProfileBundle(exportedAt: DateTime.now(), profile: profile);
     }
-    final configState = ref.read(configProvider)
+    final configState = ref
+        .read(configProvider)
         .maybeWhen(data: (d) => d, orElse: () => null);
     return ProfileBundle(
       exportedAt: DateTime.now(),
@@ -174,7 +177,9 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
       settings: bundle.profile.settings,
       createdAt: DateTime.now(),
       sourceUrl: sourceUrl ?? bundle.sourceUrl,
-      lastFetchedAt: sourceUrl != null ? DateTime.now() : bundle.profile.lastFetchedAt,
+      lastFetchedAt: sourceUrl != null
+          ? DateTime.now()
+          : bundle.profile.lastFetchedAt,
     );
 
     final profiles = [...current.profiles, profile];
@@ -182,11 +187,15 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
     state = AsyncData(current.copyWith(profiles: profiles));
 
     if (bundle.hasConnections) {
-      await ref.read(configProvider.notifier).importBundle(ConnectionsBundle(
-        exportedAt: bundle.exportedAt,
-        configs: bundle.configs ?? [],
-        subscriptions: bundle.subscriptions ?? [],
-      ));
+      await ref
+          .read(configProvider.notifier)
+          .importBundle(
+            ConnectionsBundle(
+              exportedAt: bundle.exportedAt,
+              configs: bundle.configs ?? [],
+              subscriptions: bundle.subscriptions ?? [],
+            ),
+          );
     }
 
     if (switchToProfile) await switchProfile(newId);
@@ -199,11 +208,14 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
 
     ProfileBundle bundle;
     try {
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode != 200) return null;
 
       bundle = ProfileBundle.fromJson(
-          jsonDecode(response.body) as Map<String, dynamic>);
+        jsonDecode(response.body) as Map<String, dynamic>,
+      );
     } catch (e) {
       return null;
     }
@@ -224,11 +236,15 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
     state = AsyncData(current.copyWith(profiles: profiles));
 
     if (bundle.hasConnections) {
-      await ref.read(configProvider.notifier).importBundle(ConnectionsBundle(
-        exportedAt: bundle.exportedAt,
-        configs: bundle.configs ?? [],
-        subscriptions: bundle.subscriptions ?? [],
-      ));
+      await ref
+          .read(configProvider.notifier)
+          .importBundle(
+            ConnectionsBundle(
+              exportedAt: bundle.exportedAt,
+              configs: bundle.configs ?? [],
+              subscriptions: bundle.subscriptions ?? [],
+            ),
+          );
     }
 
     // If this is the active profile, apply its settings
@@ -241,5 +257,6 @@ class ProfileNotifier extends AsyncNotifier<ProfileState> {
   }
 }
 
-final profileProvider =
-    AsyncNotifierProvider<ProfileNotifier, ProfileState>(ProfileNotifier.new);
+final profileProvider = AsyncNotifierProvider<ProfileNotifier, ProfileState>(
+  ProfileNotifier.new,
+);

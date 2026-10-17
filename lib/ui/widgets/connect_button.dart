@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import '../../core/interfaces/vpn_engine.dart';
 import '../theme/app_colors.dart';
@@ -25,9 +24,10 @@ class _ConnectButtonState extends State<ConnectButton>
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     );
-    _pulseAnim = Tween<double>(begin: 1.0, end: 1.15).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
+    _pulseAnim = Tween<double>(
+      begin: 1.0,
+      end: 1.15,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
     _syncAnimation();
   }
 
@@ -55,29 +55,28 @@ class _ConnectButtonState extends State<ConnectButton>
   }
 
   Color get _outerColor => switch (widget.state) {
-        VpnState.connected => AppColors.connectedDim.withValues(alpha: 0.3),
-        VpnState.connecting ||
-        VpnState.disconnecting =>
-          AppColors.connecting.withValues(alpha: 0.2),
-        VpnState.error => AppColors.error.withValues(alpha: 0.2),
-        _ => AppColors.primaryDim.withValues(alpha: 0.2),
-      };
+    VpnState.connected => AppColors.connectedDim.withValues(alpha: 0.3),
+    VpnState.connecting ||
+    VpnState.disconnecting => AppColors.connecting.withValues(alpha: 0.2),
+    VpnState.error => AppColors.error.withValues(alpha: 0.2),
+    _ => AppColors.primaryDim.withValues(alpha: 0.2),
+  };
 
   Color get _innerColor => switch (widget.state) {
-        VpnState.connected => AppColors.connected,
-        VpnState.connecting => AppColors.connecting,
-        VpnState.disconnecting => AppColors.connecting,
-        VpnState.error => AppColors.error,
-        _ => AppColors.primary,
-      };
+    VpnState.connected => AppColors.connected,
+    VpnState.connecting => AppColors.connecting,
+    VpnState.disconnecting => AppColors.connecting,
+    VpnState.error => AppColors.error,
+    _ => AppColors.primary,
+  };
 
   String get _label => switch (widget.state) {
-        VpnState.connected => 'ОТКЛЮЧИТЬ',
-        VpnState.connecting => 'ПОДКЛЮЧЕНИЕ...',
-        VpnState.disconnecting => 'ОТКЛЮЧЕНИЕ...',
-        VpnState.error => 'ОШИБКА',
-        _ => 'ПОДКЛЮЧИТЬ',
-      };
+    VpnState.connected => 'ОТКЛЮЧИТЬ',
+    VpnState.connecting => 'ПОДКЛЮЧЕНИЕ...',
+    VpnState.disconnecting => 'ОТКЛЮЧЕНИЕ...',
+    VpnState.error => 'ОШИБКА',
+    _ => 'ПОДКЛЮЧИТЬ',
+  };
 
   bool get _enabled =>
       widget.state == VpnState.connected ||
@@ -126,10 +125,7 @@ class _ConnectButtonState extends State<ConnectButton>
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
-                    colors: [
-                      _innerColor.withValues(alpha: 0.9),
-                      _innerColor,
-                    ],
+                    colors: [_innerColor.withValues(alpha: 0.9), _innerColor],
                   ),
                   boxShadow: [
                     BoxShadow(

@@ -20,7 +20,15 @@ enum DnsQueryStrategy { ipv4Only, ipv6Only, auto }
 /// uTLS fingerprint override for TLS/REALITY outbounds.
 /// `defaultFp` — не переопределять (используется значение из конфига/URI).
 enum TlsFingerprint {
-  defaultFp, chrome, firefox, safari, ios, android, edge, random, randomized;
+  defaultFp,
+  chrome,
+  firefox,
+  safari,
+  ios,
+  android,
+  edge,
+  random,
+  randomized;
 
   /// Значение для поля `fingerprint` в xray streamSettings; null = не переопределять.
   String? get xrayValue => this == defaultFp ? null : name;
@@ -336,7 +344,9 @@ class AppSettings {
       ipv6Enabled: json['ipv6Enabled'] as bool? ?? false,
       autoStartOnBoot: json['autoStartOnBoot'] as bool? ?? false,
       tlsFingerprint: TlsFingerprint.values.firstWhere(
-        (e) => e.name == json['tlsFingerprint'], orElse: () => TlsFingerprint.defaultFp),
+        (e) => e.name == json['tlsFingerprint'],
+        orElse: () => TlsFingerprint.defaultFp,
+      ),
     );
   }
 

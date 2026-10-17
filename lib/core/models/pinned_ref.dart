@@ -14,14 +14,14 @@ class PinnedRef {
       c.subscriptionId == subscriptionId && c.name == name;
 
   Map<String, dynamic> toJson() => {
-        'subscriptionId': subscriptionId,
-        'name': name,
-      };
+    'subscriptionId': subscriptionId,
+    'name': name,
+  };
 
   factory PinnedRef.fromJson(Map<String, dynamic> json) => PinnedRef(
-        subscriptionId: json['subscriptionId'] as String?,
-        name: json['name'] as String? ?? '',
-      );
+    subscriptionId: json['subscriptionId'] as String?,
+    name: json['name'] as String? ?? '',
+  );
 
   @override
   bool operator ==(Object other) =>

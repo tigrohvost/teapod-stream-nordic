@@ -33,12 +33,16 @@ class DeeplinkHandler {
 
     if (bundle == null) {
       final t = Theme.of(context).extension<TeapodTokens>()!;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Не удалось загрузить данные по ссылке',
-            style: AppTheme.mono(size: 12, color: t.bg)),
-        backgroundColor: t.danger,
-        duration: const Duration(seconds: 3),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Не удалось загрузить данные по ссылке',
+            style: AppTheme.mono(size: 12, color: t.bg),
+          ),
+          backgroundColor: t.danger,
+          duration: const Duration(seconds: 3),
+        ),
+      );
       return;
     }
 
@@ -58,47 +62,72 @@ class DeeplinkHandler {
       builder: (ctx) => AlertDialog(
         backgroundColor: t.bg,
         shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-        title: Text('Импорт профиля',
-            style: AppTheme.sans(size: 16, color: t.text, weight: FontWeight.w500)),
+        title: Text(
+          'Импорт профиля',
+          style: AppTheme.sans(
+            size: 16,
+            color: t.text,
+            weight: FontWeight.w500,
+          ),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Профиль: «${bundle.profile.name}»',
-                style: AppTheme.mono(size: 12, color: t.text)),
+            Text(
+              'Профиль: «${bundle.profile.name}»',
+              style: AppTheme.mono(size: 12, color: t.text),
+            ),
             const SizedBox(height: 6),
-            Text('Экспорт: ${_formatDate(bundle.exportedAt)}',
-                style: AppTheme.mono(size: 10, color: t.textMuted)),
+            Text(
+              'Экспорт: ${_formatDate(bundle.exportedAt)}',
+              style: AppTheme.mono(size: 10, color: t.textMuted),
+            ),
             if (sourceUrl != null) ...[
               const SizedBox(height: 4),
-              Text('Источник: $sourceUrl',
-                  style: AppTheme.mono(size: 9, color: t.accent)),
+              Text(
+                'Источник: $sourceUrl',
+                style: AppTheme.mono(size: 9, color: t.accent),
+              ),
             ],
             if (bundle.hasConnections)
-              Text('+ ${bundle.configs?.length ?? 0} конфигов, ${bundle.subscriptions?.length ?? 0} подписок',
-                  style: AppTheme.mono(size: 10, color: t.accent)),
+              Text(
+                '+ ${bundle.configs?.length ?? 0} конфигов, ${bundle.subscriptions?.length ?? 0} подписок',
+                style: AppTheme.mono(size: 10, color: t.accent),
+              ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: Text('Отмена', style: AppTheme.mono(size: 11, color: t.textMuted)),
+            child: Text(
+              'Отмена',
+              style: AppTheme.mono(size: 11, color: t.textMuted),
+            ),
           ),
           TextButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              await ref.read(profileProvider.notifier).importBundle(
-                  bundle, sourceUrl: sourceUrl);
+              await ref
+                  .read(profileProvider.notifier)
+                  .importBundle(bundle, sourceUrl: sourceUrl);
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text('Профиль «${bundle.profile.name}» импортирован',
-                      style: AppTheme.mono(size: 12, color: t.bg)),
-                  backgroundColor: t.accent,
-                  duration: const Duration(seconds: 2),
-                ));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Профиль «${bundle.profile.name}» импортирован',
+                      style: AppTheme.mono(size: 12, color: t.bg),
+                    ),
+                    backgroundColor: t.accent,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
               }
             },
-            child: Text('Импортировать', style: AppTheme.mono(size: 11, color: t.accent)),
+            child: Text(
+              'Импортировать',
+              style: AppTheme.mono(size: 11, color: t.accent),
+            ),
           ),
         ],
       ),
@@ -113,44 +142,69 @@ class DeeplinkHandler {
       builder: (ctx) => AlertDialog(
         backgroundColor: t.bg,
         shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-        title: Text('Импорт подключений',
-            style: AppTheme.sans(size: 16, color: t.text, weight: FontWeight.w500)),
+        title: Text(
+          'Импорт подключений',
+          style: AppTheme.sans(
+            size: 16,
+            color: t.text,
+            weight: FontWeight.w500,
+          ),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (bundle.label != null)
-              Text('Набор: «${bundle.label}»',
-                  style: AppTheme.mono(size: 12, color: t.text)),
+              Text(
+                'Набор: «${bundle.label}»',
+                style: AppTheme.mono(size: 12, color: t.text),
+              ),
             const SizedBox(height: 6),
-            Text('${bundle.configs.length} конфигов, ${bundle.subscriptions.length} подписок',
-                style: AppTheme.mono(size: 12, color: t.text)),
+            Text(
+              '${bundle.configs.length} конфигов, ${bundle.subscriptions.length} подписок',
+              style: AppTheme.mono(size: 12, color: t.text),
+            ),
             const SizedBox(height: 4),
-            Text('Экспорт: ${_formatDate(bundle.exportedAt)}',
-                style: AppTheme.mono(size: 10, color: t.textMuted)),
+            Text(
+              'Экспорт: ${_formatDate(bundle.exportedAt)}',
+              style: AppTheme.mono(size: 10, color: t.textMuted),
+            ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: Text('Отмена', style: AppTheme.mono(size: 11, color: t.textMuted)),
+            child: Text(
+              'Отмена',
+              style: AppTheme.mono(size: 11, color: t.textMuted),
+            ),
           ),
           TextButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              final result = await ref.read(configProvider.notifier).importBundle(bundle);
+              final result = await ref
+                  .read(configProvider.notifier)
+                  .importBundle(bundle);
               if (context.mounted) {
                 final msg = result.addedSubscriptions > 0
                     ? 'Добавлено: ${result.addedConfigs} конфигов, ${result.addedSubscriptions} подписок'
                     : 'Добавлено: ${result.addedConfigs} новых конфигов';
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text(msg, style: AppTheme.mono(size: 12, color: t.bg)),
-                  backgroundColor: t.accent,
-                  duration: const Duration(seconds: 2),
-                ));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      msg,
+                      style: AppTheme.mono(size: 12, color: t.bg),
+                    ),
+                    backgroundColor: t.accent,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
               }
             },
-            child: Text('Импортировать', style: AppTheme.mono(size: 11, color: t.accent)),
+            child: Text(
+              'Импортировать',
+              style: AppTheme.mono(size: 11, color: t.accent),
+            ),
           ),
         ],
       ),

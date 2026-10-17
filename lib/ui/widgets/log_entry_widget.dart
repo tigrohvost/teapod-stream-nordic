@@ -10,18 +10,18 @@ class LogEntryWidget extends StatelessWidget {
   const LogEntryWidget({super.key, required this.entry});
 
   Color get _levelColor => switch (entry.level) {
-        LogLevel.debug => AppColors.logDebug,
-        LogLevel.info => AppColors.logInfo,
-        LogLevel.warning => AppColors.logWarning,
-        LogLevel.error => AppColors.logError,
-      };
+    LogLevel.debug => AppColors.logDebug,
+    LogLevel.info => AppColors.logInfo,
+    LogLevel.warning => AppColors.logWarning,
+    LogLevel.error => AppColors.logError,
+  };
 
   String get _levelLabel => switch (entry.level) {
-        LogLevel.debug => 'DBG',
-        LogLevel.info => 'INF',
-        LogLevel.warning => 'WRN',
-        LogLevel.error => 'ERR',
-      };
+    LogLevel.debug => 'DBG',
+    LogLevel.info => 'INF',
+    LogLevel.warning => 'WRN',
+    LogLevel.error => 'ERR',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -33,10 +33,7 @@ class LogEntryWidget extends StatelessWidget {
           // Timestamp
           Text(
             _timeFmt.format(entry.timestamp),
-            style: const TextStyle(
-              color: AppColors.textDisabled,
-              fontSize: 11,
-            ),
+            style: const TextStyle(color: AppColors.textDisabled, fontSize: 11),
           ),
           const SizedBox(width: 8),
           // Level badge

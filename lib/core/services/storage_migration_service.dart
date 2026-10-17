@@ -44,8 +44,13 @@ class StorageMigrationService {
 
       // Mark complete and remove plaintext keys
       await prefs.setBool(_flagKey, true);
-      for (final key in ['vpn_configs', 'active_config_id', 'subscriptions',
-                          'socks_user', 'socks_password']) {
+      for (final key in [
+        'vpn_configs',
+        'active_config_id',
+        'subscriptions',
+        'socks_user',
+        'socks_password',
+      ]) {
         await prefs.remove(key);
       }
     } catch (_) {

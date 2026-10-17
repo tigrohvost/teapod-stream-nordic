@@ -64,7 +64,11 @@ class IpInfoNotifier extends AsyncNotifier<IpInfo?> {
     }
     try {
       final req = await client
-          .getUrl(Uri.parse('http://ip-api.com/json?fields=query,country,countryCode,status'))
+          .getUrl(
+            Uri.parse(
+              'http://ip-api.com/json?fields=query,country,countryCode,status',
+            ),
+          )
           .timeout(const Duration(seconds: 10));
       req.headers.set(HttpHeaders.userAgentHeader, 'TeapodStream');
       final resp = await req.close().timeout(const Duration(seconds: 10));
@@ -84,4 +88,6 @@ class IpInfoNotifier extends AsyncNotifier<IpInfo?> {
   }
 }
 
-final ipInfoProvider = AsyncNotifierProvider<IpInfoNotifier, IpInfo?>(IpInfoNotifier.new);
+final ipInfoProvider = AsyncNotifierProvider<IpInfoNotifier, IpInfo?>(
+  IpInfoNotifier.new,
+);

@@ -22,16 +22,28 @@ class BreadcrumbBar extends StatelessWidget {
       onTap: onBack ?? () => Navigator.pop(context),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
-        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: t.lineSoft)),
+        ),
         child: Row(
           children: [
             Text('‹', style: AppTheme.mono(size: 12, color: t.textMuted)),
             const SizedBox(width: 8),
-            Text(parent, style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+            Text(
+              parent,
+              style: AppTheme.mono(
+                size: 10,
+                color: t.textMuted,
+                letterSpacing: 1,
+              ),
+            ),
             const SizedBox(width: 6),
             Text('/', style: AppTheme.mono(size: 10, color: t.textMuted)),
             const SizedBox(width: 6),
-            Text(current, style: AppTheme.mono(size: 10, color: t.text, letterSpacing: 1)),
+            Text(
+              current,
+              style: AppTheme.mono(size: 10, color: t.text, letterSpacing: 1),
+            ),
           ],
         ),
       ),

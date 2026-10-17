@@ -18,13 +18,19 @@ class ConsoleHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.line)),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
             'teapod.stream // $section',
-            style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1),
+            style: AppTheme.mono(
+              size: 10,
+              color: t.textMuted,
+              letterSpacing: 1,
+            ),
           ),
           ?trailing,
         ],

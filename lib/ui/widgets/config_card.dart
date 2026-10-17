@@ -19,37 +19,37 @@ class ConfigCard extends StatelessWidget {
   });
 
   Color get _protocolColor => switch (config.protocol) {
-        VpnProtocol.vless => AppColors.protoVless,
-        VpnProtocol.vmess => AppColors.protoVmess,
-        VpnProtocol.trojan => AppColors.protoTrojan,
-        VpnProtocol.shadowsocks => AppColors.protoShadowsocks,
-        VpnProtocol.hysteria2 => AppColors.protoHysteria2,
-      };
+    VpnProtocol.vless => AppColors.protoVless,
+    VpnProtocol.vmess => AppColors.protoVmess,
+    VpnProtocol.trojan => AppColors.protoTrojan,
+    VpnProtocol.shadowsocks => AppColors.protoShadowsocks,
+    VpnProtocol.hysteria2 => AppColors.protoHysteria2,
+  };
 
   String get _protocolLabel => switch (config.protocol) {
-        VpnProtocol.vless => 'VLESS',
-        VpnProtocol.vmess => 'VMess',
-        VpnProtocol.trojan => 'Trojan',
-        VpnProtocol.shadowsocks => 'SS',
-        VpnProtocol.hysteria2 => 'HY2',
-      };
+    VpnProtocol.vless => 'VLESS',
+    VpnProtocol.vmess => 'VMess',
+    VpnProtocol.trojan => 'Trojan',
+    VpnProtocol.shadowsocks => 'SS',
+    VpnProtocol.hysteria2 => 'HY2',
+  };
 
   String get _securityLabel => switch (config.security) {
-        VpnSecurity.tls => 'TLS',
-        VpnSecurity.reality => 'Reality',
-        VpnSecurity.none => 'None',
-      };
+    VpnSecurity.tls => 'TLS',
+    VpnSecurity.reality => 'Reality',
+    VpnSecurity.none => 'None',
+  };
 
   String get _transportLabel => switch (config.transport) {
-        VpnTransport.ws => 'WS',
-        VpnTransport.grpc => 'gRPC',
-        VpnTransport.http2 => 'H2',
-        VpnTransport.quic => 'QUIC',
-        VpnTransport.tcp => 'TCP',
-        VpnTransport.xhttp => 'XHTTP',
-        VpnTransport.httpupgrade => 'HTTPUpgrade',
-        VpnTransport.splithttp => 'SplitHTTP',
-      };
+    VpnTransport.ws => 'WS',
+    VpnTransport.grpc => 'gRPC',
+    VpnTransport.http2 => 'H2',
+    VpnTransport.quic => 'QUIC',
+    VpnTransport.tcp => 'TCP',
+    VpnTransport.xhttp => 'XHTTP',
+    VpnTransport.httpupgrade => 'HTTPUpgrade',
+    VpnTransport.splithttp => 'SplitHTTP',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -74,8 +74,10 @@ class ConfigCard extends StatelessWidget {
             children: [
               // Protocol badge
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
                 decoration: BoxDecoration(
                   color: _protocolColor.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
@@ -142,7 +144,6 @@ class ConfigCard extends StatelessWidget {
                   ],
                 ),
               ),
-
             ],
           ),
         ),

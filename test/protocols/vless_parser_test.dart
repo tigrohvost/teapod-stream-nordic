@@ -46,8 +46,13 @@ void main() {
 
       test('valid JSON parses correctly', () {
         final uri = makeVmessUri({
-          'ps': 'VMess Test', 'add': '1.2.3.4', 'port': '8388',
-          'id': 'test-uuid', 'aid': '0', 'net': 'tcp', 'tls': '',
+          'ps': 'VMess Test',
+          'add': '1.2.3.4',
+          'port': '8388',
+          'id': 'test-uuid',
+          'aid': '0',
+          'net': 'tcp',
+          'tls': '',
         });
         final config = VlessParser.parseUri(uri);
         expect(config, isNotNull);
@@ -59,7 +64,11 @@ void main() {
 
       test('port as string is converted to int', () {
         final uri = makeVmessUri({
-          'add': 'host', 'port': '9090', 'id': 'uid', 'net': 'tcp', 'tls': '',
+          'add': 'host',
+          'port': '9090',
+          'id': 'uid',
+          'net': 'tcp',
+          'tls': '',
         });
         expect(VlessParser.parseUri(uri)?.port, 9090);
       });
@@ -71,7 +80,8 @@ void main() {
 
     group('Trojan', () {
       test('valid URI parses correctly', () {
-        const uri = 'trojan://mypassword@server.com:443?security=tls&sni=server.com#Trojan';
+        const uri =
+            'trojan://mypassword@server.com:443?security=tls&sni=server.com#Trojan';
         final config = VlessParser.parseUri(uri);
         expect(config, isNotNull);
         expect(config!.protocol, VpnProtocol.trojan);
@@ -87,7 +97,9 @@ void main() {
 
     group('Shadowsocks', () {
       test('SIP002 format parses correctly', () {
-        final userInfo = base64Encode(utf8.encode('chacha20-ietf-poly1305:mypassword'));
+        final userInfo = base64Encode(
+          utf8.encode('chacha20-ietf-poly1305:mypassword'),
+        );
         final uri = 'ss://$userInfo@1.2.3.4:8388#SS Test';
         final config = VlessParser.parseUri(uri);
         expect(config, isNotNull);
@@ -167,12 +179,20 @@ void main() {
     });
 
     test('Shadowsocks with empty password fails', () {
-      final config = makeConfig(protocol: VpnProtocol.shadowsocks, uuid: '', password: null);
+      final config = makeConfig(
+        protocol: VpnProtocol.shadowsocks,
+        uuid: '',
+        password: null,
+      );
       expect(config.validate(), isNotNull);
     });
 
     test('Trojan with password passes', () {
-      final config = makeConfig(protocol: VpnProtocol.trojan, uuid: '', password: 'pass');
+      final config = makeConfig(
+        protocol: VpnProtocol.trojan,
+        uuid: '',
+        password: 'pass',
+      );
       expect(config.validate(), isNull);
     });
   });

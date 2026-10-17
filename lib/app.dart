@@ -27,16 +27,16 @@ class TabIndexNotifier extends Notifier<int> {
   void set(int index) => state = index;
 }
 
-final tabIndexProvider = NotifierProvider<TabIndexNotifier, int>(TabIndexNotifier.new);
+final tabIndexProvider = NotifierProvider<TabIndexNotifier, int>(
+  TabIndexNotifier.new,
+);
 
 class TeapodApp extends StatelessWidget {
   const TeapodApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const ProviderScope(
-      child: _TeapodMaterialApp(),
-    );
+    return const ProviderScope(child: _TeapodMaterialApp());
   }
 }
 
@@ -46,19 +46,24 @@ class _TeapodMaterialApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
-    final accent    = ref.watch(accentProvider);
-    final fontScale = ref.watch(settingsProvider).maybeWhen(
-      data: (s) => s.fontScale == FontScale.large ? 1.2 : 1.0,
-      orElse: () => 1.0,
-    );
+    final accent = ref.watch(accentProvider);
+    final fontScale = ref
+        .watch(settingsProvider)
+        .maybeWhen(
+          data: (s) => s.fontScale == FontScale.large ? 1.2 : 1.0,
+          orElse: () => 1.0,
+        );
     return MaterialApp(
       title: 'TeapodStream',
-      theme:     AppTheme.build(Brightness.light, accent),
-      darkTheme:  AppTheme.build(Brightness.dark, accent),
+      theme: AppTheme.build(Brightness.light, accent),
+      darkTheme: AppTheme.build(Brightness.dark, accent),
       themeMode: themeMode,
       builder: (ctx, child) => MediaQuery(
         data: MediaQuery.of(ctx).copyWith(
-          textScaler: AppTextScaler(MediaQuery.textScalerOf(ctx), minimum: fontScale),
+          textScaler: AppTextScaler(
+            MediaQuery.textScalerOf(ctx),
+            minimum: fontScale,
+          ),
         ),
         child: child!,
       ),
@@ -177,24 +182,26 @@ class _AppShellState extends ConsumerState<_AppShell>
     });
 
     final updateState = ref.watch(updateProvider);
-    final hasUpdate = updateState is UpdateAvailable ||
+    final hasUpdate =
+        updateState is UpdateAvailable ||
         updateState is UpdateDownloading ||
         updateState is UpdateDownloaded;
 
     // Sync nav bar color with active theme
     final t = Theme.of(context).extension<TeapodTokens>()!;
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness:
-          Theme.of(context).brightness == Brightness.dark
-              ? Brightness.light
-              : Brightness.dark,
-      systemNavigationBarColor: t.bg,
-      systemNavigationBarIconBrightness:
-          Theme.of(context).brightness == Brightness.dark
-              ? Brightness.light
-              : Brightness.dark,
-    ));
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Theme.of(context).brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+        systemNavigationBarColor: t.bg,
+        systemNavigationBarIconBrightness:
+            Theme.of(context).brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+      ),
+    );
 
     final currentIndex = ref.watch(tabIndexProvider);
     return Scaffold(
@@ -226,10 +233,10 @@ class _ConsoleTabBar extends ConsumerWidget {
     final t = Theme.of(context).extension<TeapodTokens>()!;
 
     final items = [
-      _TabItem(icon: _TabIcon.shield,   label: 'VPN'),
-      _TabItem(icon: _TabIcon.key,      label: 'Конфиги'),
-      _TabItem(icon: _TabIcon.route,    label: 'Маршрут'),
-      _TabItem(icon: _TabIcon.cog,      label: 'Настройки', badge: hasUpdateBadge),
+      _TabItem(icon: _TabIcon.shield, label: 'VPN'),
+      _TabItem(icon: _TabIcon.key, label: 'Конфиги'),
+      _TabItem(icon: _TabIcon.route, label: 'Маршрут'),
+      _TabItem(icon: _TabIcon.cog, label: 'Настройки', badge: hasUpdateBadge),
     ];
 
     return Container(
@@ -243,8 +250,8 @@ class _ConsoleTabBar extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
           child: Row(
             children: items.asMap().entries.map((e) {
-              final idx    = e.key;
-              final item   = e.value;
+              final idx = e.key;
+              final item = e.value;
               final active = idx == currentIndex;
               return Expanded(
                 child: Semantics(
@@ -252,53 +259,53 @@ class _ConsoleTabBar extends ConsumerWidget {
                   button: true,
                   selected: active,
                   child: GestureDetector(
-                  onTap: () => onTap(idx),
-                  behavior: HitTestBehavior.opaque,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Active underline indicator
-                      Container(
-                        width: 28,
-                        height: 2,
-                        color: active ? t.accent : Colors.transparent,
-                      ),
-                      const SizedBox(height: 5),
-                      Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          _SvgTabIcon(
-                            icon: item.icon,
-                            color: active ? t.accent : t.textMuted,
-                          ),
-                          if (item.badge)
-                            Positioned(
-                              right: -3,
-                              top: -3,
-                              child: Container(
-                                width: 7,
-                                height: 7,
-                                decoration: BoxDecoration(
-                                  color: t.danger,
-                                  shape: BoxShape.circle,
+                    onTap: () => onTap(idx),
+                    behavior: HitTestBehavior.opaque,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Active underline indicator
+                        Container(
+                          width: 28,
+                          height: 2,
+                          color: active ? t.accent : Colors.transparent,
+                        ),
+                        const SizedBox(height: 5),
+                        Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            _SvgTabIcon(
+                              icon: item.icon,
+                              color: active ? t.accent : t.textMuted,
+                            ),
+                            if (item.badge)
+                              Positioned(
+                                right: -3,
+                                top: -3,
+                                child: Container(
+                                  width: 7,
+                                  height: 7,
+                                  decoration: BoxDecoration(
+                                    color: t.danger,
+                                    shape: BoxShape.circle,
+                                  ),
                                 ),
                               ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        item.label.toUpperCase(),
-                        textAlign: TextAlign.center,
-                        style: AppTheme.mono(
-                          size: 10,
-                          color: active ? t.accent : t.textMuted,
-                          letterSpacing: 0.5,
+                          ],
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 4),
+                        Text(
+                          item.label.toUpperCase(),
+                          textAlign: TextAlign.center,
+                          style: AppTheme.mono(
+                            size: 10,
+                            color: active ? t.accent : t.textMuted,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
                 ),
               );
             }).toList(),
@@ -395,5 +402,6 @@ class _TabIconPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_TabIconPainter old) => old.color != color || old.icon != icon;
+  bool shouldRepaint(_TabIconPainter old) =>
+      old.color != color || old.icon != icon;
 }

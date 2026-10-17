@@ -12,9 +12,9 @@ class AppInfo {
   });
 
   AppInfo copyWith({bool? isSystem, bool? isExcluded}) => AppInfo(
-        packageName: packageName,
-        appName: appName,
-        isSystem: isSystem ?? this.isSystem,
-        isExcluded: isExcluded ?? this.isExcluded,
-      );
+    packageName: packageName,
+    appName: appName,
+    isSystem: isSystem ?? this.isSystem,
+    isExcluded: isExcluded ?? this.isExcluded,
+  );
 }

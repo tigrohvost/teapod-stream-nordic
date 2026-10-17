@@ -157,37 +157,57 @@ void main() {
 
     group('dns block', () {
       Map<String, dynamic> dnsFor(VpnEngineOptions o) =>
-          XrayConfigBuilder.build(_vlessConfig(), o)['dns'] as Map<String, dynamic>;
-      VpnEngineOptions withDns(DnsServerConfig server, {bool adBlock = false}) => VpnEngineOptions(
-            socksPort: 10808,
-            httpPort: 0,
-            socksUser: '',
-            socksPassword: '',
-            dnsServer: server,
-            routing: RoutingSettings(adBlockEnabled: adBlock),
-          );
+          XrayConfigBuilder.build(_vlessConfig(), o)['dns']
+              as Map<String, dynamic>;
+      VpnEngineOptions withDns(
+        DnsServerConfig server, {
+        bool adBlock = false,
+      }) => VpnEngineOptions(
+        socksPort: 10808,
+        httpPort: 0,
+        socksUser: '',
+        socksPassword: '',
+        dnsServer: server,
+        routing: RoutingSettings(adBlockEnabled: adBlock),
+      );
 
       test('DoT presets go out as DoH — xray has no tls:// nameserver', () {
         final dns = dnsFor(withDns(DnsServerConfig.cloudflareDoT));
-        final addresses = (dns['servers'] as List).map((s) => (s as Map)['address']).toList();
+        final addresses = (dns['servers'] as List)
+            .map((s) => (s as Map)['address'])
+            .toList();
         expect(addresses, contains('https://cloudflare-dns.com/dns-query'));
         expect(addresses.any((a) => '$a'.startsWith('tls://')), isFalse);
         // The DoH hostname still needs the static bootstrap entry.
         expect((dns['hosts'] as Map)['cloudflare-dns.com'], '1.1.1.1');
       });
 
-      test('adblock answers NXDOMAIN via hosts, not a fake rcode:// server', () {
-        final dns = dnsFor(withDns(DnsServerConfig.cloudflare, adBlock: true));
-        expect((dns['hosts'] as Map)['geosite:category-ads-all'], '#3');
-        final addresses = (dns['servers'] as List).map((s) => '${(s as Map)['address']}').toList();
-        expect(addresses.any((a) => a.startsWith('rcode://')), isFalse);
-      });
+      test(
+        'adblock answers NXDOMAIN via hosts, not a fake rcode:// server',
+        () {
+          final dns = dnsFor(
+            withDns(DnsServerConfig.cloudflare, adBlock: true),
+          );
+          expect((dns['hosts'] as Map)['geosite:category-ads-all'], '#3');
+          final addresses = (dns['servers'] as List)
+              .map((s) => '${(s as Map)['address']}')
+              .toList();
+          expect(addresses.any((a) => a.startsWith('rcode://')), isFalse);
+        },
+      );
 
-      test('adblock does not reference win-spy (missing from v2fly dlc.dat)', () {
-        final json = jsonEncode(XrayConfigBuilder.build(
-            _vlessConfig(), withDns(DnsServerConfig.cloudflare, adBlock: true)));
-        expect(json.contains('win-spy'), isFalse);
-      });
+      test(
+        'adblock does not reference win-spy (missing from v2fly dlc.dat)',
+        () {
+          final json = jsonEncode(
+            XrayConfigBuilder.build(
+              _vlessConfig(),
+              withDns(DnsServerConfig.cloudflare, adBlock: true),
+            ),
+          );
+          expect(json.contains('win-spy'), isFalse);
+        },
+      );
     });
 
     test('policy keeps idle connections for xray default connIdle', () {
@@ -248,7 +268,13 @@ void main() {
           'protocol': 'vless',
           'settings': {
             'vnext': [
-              {'address': 'srv', 'port': 443, 'users': [{'id': 'u', 'flow': 'xtls-rprx-vision'}]},
+              {
+                'address': 'srv',
+                'port': 443,
+                'users': [
+                  {'id': 'u', 'flow': 'xtls-rprx-vision'},
+                ],
+              },
             ],
           },
         },
@@ -275,8 +301,16 @@ void main() {
       },
     };
 
-    Map<String, dynamic> merge(Map<String, dynamic> raw, [VpnEngineOptions? options]) =>
-        jsonDecode(XrayConfigBuilder.mergeWithRaw(jsonEncode(raw), options ?? _defaultOptions()))
+    Map<String, dynamic> merge(
+      Map<String, dynamic> raw, [
+      VpnEngineOptions? options,
+    ]) =>
+        jsonDecode(
+              XrayConfigBuilder.mergeWithRaw(
+                jsonEncode(raw),
+                options ?? _defaultOptions(),
+              ),
+            )
             as Map<String, dynamic>;
 
     test('clamps aggressive observatory probeInterval to 600s', () {
@@ -291,32 +325,54 @@ void main() {
 
     test('rewrites freedom fallbackTag to first selector outbound', () {
       final cfg = merge(rawManaged());
-      final balancer = ((cfg['routing'] as Map)['balancers'] as List).first as Map;
+      final balancer =
+          ((cfg['routing'] as Map)['balancers'] as List).first as Map;
       expect(balancer['fallbackTag'], 'c1-a');
       final outbounds = cfg['outbounds'] as List;
-      expect(outbounds.any((o) => (o as Map)['tag'] == XrayConfigBuilder.blackholeTag), isFalse);
-    });
-
-    test('rewrites freedom fallbackTag to blackhole when selector matches nothing', () {
-      final raw = rawManaged();
-      (((raw['routing'] as Map)['balancers'] as List).first as Map)['selector'] = ['nope-'];
-      final cfg = merge(raw);
-      final balancer = ((cfg['routing'] as Map)['balancers'] as List).first as Map;
-      expect(balancer['fallbackTag'], XrayConfigBuilder.blackholeTag);
-      final outbounds = cfg['outbounds'] as List;
       expect(
-        outbounds.any((o) =>
-            (o as Map)['tag'] == XrayConfigBuilder.blackholeTag && o['protocol'] == 'blackhole'),
-        isTrue,
+        outbounds.any(
+          (o) => (o as Map)['tag'] == XrayConfigBuilder.blackholeTag,
+        ),
+        isFalse,
       );
     });
 
+    test(
+      'rewrites freedom fallbackTag to blackhole when selector matches nothing',
+      () {
+        final raw = rawManaged();
+        (((raw['routing'] as Map)['balancers'] as List).first
+            as Map)['selector'] = [
+          'nope-',
+        ];
+        final cfg = merge(raw);
+        final balancer =
+            ((cfg['routing'] as Map)['balancers'] as List).first as Map;
+        expect(balancer['fallbackTag'], XrayConfigBuilder.blackholeTag);
+        final outbounds = cfg['outbounds'] as List;
+        expect(
+          outbounds.any(
+            (o) =>
+                (o as Map)['tag'] == XrayConfigBuilder.blackholeTag &&
+                o['protocol'] == 'blackhole',
+          ),
+          isTrue,
+        );
+      },
+    );
+
     test('keeps fallbackTag pointing to non-freedom outbound', () {
       final cfg = merge(rawManaged(fallbackTag: 'blocked'));
-      final balancer = ((cfg['routing'] as Map)['balancers'] as List).first as Map;
+      final balancer =
+          ((cfg['routing'] as Map)['balancers'] as List).first as Map;
       expect(balancer['fallbackTag'], 'blocked');
       final outbounds = cfg['outbounds'] as List;
-      expect(outbounds.any((o) => (o as Map)['tag'] == XrayConfigBuilder.blackholeTag), isFalse);
+      expect(
+        outbounds.any(
+          (o) => (o as Map)['tag'] == XrayConfigBuilder.blackholeTag,
+        ),
+        isFalse,
+      );
     });
 
     test('handles config without balancers', () {
@@ -332,17 +388,29 @@ void main() {
       );
       final rules = (cfg['routing'] as Map)['rules'] as List;
       final adRule = rules.cast<Map>().firstWhere(
-          (r) => (r['domain'] as List?)?.contains('geosite:category-ads-all') ?? false);
+        (r) =>
+            (r['domain'] as List?)?.contains('geosite:category-ads-all') ??
+            false,
+      );
       expect(adRule['outboundTag'], XrayConfigBuilder.blackholeTag);
       // App rules must come before server rules (first-match wins).
-      expect(rules.indexOf(adRule), lessThan(rules.indexWhere((r) => (r as Map).containsKey('balancerTag'))));
+      expect(
+        rules.indexOf(adRule),
+        lessThan(
+          rules.indexWhere((r) => (r as Map).containsKey('balancerTag')),
+        ),
+      );
     });
 
     test('no adblock rule when disabled', () {
       final cfg = merge(rawManaged());
       final rules = (cfg['routing'] as Map)['rules'] as List;
       expect(
-        rules.cast<Map>().any((r) => (r['domain'] as List?)?.contains('geosite:category-ads-all') ?? false),
+        rules.cast<Map>().any(
+          (r) =>
+              (r['domain'] as List?)?.contains('geosite:category-ads-all') ??
+              false,
+        ),
         isFalse,
       );
     });

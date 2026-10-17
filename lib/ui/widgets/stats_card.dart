@@ -33,10 +33,14 @@ class _StatsCardState extends State<StatsCard> {
   int _lastHistoryLength = 0;
 
   List<_SpeedPoint> _convertHistory(List<SpeedPoint> native) {
-    return native.map((p) => _SpeedPoint(
-      upload: p.uploadSpeed.toDouble(),
-      download: p.downloadSpeed.toDouble(),
-    )).toList();
+    return native
+        .map(
+          (p) => _SpeedPoint(
+            upload: p.uploadSpeed.toDouble(),
+            download: p.downloadSpeed.toDouble(),
+          ),
+        )
+        .toList();
   }
 
   @override
@@ -87,7 +91,9 @@ class _StatsCardState extends State<StatsCard> {
             _history.addAll(_convertHistory(nativeHistory));
           } else if (nativeHistory.length > _lastHistoryLength) {
             // Append new points
-            _history.addAll(_convertHistory(nativeHistory.sublist(_lastHistoryLength)));
+            _history.addAll(
+              _convertHistory(nativeHistory.sublist(_lastHistoryLength)),
+            );
           }
           _lastHistoryLength = nativeHistory.length;
         }
@@ -116,10 +122,15 @@ class _StatsCardState extends State<StatsCard> {
 
   String get _maxSpeedLabel {
     if (_history.isEmpty) return '';
-    final maxVal = _history.fold<double>(0, (m, p) => max(m, max(p.upload, p.download)));
+    final maxVal = _history.fold<double>(
+      0,
+      (m, p) => max(m, max(p.upload, p.download)),
+    );
     final bits = maxVal * 8;
     if (bits < 1024) return '';
-    if (bits < 1024 * 1024) return 'пик: ${(bits / 1024).toStringAsFixed(0)} Kbit/s';
+    if (bits < 1024 * 1024) {
+      return 'пик: ${(bits / 1024).toStringAsFixed(0)} Kbit/s';
+    }
     return 'пик: ${(bits / (1024 * 1024)).toStringAsFixed(1)} Mbit/s';
   }
 
@@ -150,9 +161,7 @@ class _StatsCardState extends State<StatsCard> {
             child: SizedBox(
               height: 80,
               width: double.infinity,
-              child: CustomPaint(
-                painter: _SpeedChartPainter(_paddedHistory),
-              ),
+              child: CustomPaint(painter: _SpeedChartPainter(_paddedHistory)),
             ),
           ),
           // Max speed label
@@ -189,8 +198,7 @@ class _StatsCardState extends State<StatsCard> {
                       icon: Icons.arrow_downward_rounded,
                       label: 'Загрузка',
                       value: isActive
-                          ? VpnStats.formatSpeed(
-                              widget.stats.downloadSpeedBps)
+                          ? VpnStats.formatSpeed(widget.stats.downloadSpeedBps)
                           : '—',
                       color: AppColors.chartDownload,
                     ),
@@ -224,7 +232,9 @@ class _StatsCardState extends State<StatsCard> {
                     _StatItem(
                       icon: Icons.timer_outlined,
                       label: 'Время',
-                      value: VpnStats.formatDuration(widget.stats.connectedDuration),
+                      value: VpnStats.formatDuration(
+                        widget.stats.connectedDuration,
+                      ),
                       color: AppColors.textSecondary,
                     ),
                     const Spacer(),
@@ -394,11 +404,15 @@ class _SpeedChartPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     canvas.drawPath(fillPath, fillPaint);
-    canvas.drawPath(linePath, color == AppColors.chartDownload ? _downloadPaint : _uploadPaint);
+    canvas.drawPath(
+      linePath,
+      color == AppColors.chartDownload ? _downloadPaint : _uploadPaint,
+    );
   }
 
   @override
   // The history is capped, so its length stops changing once full — compare
   // identity instead: every stats tick delivers a freshly built list.
-  bool shouldRepaint(_SpeedChartPainter old) => !identical(history, old.history);
+  bool shouldRepaint(_SpeedChartPainter old) =>
+      !identical(history, old.history);
 }

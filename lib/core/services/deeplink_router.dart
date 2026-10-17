@@ -29,16 +29,31 @@ class DeeplinkParseResult {
   });
 
   factory DeeplinkParseResult.inlineProfile(ProfileBundle bundle) =>
-      DeeplinkParseResult._(type: DeeplinkType.profile, source: DeeplinkSource.data, profileBundle: bundle);
+      DeeplinkParseResult._(
+        type: DeeplinkType.profile,
+        source: DeeplinkSource.data,
+        profileBundle: bundle,
+      );
 
-  factory DeeplinkParseResult.urlProfile(String url) =>
-      DeeplinkParseResult._(type: DeeplinkType.profile, source: DeeplinkSource.url, urlValue: url);
+  factory DeeplinkParseResult.urlProfile(String url) => DeeplinkParseResult._(
+    type: DeeplinkType.profile,
+    source: DeeplinkSource.url,
+    urlValue: url,
+  );
 
   factory DeeplinkParseResult.inlineConnections(ConnectionsBundle bundle) =>
-      DeeplinkParseResult._(type: DeeplinkType.connections, source: DeeplinkSource.data, connectionsBundle: bundle);
+      DeeplinkParseResult._(
+        type: DeeplinkType.connections,
+        source: DeeplinkSource.data,
+        connectionsBundle: bundle,
+      );
 
   factory DeeplinkParseResult.urlConnections(String url) =>
-      DeeplinkParseResult._(type: DeeplinkType.connections, source: DeeplinkSource.url, urlValue: url);
+      DeeplinkParseResult._(
+        type: DeeplinkType.connections,
+        source: DeeplinkSource.url,
+        urlValue: url,
+      );
 
   String? get effectiveSourceUrl {
     if (source == DeeplinkSource.url) return urlValue;
@@ -75,9 +90,13 @@ class DeeplinkRouter {
       if (dataParam != null) {
         switch (type) {
           case DeeplinkType.profile:
-            return DeeplinkParseResult.inlineProfile(ProfileBundle.fromBase64(dataParam));
+            return DeeplinkParseResult.inlineProfile(
+              ProfileBundle.fromBase64(dataParam),
+            );
           case DeeplinkType.connections:
-            return DeeplinkParseResult.inlineConnections(ConnectionsBundle.fromBase64(dataParam));
+            return DeeplinkParseResult.inlineConnections(
+              ConnectionsBundle.fromBase64(dataParam),
+            );
         }
       }
 
@@ -100,10 +119,14 @@ class DeeplinkRouter {
   ///
   /// Returns the parsed bundle or null on failure.
   static Future<Object?> fetchFromUrl(DeeplinkParseResult result) async {
-    if (result.source != DeeplinkSource.url || result.urlValue == null) return null;
+    if (result.source != DeeplinkSource.url || result.urlValue == null) {
+      return null;
+    }
 
     try {
-      final response = await http.get(Uri.parse(result.urlValue!)).timeout(const Duration(seconds: 15));
+      final response = await http
+          .get(Uri.parse(result.urlValue!))
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode != 200) return null;
 
       switch (result.type) {

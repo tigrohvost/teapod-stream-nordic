@@ -195,7 +195,8 @@ class ConfigStorageService {
 
   Future<void> savePins(List<PinnedRef> pins) async {
     await _secure.writePinsRaw(
-        jsonEncode(pins.map((p) => p.toJson()).toList()));
+      jsonEncode(pins.map((p) => p.toJson()).toList()),
+    );
   }
 
   Future<void> addSubscription(Subscription sub) async {

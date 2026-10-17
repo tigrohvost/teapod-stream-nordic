@@ -4,7 +4,8 @@ import '../../core/models/vpn_config.dart';
 import '../../core/models/dns_config.dart';
 import '../../core/models/routing_settings.dart';
 import '../../core/constants/xray_defaults.dart';
-import '../../core/services/settings_service.dart' show DnsQueryStrategy, TlsFingerprint;
+import '../../core/services/settings_service.dart'
+    show DnsQueryStrategy, TlsFingerprint;
 
 class XrayConfigBuilder {
   static const _ruServicesDomains = [
@@ -306,7 +307,9 @@ class XrayConfigBuilder {
         // xray-core has no DNS-over-TLS client (no tls:// scheme): such an address
         // was taken for a plain UDP server literally named "tls://…" and every query
         // failed. The DoT providers serve the same resolver over DoH, so use that.
-        servers.add({'address': 'https://${server.domain ?? server.address}/dns-query'});
+        servers.add({
+          'address': 'https://${server.domain ?? server.address}/dns-query',
+        });
         break;
     }
 
@@ -342,7 +345,10 @@ class XrayConfigBuilder {
     };
   }
 
-  static Map<String, dynamic> _buildOutbound(VpnConfig config, TlsFingerprint fp) {
+  static Map<String, dynamic> _buildOutbound(
+    VpnConfig config,
+    TlsFingerprint fp,
+  ) {
     if (config.protocol == VpnProtocol.hysteria2) {
       return {
         'tag': 'proxy',
@@ -442,7 +448,10 @@ class XrayConfigBuilder {
     }
   }
 
-  static Map<String, dynamic> _buildStreamSettings(VpnConfig config, TlsFingerprint fp) {
+  static Map<String, dynamic> _buildStreamSettings(
+    VpnConfig config,
+    TlsFingerprint fp,
+  ) {
     // Глобальный override из настроек приложения; defaultFp — значение из конфига.
     final fingerprint = fp.xrayValue ?? config.fingerprint;
     if (config.protocol == VpnProtocol.hysteria2) {
@@ -552,13 +561,19 @@ class XrayConfigBuilder {
 
       // Preserve the original socks inbound tag so server routing rules
       // (inboundTag: ["socks", "http"]) keep matching after we replace the inbound.
-      final originalInbounds = List<dynamic>.from(cfg['inbounds'] as List? ?? []);
-      final socksTag = originalInbounds
-          .whereType<Map<String, dynamic>>()
-          .where((i) => i['protocol'] == 'socks')
-          .map((i) => i['tag'] as String?)
-          .firstWhere((t) => t != null && t.isNotEmpty, orElse: () => null)
-          ?? 'socks';
+      final originalInbounds = List<dynamic>.from(
+        cfg['inbounds'] as List? ?? [],
+      );
+      final socksTag =
+          originalInbounds
+              .whereType<Map<String, dynamic>>()
+              .where((i) => i['protocol'] == 'socks')
+              .map((i) => i['tag'] as String?)
+              .firstWhere(
+                (t) => t != null && t.isNotEmpty,
+                orElse: () => null,
+              ) ??
+          'socks';
 
       cfg['inbounds'] = [
         {
@@ -624,7 +639,11 @@ class XrayConfigBuilder {
       if (routing.direction == RoutingDirection.bypass) {
         appRules.addAll(_buildGeoRules(routing));
       } else if (routing.bypassLocal) {
-        appRules.add({'type': 'field', 'ip': ['geoip:private'], 'outboundTag': 'direct'});
+        appRules.add({
+          'type': 'field',
+          'ip': ['geoip:private'],
+          'outboundTag': 'direct',
+        });
       }
 
       // No catch-all rule — the server's routing handles the remainder.
@@ -703,12 +722,17 @@ class XrayConfigBuilder {
   }
 
   static void _ensureBlackholeOutbound(Map<String, dynamic> cfg) {
-    final outbounds = cfg['outbounds'] as List<dynamic>? ?? (cfg['outbounds'] = <dynamic>[]);
-    final exists = outbounds
-        .whereType<Map<String, dynamic>>()
-        .any((o) => o['tag'] == blackholeTag);
+    final outbounds =
+        cfg['outbounds'] as List<dynamic>? ?? (cfg['outbounds'] = <dynamic>[]);
+    final exists = outbounds.whereType<Map<String, dynamic>>().any(
+      (o) => o['tag'] == blackholeTag,
+    );
     if (!exists) {
-      outbounds.add({'tag': blackholeTag, 'protocol': 'blackhole', 'settings': {}});
+      outbounds.add({
+        'tag': blackholeTag,
+        'protocol': 'blackhole',
+        'settings': {},
+      });
     }
   }
 

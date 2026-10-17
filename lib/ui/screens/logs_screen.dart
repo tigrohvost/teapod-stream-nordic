@@ -154,7 +154,11 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
               ),
             ),
             if (widget.breadcrumbParent != null)
-              BreadcrumbBar(t: t, parent: widget.breadcrumbParent!, current: 'logs'),
+              BreadcrumbBar(
+                t: t,
+                parent: widget.breadcrumbParent!,
+                current: 'logs',
+              ),
 
             // ── Hero panel ──────────────────────────────────────
             HeroPanel(
@@ -180,7 +184,8 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                   _IconBtn(
                     t: t,
                     icon: Icons.monitor_heart_outlined,
-                    onTap: () => ref.read(vpnProvider.notifier).dumpTunnelDiag(),
+                    onTap: () =>
+                        ref.read(vpnProvider.notifier).dumpTunnelDiag(),
                   ),
                   const SizedBox(width: 6),
                   _IconBtn(

@@ -19,7 +19,8 @@ class ProfileStorageService {
 
   Future<void> saveProfiles(List<Profile> profiles) async {
     await _secure.writeProfilesRaw(
-        jsonEncode(profiles.map((p) => p.toJson()).toList()));
+      jsonEncode(profiles.map((p) => p.toJson()).toList()),
+    );
   }
 
   Future<String> loadActiveProfileId() async {

@@ -21,12 +21,14 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final vpnState       = ref.watch(vpnProvider);
+    final vpnState = ref.watch(vpnProvider);
     final effectiveConfig = ref.watch(effectiveConfigProvider);
-    final version        = ref.watch(appVersionProvider).maybeWhen(data: (v) => v, orElse: () => 'v?');
+    final version = ref
+        .watch(appVersionProvider)
+        .maybeWhen(data: (v) => v, orElse: () => 'v?');
     final t = Theme.of(context).extension<TeapodTokens>()!;
     final canToggle = effectiveConfig != null;
-    final pingMs    = effectiveConfig?.latencyMs;
+    final pingMs = effectiveConfig?.latencyMs;
 
     final isConn = vpnState.isConnected;
     final isBusy = vpnState.isBusy;
@@ -43,10 +45,12 @@ class HomeScreen extends ConsumerWidget {
 
     final isManaged = effectiveConfig?.rawXrayConfig != null;
     final routingDirection = ref.watch(
-      settingsProvider.select((s) => s.maybeWhen(
-        data: (d) => d.routing.direction,
-        orElse: () => RoutingDirection.global,
-      )),
+      settingsProvider.select(
+        (s) => s.maybeWhen(
+          data: (d) => d.routing.direction,
+          orElse: () => RoutingDirection.global,
+        ),
+      ),
     );
 
     return Scaffold(
@@ -78,8 +82,7 @@ class HomeScreen extends ConsumerWidget {
                 history: history,
                 onServerTap: () => showServerPicker(context, ref),
               ),
-              if (isManaged)
-                _ManagedWarning(t: t, direction: routingDirection),
+              if (isManaged) _ManagedWarning(t: t, direction: routingDirection),
             ],
           ),
         ),
@@ -114,23 +117,40 @@ class _HeaderStrip extends StatelessWidget {
         runSpacing: 4,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          Text('teapod.stream // $version',
-              style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+          Text(
+            'teapod.stream // $version',
+            style: AppTheme.mono(
+              size: 10,
+              color: t.textMuted,
+              letterSpacing: 1,
+            ),
+          ),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('sys.state [$stateCode]',
-                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
+              Text(
+                'sys.state [$stateCode]',
+                style: AppTheme.mono(
+                  size: 10,
+                  color: t.textMuted,
+                  letterSpacing: 1,
+                ),
+              ),
               const SizedBox(width: 12),
               IconButton(
-                  tooltip: 'Журнал подключения',
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const LogsScreen(breadcrumbParent: 'home')),
+                tooltip: 'Журнал подключения',
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const LogsScreen(breadcrumbParent: 'home'),
                   ),
-                  icon: Icon(Icons.receipt_long_outlined, size: 20, color: t.textDim),
                 ),
+                icon: Icon(
+                  Icons.receipt_long_outlined,
+                  size: 20,
+                  color: t.textDim,
+                ),
+              ),
             ],
           ),
         ],
@@ -220,17 +240,24 @@ class _StateInfo extends ConsumerWidget {
     final isConn = vpnState.isConnected;
     final isConnecting = vpnState.isConnecting;
     final isDisconnecting = vpnState.isDisconnecting;
-    final isBlocked       = vpnState.isBlocked;
-    final ipAsync         = ref.watch(ipInfoProvider);
-    final hasConfig       = ref.watch(effectiveConfigProvider) != null;
+    final isBlocked = vpnState.isBlocked;
+    final ipAsync = ref.watch(ipInfoProvider);
+    final hasConfig = ref.watch(effectiveConfigProvider) != null;
 
-    final hasError = vpnState.error != null && !isConn && !vpnState.isBusy && !isBlocked;
-    final stateWord = hasError ? 'ОШИБКА' : isBlocked
+    final hasError =
+        vpnState.error != null && !isConn && !vpnState.isBusy && !isBlocked;
+    final stateWord = hasError
+        ? 'ОШИБКА'
+        : isBlocked
         ? 'BLOCKED'
         : isConn
-            ? 'ONLINE'
-            : (isConnecting ? 'HANDSHAKE' : (isDisconnecting ? 'SHUTDOWN' : 'OFFLINE'));
-    final stateColor = isBlocked || hasError ? t.danger : (isConn ? t.accent : t.textDim);
+        ? 'ONLINE'
+        : (isConnecting
+              ? 'HANDSHAKE'
+              : (isDisconnecting ? 'SHUTDOWN' : 'OFFLINE'));
+    final stateColor = isBlocked || hasError
+        ? t.danger
+        : (isConn ? t.accent : t.textDim);
 
     String subtitle;
     if (hasError) {
@@ -238,8 +265,14 @@ class _StateInfo extends ConsumerWidget {
     } else if (isBlocked) {
       subtitle = 'kill switch · трафик заблокирован';
     } else if (isConn) {
-      final ipStr = ipAsync.maybeWhen(data: (d) => d?.ip, orElse: () => null) ?? '—';
-      final cc    = ipAsync.maybeWhen(data: (d) => d?.countryCode.toLowerCase(), orElse: () => null) ?? '—';
+      final ipStr =
+          ipAsync.maybeWhen(data: (d) => d?.ip, orElse: () => null) ?? '—';
+      final cc =
+          ipAsync.maybeWhen(
+            data: (d) => d?.countryCode.toLowerCase(),
+            orElse: () => null,
+          ) ??
+          '—';
       subtitle = pingMs != null ? '${pingMs}ms · $cc · $ipStr' : '$cc · $ipStr';
     } else if (isConnecting) {
       subtitle = 'установка соединения…';
@@ -265,9 +298,11 @@ class _StateInfo extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 6),
-        Text(subtitle,
-            textAlign: TextAlign.center,
-            style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5)),
+        Text(
+          subtitle,
+          textAlign: TextAlign.center,
+          style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 0.5),
+        ),
         if (isBlocked) ...[
           const SizedBox(height: 10),
           GestureDetector(
@@ -275,8 +310,14 @@ class _StateInfo extends ConsumerWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
               decoration: BoxDecoration(border: Border.all(color: t.danger)),
-              child: Text('ОТКЛЮЧИТЬ',
-                  style: AppTheme.mono(size: 9, color: t.danger, letterSpacing: 1.5)),
+              child: Text(
+                'ОТКЛЮЧИТЬ',
+                style: AppTheme.mono(
+                  size: 9,
+                  color: t.danger,
+                  letterSpacing: 1.5,
+                ),
+              ),
             ),
           ),
         ],
@@ -292,10 +333,19 @@ class _StateInfo extends ConsumerWidget {
             child: GestureDetector(
               onTap: () => ref.read(vpnProvider.notifier).disconnect(),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 7,
+                ),
                 decoration: BoxDecoration(border: Border.all(color: t.line)),
-                child: Text('ОТМЕНА',
-                    style: AppTheme.mono(size: 9, color: t.textDim, letterSpacing: 1.5)),
+                child: Text(
+                  'ОТМЕНА',
+                  style: AppTheme.mono(
+                    size: 9,
+                    color: t.textDim,
+                    letterSpacing: 1.5,
+                  ),
+                ),
               ),
             ),
           ),
@@ -364,17 +414,17 @@ class _PowerCoreState extends State<_PowerCore>
 
   @override
   Widget build(BuildContext context) {
-    final t       = widget.t;
-    final conn    = widget.isConnected;
-    final busy    = widget.isBusy;
+    final t = widget.t;
+    final conn = widget.isConnected;
+    final busy = widget.isBusy;
     final blocked = widget.isBlocked;
     final actionLabel = !widget.enabled
         ? 'добавить конфигурацию'
         : blocked
-            ? 'переподключить'
-            : conn
-                ? 'отключить'
-                : (busy ? 'ожидание' : 'подключить');
+        ? 'переподключить'
+        : conn
+        ? 'отключить'
+        : (busy ? 'ожидание' : 'подключить');
 
     const coreSize = 220.0;
     const outerSize = coreSize + 32.0;
@@ -385,111 +435,119 @@ class _PowerCoreState extends State<_PowerCore>
       button: true,
       enabled: !busy,
       child: GestureDetector(
-      onTap: busy ? null : widget.onTap,
-      child: SizedBox(
-        width: outerSize,
-        height: outerSize,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            // Outermost faint ring
-            Container(
-              width: outerSize,
-              height: outerSize,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: blocked ? t.danger : (conn ? t.accentSoft : t.line),
-                  width: 1,
-                ),
-              ),
-            ),
-            // Spinning arc when connecting/disconnecting
-            if (busy)
-              SizedBox(
-                width: coreSize + 10,
-                height: coreSize + 10,
-                child: RotationTransition(
-                  turns: _spin,
-                  child: CustomPaint(painter: _SpinArcPainter(t.accent)),
-                ),
-              ),
-            // Main ring
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              width: coreSize,
-              height: coreSize,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                    color: blocked ? t.danger : (conn ? t.accent : t.line), width: 1),
-                boxShadow: conn
-                    ? [
-                        BoxShadow(
-                          color: t.accentSoft,
-                          blurRadius: 60,
-                          spreadRadius: 4,
-                        ),
-                      ]
-                    : null,
-              ),
-            ),
-            // Inner disk
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              width: innerSize,
-              height: innerSize,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: conn ? t.accent : t.line, width: 1),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(10),
-                child: ClipOval(
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      AnimatedOpacity(
-                        duration: const Duration(milliseconds: 250),
-                        opacity: 1,
-                        child: ColorFiltered(
-                          colorFilter: ColorFilter.mode(
-                            conn
-                                ? Colors.white.withAlpha(0x24)
-                                : Colors.white.withAlpha(0x12),
-                            BlendMode.plus,
-                          ),
-                          child: Image.asset(_opossumAsset, fit: BoxFit.cover),
-                        ),
-                      ),
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 250),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: conn ? t.accent.withAlpha(0xAA) : t.lineSoft,
-                            width: conn ? 2 : 1,
-                          ),
-                          boxShadow: conn
-                              ? [
-                                  BoxShadow(
-                                    color: t.accent.withAlpha(0x33),
-                                    blurRadius: 18,
-                                    spreadRadius: 2,
-                                  ),
-                                ]
-                              : null,
-                        ),
-                      ),
-                    ],
+        onTap: busy ? null : widget.onTap,
+        child: SizedBox(
+          width: outerSize,
+          height: outerSize,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Outermost faint ring
+              Container(
+                width: outerSize,
+                height: outerSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: blocked ? t.danger : (conn ? t.accentSoft : t.line),
+                    width: 1,
                   ),
                 ),
               ),
-            ),
-          ],
+              // Spinning arc when connecting/disconnecting
+              if (busy)
+                SizedBox(
+                  width: coreSize + 10,
+                  height: coreSize + 10,
+                  child: RotationTransition(
+                    turns: _spin,
+                    child: CustomPaint(painter: _SpinArcPainter(t.accent)),
+                  ),
+                ),
+              // Main ring
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                width: coreSize,
+                height: coreSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: blocked ? t.danger : (conn ? t.accent : t.line),
+                    width: 1,
+                  ),
+                  boxShadow: conn
+                      ? [
+                          BoxShadow(
+                            color: t.accentSoft,
+                            blurRadius: 60,
+                            spreadRadius: 4,
+                          ),
+                        ]
+                      : null,
+                ),
+              ),
+              // Inner disk
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                width: innerSize,
+                height: innerSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: conn ? t.accent : t.line, width: 1),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: ClipOval(
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        AnimatedOpacity(
+                          duration: const Duration(milliseconds: 250),
+                          opacity: 1,
+                          child: ColorFiltered(
+                            colorFilter: ColorFilter.mode(
+                              conn
+                                  ? Colors.white.withAlpha(0x24)
+                                  : Colors.white.withAlpha(0x12),
+                              BlendMode.plus,
+                            ),
+                            child: Image.asset(
+                              _opossumAsset,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                        ),
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 250),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: conn
+                                  ? t.accent.withAlpha(0xAA)
+                                  : t.lineSoft,
+                              width: conn ? 2 : 1,
+                            ),
+                            boxShadow: conn
+                                ? [
+                                    BoxShadow(
+                                      color: t.accent.withAlpha(0x33),
+                                      blurRadius: 18,
+                                      spreadRadius: 2,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-    ));
+    );
   }
 }
 
@@ -752,11 +810,19 @@ class _ManagedWarning extends StatelessWidget {
       ),
       child: RichText(
         text: TextSpan(
-          style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 0.5),
+          style: AppTheme.mono(
+            size: 10,
+            color: t.textMuted,
+            letterSpacing: 0.5,
+          ),
           children: [
             TextSpan(
               text: '[managed] ',
-              style: AppTheme.mono(size: 10, color: AppColors.accentOrange, letterSpacing: 0.5),
+              style: AppTheme.mono(
+                size: 10,
+                color: AppColors.accentOrange,
+                letterSpacing: 0.5,
+              ),
             ),
             TextSpan(text: detail),
           ],
@@ -820,8 +886,9 @@ class _MetricCell extends StatelessWidget {
           ),
           const SizedBox(height: 3),
           Row(
-            mainAxisAlignment:
-                alignRight ? MainAxisAlignment.end : MainAxisAlignment.start,
+            mainAxisAlignment: alignRight
+                ? MainAxisAlignment.end
+                : MainAxisAlignment.start,
             crossAxisAlignment: compactValue
                 ? CrossAxisAlignment.center
                 : CrossAxisAlignment.baseline,
@@ -833,11 +900,17 @@ class _MetricCell extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: compactValue
                       ? AppTheme.sans(
-                          size: 15, weight: FontWeight.w500,
-                          color: t.text, letterSpacing: -0.3)
+                          size: 15,
+                          weight: FontWeight.w500,
+                          color: t.text,
+                          letterSpacing: -0.3,
+                        )
                       : AppTheme.mono(
-                          size: 20, weight: FontWeight.w500,
-                          color: t.text, letterSpacing: -0.5),
+                          size: 20,
+                          weight: FontWeight.w500,
+                          color: t.text,
+                          letterSpacing: -0.5,
+                        ),
                 ),
               ),
               if (unit != null) ...[

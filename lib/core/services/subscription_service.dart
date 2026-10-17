@@ -17,7 +17,8 @@ class UntrustedCertificateException implements Exception {
   });
 
   @override
-  String toString() => 'UntrustedCertificateException: $host — $subject (issued by $issuer)';
+  String toString() =>
+      'UntrustedCertificateException: $host — $subject (issued by $issuer)';
 }
 
 class SubscriptionFetchResult {
@@ -92,27 +93,31 @@ class SubscriptionService {
     final uri = Uri.parse(url);
     // Without a connect timeout an unreachable host (refresh runs outside the
     // tunnel) held up startup sync for the OS TCP timeout — minutes.
-    final httpClient = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    final httpClient = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
 
     UntrustedCertificateException? certError;
 
     httpClient.badCertificateCallback =
         (X509Certificate cert, String host, int port) {
-      if (allowSelfSigned) return true;
-      certError = UntrustedCertificateException(
-        host: host,
-        subject: cert.subject,
-        issuer: cert.issuer,
-      );
-      return false;
-    };
+          if (allowSelfSigned) return true;
+          certError = UntrustedCertificateException(
+            host: host,
+            subject: cert.subject,
+            issuer: cert.issuer,
+          );
+          return false;
+        };
 
     String body;
     HttpHeaders responseHeaders;
     try {
       final request = await httpClient.getUrl(uri);
       final ua = userAgent?.trim() ?? '';
-      request.headers.set('User-Agent', ua.isNotEmpty ? ua : AppConstants.subscriptionUserAgent);
+      request.headers.set(
+        'User-Agent',
+        ua.isNotEmpty ? ua : AppConstants.subscriptionUserAgent,
+      );
 
       if (hwid != null) {
         request.headers.set('X-Hwid', hwid.deviceId);
@@ -121,8 +126,9 @@ class SubscriptionService {
         request.headers.set('X-Ver-Os', hwid.osVersion.toString());
       }
 
-      final response =
-          await request.close().timeout(const Duration(seconds: 15));
+      final response = await request.close().timeout(
+        const Duration(seconds: 15),
+      );
 
       if (response.statusCode != 200) {
         throw Exception('Failed to fetch subscription: ${response.statusCode}');
@@ -179,18 +185,20 @@ class SubscriptionService {
               break;
             }
           }
-          configs.add(VpnConfig(
-            id: 'xray_${DateTime.now().millisecondsSinceEpoch}_${configs.length}',
-            name: remarks,
-            protocol: VpnProtocol.vless,
-            address: address.isEmpty ? 'managed' : address,
-            port: port > 0 ? port : 443,
-            uuid: '',
-            security: VpnSecurity.none,
-            transport: VpnTransport.tcp,
-            createdAt: DateTime.now(),
-            rawXrayConfig: rawJson,
-          ));
+          configs.add(
+            VpnConfig(
+              id: 'xray_${DateTime.now().millisecondsSinceEpoch}_${configs.length}',
+              name: remarks,
+              protocol: VpnProtocol.vless,
+              address: address.isEmpty ? 'managed' : address,
+              port: port > 0 ? port : 443,
+              uuid: '',
+              security: VpnSecurity.none,
+              transport: VpnTransport.tcp,
+              createdAt: DateTime.now(),
+              rawXrayConfig: rawJson,
+            ),
+          );
         }
         if (configs.isNotEmpty) {
           return SubscriptionFetchResult(
@@ -254,7 +262,14 @@ class SubscriptionService {
   static List<String> _splitLines(String s) =>
       s.split(RegExp(r'\r?\n')).where((l) => l.trim().isNotEmpty).toList();
 
-  static const _uriSchemes = ['vless://', 'vmess://', 'trojan://', 'ss://', 'hy2://', 'hysteria2://'];
+  static const _uriSchemes = [
+    'vless://',
+    'vmess://',
+    'trojan://',
+    'ss://',
+    'hy2://',
+    'hysteria2://',
+  ];
 
   static bool _isKnownUri(String line) {
     final t = line.trim();
@@ -275,7 +290,9 @@ class SubscriptionService {
     final hwidNotSupported = headers.value('x-hwid-not-supported');
     final hwidMaxDevices = headers.value('x-hwid-max-devices-reached');
 
-    if (hwidActive != null || hwidNotSupported != null || hwidMaxDevices != null) {
+    if (hwidActive != null ||
+        hwidNotSupported != null ||
+        hwidMaxDevices != null) {
       hwidStatus = HwidStatus(
         isActive: hwidActive == 'true',
         notSupported: hwidNotSupported == 'true',
@@ -306,7 +323,9 @@ class SubscriptionService {
           case 'total':
             if (val > 0) totalBytes = val;
           case 'expire':
-            if (val > 0) expireAt = DateTime.fromMillisecondsSinceEpoch(val * 1000);
+            if (val > 0) {
+              expireAt = DateTime.fromMillisecondsSinceEpoch(val * 1000);
+            }
         }
       }
     }

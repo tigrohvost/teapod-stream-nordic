@@ -5,7 +5,14 @@ import '../models/routing_settings.dart';
 import '../services/settings_service.dart';
 
 /// blocked — kill switch удерживает TUN-sink после обрыва: трафик заблокирован.
-enum VpnState { disconnected, connecting, connected, disconnecting, error, blocked }
+enum VpnState {
+  disconnected,
+  connecting,
+  connected,
+  disconnecting,
+  error,
+  blocked,
+}
 
 abstract class VpnEngine {
   String get protocolName;
