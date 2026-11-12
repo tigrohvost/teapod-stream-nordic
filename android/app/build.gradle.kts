@@ -43,9 +43,13 @@ android {
         versionName = flutter.versionName
         // teapod-core no longer ships a 32-bit runtime. Restrict native builds
         // as well as Flutter target platforms, including local APK/AAB builds.
-        ndk {
-            abiFilters.clear()
-            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+        // Android rejects ndk.abiFilters combined with Flutter ABI splits.
+        // Split builds already receive the explicit 64-bit --target-platform.
+        if (project.findProperty("split-per-abi") != "true") {
+            ndk {
+                abiFilters.clear()
+                abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+            }
         }
 
     }
