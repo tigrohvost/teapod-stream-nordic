@@ -17,7 +17,8 @@ cd "$SCRIPT_DIR"
 
 JNILIBS_DIR="android/app/src/main/jniLibs"
 LIBS_DIR="android/app/libs"
-ALL_ABIS=("arm64-v8a" "armeabi-v7a" "x86_64")
+ALL_ABIS=("arm64-v8a" "x86_64")
+TARGET_PLATFORMS="android-arm64,android-x64"
 DEFAULT_ABI="arm64-v8a"
 LOCAL_TEAPOD_CORE_DIR="../teapod-core/outputs"
 NDK_VERSION="28.2.13676358"
@@ -90,7 +91,7 @@ check_binaries() {
     warn "Критически важные бинарники отсутствуют!"
     return 1
   fi
-  return 0
+  python3 tools/verify_release_apks.py --aar-only
 }
 
 find_strip_tool() {
@@ -174,7 +175,7 @@ rename_apks() {
 
   echo ""
   if ls "$dir"/app-arm64-v8a-release.apk 1>/dev/null 2>&1; then
-    for abi in arm64-v8a armeabi-v7a x86_64; do
+    for abi in "${ALL_ABIS[@]}"; do
       local src="$dir/app-$abi-release.apk"
       if [[ -f "$src" ]]; then
         # Без версии в имени: ссылка вида
@@ -185,7 +186,7 @@ rename_apks() {
       fi
     done
   elif ls "$dir"/app-arm64-v8a-debug.apk 1>/dev/null 2>&1; then
-    for abi in arm64-v8a armeabi-v7a x86_64; do
+    for abi in "${ALL_ABIS[@]}"; do
       local src="$dir/app-$abi-debug.apk"
       if [[ -f "$src" ]]; then
         local dst="$dir/teapod-stream-$abi-debug-$VERSION.apk"
@@ -208,10 +209,26 @@ push_release() {
   local is_pre=${1:-false}
   local dir="build/app/outputs/flutter-apk"
   local tag="v$VERSION"
+  local source_sha remote_tag
+  source_sha=$(git rev-parse HEAD)
+  if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    err "Рабочее дерево изменено: публикация требует чистого коммита."
+  fi
+  # Never move/reuse a tag for different sources (including v1.6.11).
+  remote_tag=$(git ls-remote origin "refs/tags/$tag") || err "Не удалось проверить удалённый тег; публикация остановлена."
+  if [[ -n "$remote_tag" ]]; then
+    git fetch origin "refs/tags/$tag:refs/tags/$tag"
+    if [[ "$(git rev-parse "$tag^{commit}")" != "$source_sha" ]]; then
+      err "Тег $tag указывает на другой коммит. Используйте новую версию; существующий тег не изменён."
+    fi
+  fi
+
+  # Never publish stale/unsupported or unsigned APKs from a local output directory.
+  python3 tools/verify_release_apks.py --source-sha "$source_sha" --require-release-signature
 
   # Find APK files (release-сборки лежат без версии в имени)
   local apks=()
-  for name in "${ALL_ABIS[@]}" universal; do
+  for name in "${ALL_ABIS[@]}"; do
     if [[ -f "$dir/teapod-stream-$name.apk" ]]; then
       apks+=("$dir/teapod-stream-$name.apk")
     fi
@@ -219,6 +236,8 @@ push_release() {
   if [[ ${#apks[@]} -eq 0 ]]; then
     err "APK не найдены! Сначала выполните: ./build.sh release"
   fi
+
+  apks+=("$dir/release-manifest.json" "$dir/SHA256SUMS")
 
   # Check if gh is installed
   if ! command -v gh &>/dev/null; then
@@ -234,10 +253,9 @@ push_release() {
 
   # Check if tag already exists
   if gh release view "$tag" &>/dev/null; then
-    warn "Релиз $tag уже существует, обновляю..."
-    gh release upload "$tag" "${apks[@]}" --clobber
+    err "Релиз $tag уже существует. Перезапись опубликованных файлов запрещена; используйте новую версию."
   else
-    local flags=("--title" "TeapodStream $VERSION" "--generate-notes")
+    local flags=("--title" "TeapodStream $VERSION" "--generate-notes" "--target" "$source_sha")
     [[ "$is_pre" == "true" ]] && flags+=("--prerelease")
     gh release create "$tag" "${flags[@]}" "${apks[@]}"
   fi
@@ -250,16 +268,16 @@ case "${1:-help}" in
   debug)
     log "Сборка DEBUG APK..."
     accept_sdk_licenses
-    check_binaries || true
+    check_binaries
     ensure_pub
-    flutter build apk --debug --split-per-abi --no-pub
+    flutter build apk --debug --split-per-abi --target-platform "$TARGET_PLATFORMS" --no-pub
     rename_apks
     ;;
 
   release)
-    log "Сборка RELEASE APK (arm64 + arm32 + x86_64)..."
+    log "Сборка RELEASE APK (arm64 + x86_64)..."
     accept_sdk_licenses
-    check_binaries || true
+    check_binaries
     ensure_pub
 
     dir="build/app/outputs/flutter-apk"
@@ -267,7 +285,7 @@ case "${1:-help}" in
     # уцелевший файл от прошлой сборки может уехать в релиз как свежий.
     rm -f "$dir"/app-*-release.apk "$dir"/teapod-stream-*.apk
 
-    flutter build apk --release --split-per-abi --no-pub \
+    flutter build apk --release --split-per-abi --target-platform "$TARGET_PLATFORMS" --no-pub \
       --obfuscate --split-debug-info=build/app/outputs/symbols
 
     rename_apks
@@ -276,22 +294,22 @@ case "${1:-help}" in
   aab)
     log "Сборка RELEASE AAB..."
     accept_sdk_licenses
-    check_binaries || warn "Продолжаем без бинарников"
+    check_binaries
     ensure_pub
-    flutter build appbundle --release --no-pub
+    flutter build appbundle --release --target-platform "$TARGET_PLATFORMS" --no-pub
     ok "AAB: build/app/outputs/bundle/release/app-release.aab"
     ;;
 
   run)
     log "Запуск DEBUG..."
-    check_binaries || true
+    check_binaries
     ensure_pub
     flutter run --debug --no-pub
     ;;
 
   run-release)
     log "Запуск RELEASE..."
-    check_binaries || warn "Бинарники отсутствуют"
+    check_binaries
     ensure_pub
     flutter run --release --no-pub
     ;;

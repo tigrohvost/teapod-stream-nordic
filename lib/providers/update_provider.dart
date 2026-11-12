@@ -15,6 +15,11 @@ class UpdateIdle extends UpdateState {}
 
 class UpdateChecking extends UpdateState {}
 
+class UpdateUnsupported extends UpdateState {
+  final String message;
+  UpdateUnsupported(this.message);
+}
+
 class UpdateUpToDate extends UpdateState {
   final UpdateInfo info;
   UpdateUpToDate(this.info);
@@ -71,7 +76,9 @@ class UpdateNotifier extends Notifier<UpdateState> {
     try {
       final pkgInfo = await PackageInfo.fromPlatform();
       final currentVersion = pkgInfo.version;
-      final abi = await _channel.invokeMethod<String>('getAbi') ?? 'arm64-v8a';
+      final detectedAbi = await _channel.invokeMethod<String>('getAbi');
+      UpdateService.requireSupportedAbi(detectedAbi);
+      final abi = detectedAbi!;
       if (!ref.mounted || checkId != _checkId) return;
       final vpn = ref.read(vpnProvider);
       final settings = ref
@@ -102,6 +109,10 @@ class UpdateNotifier extends Notifier<UpdateState> {
       } else {
         state = UpdateUpToDate(update);
       }
+    } on UnsupportedUpdateAbi catch (e) {
+      if (ref.mounted && checkId == _checkId) {
+        state = UpdateUnsupported(e.message);
+      }
     } catch (e) {
       if (ref.mounted && checkId == _checkId) {
         state = UpdateError('Ошибка проверки: $e');
@@ -124,7 +135,9 @@ class UpdateNotifier extends Notifier<UpdateState> {
     );
     _currentApkPath = null;
     try {
-      final abi = await _channel.invokeMethod<String>('getAbi') ?? 'arm64-v8a';
+      final detectedAbi = await _channel.invokeMethod<String>('getAbi');
+      UpdateService.requireSupportedAbi(detectedAbi);
+      final abi = detectedAbi!;
       final path = await _apkPath(info.version, abi);
       if (!ref.mounted || downloadId != _downloadId) return;
       _currentApkPath = path;
@@ -161,6 +174,10 @@ class UpdateNotifier extends Notifier<UpdateState> {
               _dlSub = null;
             },
           );
+    } on UnsupportedUpdateAbi catch (e) {
+      if (ref.mounted && downloadId == _downloadId) {
+        state = UpdateUnsupported(e.message);
+      }
     } catch (e) {
       if (ref.mounted && downloadId == _downloadId) {
         state = UpdateError('Ошибка загрузки: $e', retryInfo: info);

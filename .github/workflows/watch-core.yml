@@ -40,30 +40,20 @@ jobs:
         run: |
           STATE=.github/teapod-core-version.txt
           CORE=$(gh release view -R Wendor/teapod-core --json tagName -q .tagName)
-          PREV=$(cat "$STATE" 2>/dev/null || true)
+          # A pinned dependency is NOT proof of successful publication. Read
+          # the manifest from the latest public release, so failed attempts retry.
+          MANIFEST=$(mktemp -d)
+          trap 'rm -rf "$MANIFEST"' EXIT
+          gh release download --pattern release-manifest.json --dir "$MANIFEST"
+          PREV=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["teapod_core"])' "$MANIFEST/release-manifest.json")
           echo "core=$CORE" >> "$GITHUB_OUTPUT"
-          echo "released core: $CORE, recorded: ${PREV:-<none>}"
-
-          git config user.name  'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          # First run: record the current core without cutting a release, so
-          # enabling this workflow does not immediately publish one.
-          if [[ -z "$PREV" ]]; then
-            echo "$CORE" > "$STATE"
-            git add "$STATE"
-            git commit -m "chore: record teapod-core $CORE as the current core"
-            git push origin HEAD:master
-            echo "bumped=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Recorded teapod-core $CORE. The next core release will trigger a build."
-            exit 0
-          fi
-
+          echo "upstream core: $CORE, last published core: $PREV"
           if [[ "$PREV" == "$CORE" ]]; then
             echo "bumped=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::teapod-core $CORE is already released."
             exit 0
           fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
           VERSION=$(grep '^version:' pubspec.yaml | head -1 | cut -d' ' -f2 | cut -d'+' -f1)
           IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
@@ -81,8 +71,13 @@ jobs:
           echo "$CORE" > "$STATE"
           git add pubspec.yaml "$STATE"
           git commit -m "chore: release $NEW with teapod-core $CORE"
-          git tag -a "v$NEW" -m "TeapodStream Nordic $NEW (teapod-core $CORE)"
-          git push origin HEAD:master "refs/tags/v$NEW"
+          # Do not expose a tag before verification. Never move an existing tag.
+          EXISTING_TAG=$(git ls-remote origin "refs/tags/v$NEW")
+          if [[ -n "$EXISTING_TAG" ]]; then
+            echo "::error::Tag v$NEW already exists; recovery requires a newer version."
+            exit 1
+          fi
+          git push origin HEAD:master
 
           echo "bumped=true" >> "$GITHUB_OUTPUT"
           echo "tag=refs/tags/v$NEW" >> "$GITHUB_OUTPUT"
@@ -90,8 +85,7 @@ jobs:
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "::notice::teapod-core $CORE -> releasing $NEW"
 
-  # Pushing a tag with GITHUB_TOKEN does not start another workflow, so the
-  # build is called directly instead of waiting for the tag trigger.
+  # Build the exact candidate directly; no tag exists until publication.
   release:
     name: Build and publish
     needs: check
@@ -101,12 +95,11 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       publish_release: true
-      ref: ${{ needs.check.outputs.tag }}
+      ref: ${{ needs.check.outputs.commit }}
     secrets: inherit
 
-  # The bump and the tag are pushed before the build runs, so a failed build
-  # would otherwise leave master on a version that has no release and a tag
-  # that points at nothing published. Undo both and let the next run retry.
+  # Restore only our untouched tip, never rewrite history or remove tags.
+  # Reporting is independent: disabled Issues cannot prevent recovery.
   rollback:
     name: Roll back the failed release
     needs: [check, release]
@@ -114,29 +107,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      issues: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: master
           fetch-depth: 0
 
-      - name: Report the failure
+      - name: Restore the unpublished bump safely
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TITLE="teapod-core ${{ needs.check.outputs.core }}: релиз ${{ needs.check.outputs.version }} не собрался"
-          FOUND=$(gh issue list --state open --search "$TITLE in:title" --json number -q '.[0].number')
-          if [[ -z "$FOUND" ]]; then
-            gh issue create --title "$TITLE" --body "Автоматический релиз на ядро \`${{ needs.check.outputs.core }}\` не собрался: [прогон](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+          CANDIDATE: ${{ needs.check.outputs.commit }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: bash tools/rollback_release.sh
 
-          Бамп версии откачен, тег \`v${{ needs.check.outputs.version }}\` удалён. Следующая проверка попробует снова через 6 часов."
-          fi
-
-      - name: Undo the bump and drop the tag
+      - name: Report the actual recovery result
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          git config user.name  'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git push origin --delete "v${{ needs.check.outputs.version }}" || true
-          git revert --no-edit "${{ needs.check.outputs.commit }}"
-          git push origin HEAD:master
+          echo "Release failed. See recovery step for its actual outcome: $RUN_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "A later check compares the published manifest, not the pinned dependency." >> "$GITHUB_STEP_SUMMARY"

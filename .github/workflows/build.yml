@@ -71,6 +71,9 @@ jobs:
         run: mkdir -p assets/binaries && touch assets/binaries/.gitkeep
 
       - run: flutter pub get --enforce-lockfile
+      - name: Test release tooling
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
+
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
 
@@ -175,6 +178,9 @@ jobs:
           ls -lh android/app/libs/teapod-core.aar
           echo "sha256=$(sha256sum android/app/libs/teapod-core.aar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
+      - name: Verify core ABI support before building
+        run: python3 tools/verify_release_apks.py --aar-only
+
       - name: Download geodata
         run: |
           mkdir -p assets/binaries
@@ -209,7 +215,7 @@ jobs:
 
       - name: Build release APKs
         run: |
-          flutter build apk --release --split-per-abi --no-pub \
+          flutter build apk --release --split-per-abi --target-platform android-arm64,android-x64 --no-pub \
             --obfuscate --split-debug-info=build/app/outputs/symbols
 
       - name: Test Android connection and notification policies
@@ -222,7 +228,7 @@ jobs:
       - name: Rename APKs
         run: |
           DIR=build/app/outputs/flutter-apk
-          for ABI in arm64-v8a armeabi-v7a x86_64; do
+          for ABI in arm64-v8a x86_64; do
             SRC="$DIR/app-$ABI-release.apk"
             if [[ -f "$SRC" ]]; then
               mv "$SRC" "$DIR/teapod-stream-$ABI.apk"
@@ -280,7 +286,8 @@ jobs:
           SOURCE_SHA=$(git rev-parse HEAD)
           # Reusable workflows retain the caller's GITHUB_SHA. The release
           # must point at the checked out and tested commit instead.
-          if [[ -n "$(git ls-remote origin "refs/tags/$TAG")" ]]; then
+          EXISTING_TAG=$(git ls-remote origin "refs/tags/$TAG")
+          if [[ -n "$EXISTING_TAG" ]]; then
             git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
             if [[ "$(git rev-parse "$TAG^{commit}")" != "$SOURCE_SHA" ]]; then
               echo "::error::Release tag $TAG does not point at the built source"
@@ -288,7 +295,7 @@ jobs:
             fi
           fi
           ASSETS=(build/app/outputs/flutter-apk/release-manifest.json build/app/outputs/flutter-apk/SHA256SUMS)
-          for ABI in arm64-v8a armeabi-v7a x86_64; do
+          for ABI in arm64-v8a x86_64; do
             APK="build/app/outputs/flutter-apk/teapod-stream-$ABI.apk"
             if [[ -f "$APK" ]]; then
               ASSETS+=("$APK")
@@ -299,7 +306,8 @@ jobs:
             ASSETS+=("$SYMBOLS")
           fi
           if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            echo "::error::Release $TAG already exists; refusing to overwrite published assets."
+            exit 1
           else
             FLAGS=(--title "TeapodStream Nordic $VERSION" --generate-notes --target "$SOURCE_SHA")
             # --notes is prepended to the generated notes. The core is a

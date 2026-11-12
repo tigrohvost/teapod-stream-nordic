@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:teapodstream/core/constants/app_constants.dart';
@@ -65,6 +66,41 @@ void main() {
       expect(container.read(updateProvider), isA<UpdateDownloaded>());
     },
   );
+
+  test(
+    '32-bit device has a distinct unsupported state without downloading',
+    () async {
+      PackageInfo.setMockInitialValues(
+        appName: 'Teapod',
+        packageName: 'com.teapodstream.teapodstream',
+        version: '1.6.6',
+        buildNumber: '10606',
+        buildSignature: '',
+      );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            expect(call.method, 'getAbi');
+            return 'armeabi-v7a';
+          });
+      final notifier = container.read(updateProvider.notifier);
+      await notifier.checkForUpdate();
+      expect(container.read(updateProvider), isA<UpdateUnsupported>());
+      await notifier.startDownload(_info);
+      expect(container.read(updateProvider), isA<UpdateUnsupported>());
+    },
+  );
+
+  test('unknown ABI is an error instead of selecting arm64', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async => null);
+    final notifier = container.read(updateProvider.notifier);
+    await notifier.startDownload(_info);
+    expect(container.read(updateProvider), isA<UpdateError>());
+    expect(
+      (container.read(updateProvider) as UpdateError).message,
+      contains('архитектуру'),
+    );
+  });
 
   test('missing APK offers a download retry', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

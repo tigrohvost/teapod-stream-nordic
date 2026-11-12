@@ -6,6 +6,21 @@ import 'package:socks5_proxy/socks.dart';
 
 enum UpdateChannel { stable, beta }
 
+/// An explicit compatibility result, not a network error or "up to date".
+class UnsupportedUpdateAbi implements Exception {
+  final String abi;
+  const UnsupportedUpdateAbi(this.abi);
+
+  String get message => abi == 'armeabi-v7a'
+      ? 'Новые обновления для 32-битных устройств больше не выпускаются. '
+            'Последняя версия для них: 1.6.6. Можно оставить установленную версию.'
+      : 'Обновления для архитектуры $abi не поддерживаются. '
+            'Поддерживаются arm64-v8a и x86_64.';
+
+  @override
+  String toString() => message;
+}
+
 class UpdateInfo {
   final String version;
   final String downloadUrl;
@@ -35,6 +50,17 @@ class DownloadProgress {
 }
 
 class UpdateService {
+  static const supportedAbis = {'arm64-v8a', 'x86_64'};
+
+  static void requireSupportedAbi(String? abi) {
+    if (abi == null || abi.trim().isEmpty) {
+      throw const FormatException(
+        'Не удалось определить архитектуру устройства',
+      );
+    }
+    if (!supportedAbis.contains(abi)) throw UnsupportedUpdateAbi(abi);
+  }
+
   // Fork releases: the Nordic build is signed with its own key, so updates
   // must come from the fork's repository, never from upstream.
   static const _githubApiLatest =
@@ -58,7 +84,8 @@ class UpdateService {
     return client;
   }
 
-  /// Returns null if already up to date or no matching APK asset found.
+  /// Returns null if already up to date or release metadata is unavailable.
+  /// Throws [UnsupportedUpdateAbi] for discontinued/unsupported devices.
   /// Pass [socksPort] to route through the active VPN SOCKS5 proxy.
   /// Pass [force] to skip version comparison (for reinstall).
   Future<UpdateInfo?> checkForUpdate(
@@ -70,6 +97,7 @@ class UpdateService {
     String? socksPassword,
     bool force = false,
   }) async {
+    requireSupportedAbi(abi);
     final client = _makeClient(
       socksPort: socksPort,
       user: socksUser,
@@ -106,7 +134,7 @@ class UpdateService {
           }
         }
       }
-      return null;
+      throw FormatException('В релизе $tagName отсутствует APK для $abi');
     } finally {
       client.close(force: true);
     }
