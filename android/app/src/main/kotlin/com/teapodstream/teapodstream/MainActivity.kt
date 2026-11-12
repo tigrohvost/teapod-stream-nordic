@@ -114,7 +114,7 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "getAbi" -> {
-                        result.success(android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a")
+                        result.success(android.os.Build.SUPPORTED_ABIS.firstOrNull())
                     }
 
                     "isBinaryReady" -> {

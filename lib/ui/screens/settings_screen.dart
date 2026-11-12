@@ -767,6 +767,10 @@ class _UpdateTile extends ConsumerWidget {
             child: CircularProgressIndicator(strokeWidth: 1.5, color: t.accent),
           ),
         ),
+      UpdateUnsupported(:final message) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Text(message, style: AppTheme.sans(size: 14, color: t.textDim)),
+      ),
       UpdateUpToDate(:final info) =>
         _UpdateVersionTile(info: info, isUpdate: false),
       UpdateAvailable(:final info, :final resumableBytes) =>
