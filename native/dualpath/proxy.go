@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
@@ -12,11 +13,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"net"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -45,22 +48,31 @@ func (s *liveSession) Close() { s.streams.Close(); s.mux.Close() }
 
 type clientManager struct {
 	mu      sync.Mutex
+	dialMu  sync.Mutex
 	c       Config
 	session *liveSession
 	closed  bool
+	egress  *egressSelector
 }
 
 func (cm *clientManager) get() (*liveSession, error) {
+	cm.dialMu.Lock()
+	defer cm.dialMu.Unlock()
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
 	if cm.closed {
+		cm.mu.Unlock()
 		return nil, net.ErrClosed
 	}
 	if cm.session != nil && !cm.session.streams.IsClosed() {
-		return cm.session, nil
+		s := cm.session
+		cm.mu.Unlock()
+		return s, nil
 	}
-	if cm.session != nil {
-		cm.session.Close()
+	old := cm.session
+	cm.session = nil
+	cm.mu.Unlock()
+	if old != nil {
+		old.Close()
 	}
 	id := make([]byte, 16)
 	if _, e := crand.Read(id); e != nil {
@@ -138,6 +150,13 @@ func (cm *clientManager) get() (*liveSession, error) {
 		return nil, e
 	}
 	m.begin()
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.closed {
+		ss.Close()
+		m.Close()
+		return nil, net.ErrClosed
+	}
 	cm.session = &liveSession{m, ss}
 	return cm.session, nil
 }
@@ -150,7 +169,25 @@ func (cm *clientManager) close() {
 	}
 }
 
+func bootSeconds() float64 {
+	var ts unix.Timespec
+	if unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts) != nil {
+		return 0
+	}
+	return float64(ts.Sec) + float64(ts.Nsec)/1e9
+}
+func atomicStatus(path string, state map[string]any) error {
+	b, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if err = os.WriteFile(path+".tmp", b, 0600); err != nil {
+		return err
+	}
+	return os.Rename(path+".tmp", path)
+}
 func (cm *clientManager) status() {
+	var lastError time.Time
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -161,15 +198,22 @@ func (cm *clientManager) status() {
 		}
 		s := cm.session
 		cm.mu.Unlock()
-		state := map[string]any{"mode": cm.c.Mode, "ready_A": false, "ready_B": false, "streams": 0, "updated_unix": time.Now().Unix()}
+		state := map[string]any{"schema_version": 2, "boot_id": cm.c.BootID,
+			"process_generation": os.Getenv("TEAPOD_PROCESS_GENERATION"),
+			"runtime_generation": cm.c.RuntimeGeneration, "config_hash": cm.c.ConfigHash,
+			"network_epoch": cm.c.NetworkEpoch, "session_id": "pending", "pid": os.Getpid(),
+			"observed_boot": bootSeconds(), "state": "unavailable", "mode": cm.c.Mode,
+			"ready_A": false, "ready_B": false, "streams": 0, "updated_unix": time.Now().Unix()}
+		state["valid_until_boot"] = state["observed_boot"].(float64) + 8
 		if s != nil {
 			if s.streams.IsClosed() {
 				s.mux.Close()
 			} else {
 				state["streams"] = s.streams.NumStreams()
+				state["session_id"] = s.mux.h.SID
 				s.mux.mu.Lock()
 				for name, p := range s.mux.paths {
-					state["ready_"+name] = p.ready
+					state["ready_"+name] = p.ready && time.Since(p.lastPong) < 3500*time.Millisecond
 					state["rtt_ms_"+name] = p.rtt.Milliseconds()
 				}
 				for k, v := range s.mux.stats {
@@ -179,9 +223,20 @@ func (cm *clientManager) status() {
 			}
 		}
 		if cm.c.Status != "" {
-			b, _ := json.Marshal(state)
-			if os.WriteFile(cm.c.Status+".tmp", b, 0600) == nil {
-				os.Rename(cm.c.Status+".tmp", cm.c.Status)
+			a, b := state["ready_A"].(bool), state["ready_B"].(bool)
+			if a && b {
+				state["state"] = "ready"
+			} else if a || b {
+				state["state"] = "degraded"
+			}
+			if cm.egress != nil {
+				selected, verified := cm.egress.current(bootSeconds())
+				state["selected_egress"] = selected
+				state["egress_verified_boot"] = verified
+			}
+			if err := atomicStatus(cm.c.Status, state); err != nil && time.Since(lastError) > 30*time.Second {
+				emit("status_write_failed", map[string]any{"error": "status unavailable"})
+				lastError = time.Now()
 			}
 		}
 	}
@@ -307,6 +362,14 @@ func proxyClient(c Config) error {
 	defer l.Close()
 	cm := &clientManager{c: c}
 	defer cm.close()
+	if c.FallbackProxy != "" {
+		if err := validateFallback(c); err != nil {
+			return err
+		}
+		cm.egress = newEgressSelector(cm)
+		defer cm.egress.stop()
+		cm.egress.start()
+	}
 	go cm.status()
 	go func() {
 		for {
@@ -358,6 +421,17 @@ func proxyClient(c Config) error {
 			if b[1] != 1 && b[1] != 3 {
 				socksReply(conn, 7, nil)
 				return
+			}
+			if cm.egress != nil {
+				selected, _ := cm.egress.current(bootSeconds())
+				if selected == "fallback" {
+					forwardFallback(conn, c, b[1], raw)
+					return
+				}
+				if selected != "primary" {
+					socksReply(conn, 1, nil)
+					return
+				}
 			}
 			session, e := cm.get()
 			if e != nil {
@@ -772,6 +846,22 @@ func main() {
 	must(e)
 	var c Config
 	must(json.Unmarshal(b, &c))
+	sum := sha256.Sum256(b)
+	c.ConfigHash = hex.EncodeToString(sum[:])
+	if c.RuntimeGeneration == "" {
+		var id [16]byte
+		_, err := crand.Read(id[:])
+		must(err)
+		c.RuntimeGeneration = hex.EncodeToString(id[:])
+	}
+	if c.BootID == "" {
+		id, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		must(err)
+		c.BootID = strings.TrimSpace(string(id))
+	}
+	if c.NetworkEpoch == "" {
+		c.NetworkEpoch = c.RuntimeGeneration
+	}
 	if len(c.Token) < 32 {
 		must(errors.New("token must contain at least 32 characters"))
 	}
@@ -783,6 +873,14 @@ func main() {
 	}
 	switch c.Role {
 	case "proxy":
+		parent := os.Getppid()
+		go func() {
+			for range time.NewTicker(2 * time.Second).C {
+				if os.Getppid() != parent {
+					os.Exit(0)
+				}
+			}
+		}()
 		host, _, e := net.SplitHostPort(c.Listen)
 		must(e)
 		ip := net.ParseIP(host)

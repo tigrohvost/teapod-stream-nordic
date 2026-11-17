@@ -33,6 +33,20 @@ class DualPathConfigTest {
         val value="""{"outbounds":[{"protocol":"freedom"}]}"""
         assertEquals(value,DualPathConfig.transform(value,1,2,"u","p"))
     }
+    @Test fun independentFallbackHasDedicatedAuthenticatedRouting() {
+        val p=profile()
+        p.getJSONObject(DualPathConfig.KEY).put("expectedIps",org.json.JSONArray("[\"192.0.2.2\"]"))
+            .put("fallback",JSONObject("""{"expectedIps":["192.0.2.3"],"outbound":{"protocol":"vless","settings":{"vnext":[{"address":"192.0.2.3","port":443,"users":[{"id":"test"}]}]},"streamSettings":{"network":"tcp","security":"reality"}}}"""))
+        val r=JSONObject(DualPathConfig.transform(p.toString(),12001,12002,"u","long-local-password",12003))
+        val rules=r.getJSONObject("routing").getJSONArray("rules")
+        assertEquals(DualPathConfig.FALLBACK,rules.getJSONObject(1).getString("outboundTag"))
+        assertEquals(DualPathConfig.TAG,rules.getJSONObject(2).getString("outboundTag"))
+        val inbound=r.getJSONArray("inbounds").getJSONObject(1)
+        assertEquals("127.0.0.1",inbound.getString("listen"))
+        assertEquals("password",inbound.getJSONObject("settings").getString("auth"))
+        assertTrue(inbound.getJSONObject("settings").getBoolean("udp"))
+        assertFalse(r.has(DualPathConfig.KEY))
+    }
     @Test(expected=IllegalArgumentException::class) fun unknownModeIsRejected() {
         val root=profile();root.getJSONObject(DualPathConfig.KEY).put("mode","direct")
         DualPathConfig.spec(root)
