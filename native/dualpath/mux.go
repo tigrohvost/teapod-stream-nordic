@@ -206,6 +206,7 @@ type path struct {
 	once           sync.Once
 	ready          bool
 	lastPong       time.Time
+	lastPongBoot   float64
 	streak, misses int
 	rtt, delivery  time.Duration
 	inflight       int
@@ -317,7 +318,7 @@ func (m *mux) fail(p *path) {
 	})
 }
 func (m *mux) add(name string, c net.Conn, r io.Reader) {
-	p := &path{name: name, c: c, out: make(chan packet, 128), done: make(chan struct{}), lastPong: time.Now()}
+	p := &path{name: name, c: c, out: make(chan packet, 128), done: make(chan struct{}), lastPong: time.Now(), lastPongBoot: bootSeconds()}
 	m.mu.Lock()
 	old := m.paths[name]
 	for _, rec := range m.seen {
@@ -381,6 +382,7 @@ func (m *mux) add(name string, c net.Conn, r io.Reader) {
 			case pongKind:
 				m.mu.Lock()
 				p.lastPong = time.Now()
+				p.lastPongBoot = bootSeconds()
 				if len(b) == 8 {
 					sample := time.Since(time.Unix(0, int64(binary.LittleEndian.Uint64(b))))
 					if sample > 0 && sample < 10*time.Second {
@@ -462,7 +464,7 @@ func (m *mux) probes() {
 			m.mu.Lock()
 			ps := []*path{}
 			for _, p := range m.paths {
-				if time.Since(p.lastPong) > 2500*time.Millisecond {
+				if bootSeconds()-p.lastPongBoot > 2.5 {
 					p.misses++
 					p.streak = 0
 					if p.misses >= 2 && p.ready {

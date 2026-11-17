@@ -172,3 +172,30 @@ func TestStatusPublicationFailurePreservesOldSnapshot(t *testing.T) {
 		t.Fatal("old status modified")
 	}
 }
+
+func TestPongFreshnessIncludesSuspend(t *testing.T) {
+	p := &path{ready: true, lastPong: time.Now(), lastPongBoot: 100}
+	if !pathFresh(p, 101) {
+		t.Fatal("fresh pong rejected")
+	}
+	if pathFresh(p, 110) || pathFresh(p, 99) {
+		t.Fatal("stale/future pong admitted")
+	}
+}
+
+func TestSessionWaitHasIndependentDeadline(t *testing.T) {
+	cm := &clientManager{}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := cm.current(ctx); err == nil {
+		t.Fatal("unavailable session admitted")
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("probe waited for a shared dial")
+	}
+	cm.close()
+	if _, err := cm.current(context.Background()); err == nil {
+		t.Fatal("closed manager admitted traffic")
+	}
+}

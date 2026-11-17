@@ -55,6 +55,29 @@ type clientManager struct {
 	egress  *egressSelector
 }
 
+// Only the background session owner establishes a session. Callers have their
+// own deadline and cannot queue serial 12-second connection attempts.
+func (cm *clientManager) current(ctx context.Context) (*liveSession, error) {
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		cm.mu.Lock()
+		s, closed := cm.session, cm.closed
+		cm.mu.Unlock()
+		if closed {
+			return nil, net.ErrClosed
+		}
+		if s != nil && !s.streams.IsClosed() {
+			return s, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
 func (cm *clientManager) get() (*liveSession, error) {
 	cm.dialMu.Lock()
 	defer cm.dialMu.Unlock()
@@ -213,7 +236,7 @@ func (cm *clientManager) status() {
 				state["session_id"] = s.mux.h.SID
 				s.mux.mu.Lock()
 				for name, p := range s.mux.paths {
-					state["ready_"+name] = p.ready && time.Since(p.lastPong) < 3500*time.Millisecond
+					state["ready_"+name] = pathFresh(p, bootSeconds())
 					state["rtt_ms_"+name] = p.rtt.Milliseconds()
 				}
 				for k, v := range s.mux.stats {
@@ -433,7 +456,9 @@ func proxyClient(c Config) error {
 					return
 				}
 			}
-			session, e := cm.get()
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			session, e := cm.current(ctx)
+			cancel()
 			if e != nil {
 				socksReply(conn, 1, nil)
 				return

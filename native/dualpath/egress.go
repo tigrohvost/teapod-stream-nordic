@@ -133,7 +133,7 @@ func (cm *clientManager) transportsUnavailable() bool {
 	s.mux.mu.Lock()
 	defer s.mux.mu.Unlock()
 	for _, p := range s.mux.paths {
-		if p.ready && time.Since(p.lastPong) < 3500*time.Millisecond {
+		if pathFresh(p, bootSeconds()) {
 			return false
 		}
 	}
@@ -149,7 +149,13 @@ func (e *egressSelector) start() {
 				default:
 				}
 				started := time.Now()
+				startedBoot := bootSeconds()
 				ok, wrong := e.probe(name)
+				// A result spanning suspend or a long scheduler pause is not fresh
+				// evidence merely because its consumer runs after resume.
+				if bootSeconds()-startedBoot > 10 {
+					continue
+				}
 				select {
 				case e.samples <- exitSample{name, ok, wrong, bootSeconds()}:
 				case <-e.done:
@@ -261,7 +267,7 @@ func hostAddress(address string) []byte {
 	return append(append([]byte{3, byte(len(host))}, host...), byte(n>>8), byte(n))
 }
 func (cm *clientManager) primaryDial(ctx context.Context, address string) (net.Conn, error) {
-	s, err := cm.get()
+	s, err := cm.current(ctx)
 	if err != nil {
 		return nil, err
 	}

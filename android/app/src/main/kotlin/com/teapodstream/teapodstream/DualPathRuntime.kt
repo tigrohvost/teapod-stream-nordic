@@ -123,7 +123,7 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
                         val native = children.firstOrNull { it.native }
                         val state = if (native != null && native.process.isAlive) {
                             try { DualPathHealth.read(File(directory, "status.json").readText(),
-                                generation, configHash, boot, native.processGeneration, now) }
+                                generation, configHash, boot, native.processGeneration, SystemClock.elapsedRealtime()) }
                             catch (_: Exception) { "unknown" }
                         } else "unknown"
                         if (state == "unknown") {
