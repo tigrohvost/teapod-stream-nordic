@@ -63,3 +63,6 @@ CLAUDE.md
 wiki/
 redesign/
 __pycache__/
+
+/android/app/src/main/jniLibs/*/libteapod_*.so
+/native/dualpath/teapod-dualpath

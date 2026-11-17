@@ -185,6 +185,21 @@ jobs:
 
       - run: flutter pub get --enforce-lockfile
 
+      - name: Set up Go for DualPath
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: native/dualpath/go.sum
+
+      - name: Build and test DualPath runtime
+        run: |
+          cd native/dualpath
+          go test -race ./...
+          go build -race -o /tmp/teapod-dualpath-test .
+          cd ../..
+          python3 tools/test_dualpath.py --binary /tmp/teapod-dualpath-test
+          python3 tools/build_dualpath.py
+
       - name: Build release APKs
         run: |
           flutter build apk --release --split-per-abi --no-pub \

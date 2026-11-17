@@ -92,6 +92,7 @@ def main():
                 raise SystemExit('Bundled core differs from dependency lock')
             required = {
                 f"lib/{abi}/libapp.so", f"lib/{abi}/libflutter.so", f"lib/{abi}/libgojni.so",
+                f"lib/{abi}/libteapod_naive.so", f"lib/{abi}/libteapod_dualpath.so",
                 "assets/flutter_assets/assets/binaries/geoip.dat",
                 "assets/flutter_assets/assets/binaries/geosite.dat",
                 "assets/flutter_assets/assets/brave_opossum.png",

@@ -177,6 +177,7 @@ class XrayVpnService : VpnService() {
     @Volatile private var lastUnderlyingNetwork: Network? = null
     @Volatile private var lastConnectedMs: Long = 0L
     private var prefixProxy: PrefixTcpProxy? = null
+    private var dualPath: DualPathRuntime? = null
     @Volatile private var showNotification = true
     private var screenReceiver: android.content.BroadcastReceiver? = null
     private var killSwitchEnabled = false
@@ -439,10 +440,13 @@ class XrayVpnService : VpnService() {
 
         try {
             // Enable prefix proxy only when the ss:// URL contains ?prefix=.
+            val transportConfig = if (org.json.JSONObject(xrayConfig).has(DualPathConfig.KEY)) {
+                DualPathRuntime(this, ::log).also { dualPath = it }.start(xrayConfig)
+            } else xrayConfig
             val finalConfig = if (ssPrefix != null) {
-                injectPrefixProxy(xrayConfig, ssPrefix) ?: throw ConnectionFailure("PREFIX_START_FAILED", "Prefix transport failed")
+                injectPrefixProxy(transportConfig, ssPrefix) ?: throw ConnectionFailure("PREFIX_START_FAILED", "Prefix transport failed")
             } else {
-                xrayConfig
+                transportConfig
             }
 
             if (proxyOnly) {
@@ -814,6 +818,8 @@ class XrayVpnService : VpnService() {
                 log("warning", "prefixProxy.stop failed: ${e.message}")
             }
             prefixProxy = null
+            try { dualPath?.stop() } catch (_: Exception) {}
+            dualPath = null
 
             // Close TUN fd early so tun2socks goroutines reading from it get EOF and
             // unblock immediately (tun2socks works on a dup'd fd, so this is safe to

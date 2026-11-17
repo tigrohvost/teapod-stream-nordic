@@ -9,7 +9,8 @@ import teapodcore.Teapodcore
 internal object CoreConfigValidator {
     fun validate(config: String) {
         if (config.length > 8 * 1024 * 1024) throw ConnectionFailure("CONFIG_TOO_LARGE", "Конфигурация слишком большая")
-        val outbounds = org.json.JSONObject(config).optJSONArray("outbounds")
+        val nativeConfig = DualPathConfig.transform(config, 19090, 19092, "validate", "validation-password-placeholder")
+        val outbounds = org.json.JSONObject(nativeConfig).optJSONArray("outbounds")
         if (outbounds != null) for (i in 0 until outbounds.length()) {
             val tls = outbounds.optJSONObject(i)?.optJSONObject("streamSettings")?.optJSONObject("tlsSettings") ?: continue
             if (tls.has("pinnedPeerCertificateChainSha256") || tls.has("echSettings")) {
@@ -17,7 +18,7 @@ internal object CoreConfigValidator {
             }
         }
         try {
-            Teapodcore.measureOutboundDelay(config, "%")
+            Teapodcore.measureOutboundDelay(nativeConfig, "%")
         } catch (e: Exception) {
             if (e.message?.startsWith("failed to create request:") == true) return
             throw ConnectionFailure("INVALID_CORE_CONFIG", "Ядро отклонило конфигурацию")

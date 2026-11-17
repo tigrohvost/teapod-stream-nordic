@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "go": "1.27.3",
+  "naive_version": "154.0.8037.49-5",
+  "naive": {
+    "arm64-v8a": {
+      "url": "https://github.com/klzgrad/naiveproxy/releases/download/v154.0.8037.49-5/naiveproxy-plugin-v154.0.8037.49-5-arm64-v8a.apk",
+      "sha256": "3a532e6894d87c1fca5c527d3598892627829c76cb5b75ed831555f384841bd0",
+      "size": 3762955
+    },
+    "armeabi-v7a": {
+      "url": "https://github.com/klzgrad/naiveproxy/releases/download/v154.0.8037.49-5/naiveproxy-plugin-v154.0.8037.49-5-armeabi-v7a.apk",
+      "sha256": "9acbf08afea2d35aad492d5312444b6aecd5fafa41f29d794d4821549f330da5",
+      "size": 3514405
+    },
+    "x86_64": {
+      "url": "https://github.com/klzgrad/naiveproxy/releases/download/v154.0.8037.49-5/naiveproxy-plugin-v154.0.8037.49-5-x86_64.apk",
+      "sha256": "af3e8070e882f0008b6511394ae4d3737ece508e9b34abee94cb2f59ddb5e940",
+      "size": 3663512
+    }
+  }
+}

@@ -52,6 +52,7 @@ android {
             // rewrites the ELF header, so the APK would no longer carry the bytes
             // pinned in dependencies.lock.json (verify_release_apks.py compares them).
             keepDebugSymbols.add("**/libgojni.so")
+            keepDebugSymbols.add("**/libteapod_*.so")
         }
     }
 
