@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -9,6 +10,51 @@ import (
 	"testing"
 	"time"
 )
+
+func TestProbeConnectionUsesCollectorRecords(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	a.SetDeadline(time.Now().Add(3 * time.Second))
+	b.SetDeadline(time.Now().Add(3 * time.Second))
+	c := &recordConn{Conn: a}
+	payload := bytes.Repeat([]byte("HTTPS-data"), 8000)
+	done := make(chan error, 1)
+	go func() {
+		got := []byte{}
+		for len(got) < len(payload) {
+			kind, data, err := readFrame(b)
+			if err != nil {
+				done <- err
+				return
+			}
+			if kind != 0 {
+				done <- io.ErrUnexpectedEOF
+				return
+			}
+			got = append(got, data...)
+		}
+		if !bytes.Equal(got, payload) {
+			done <- io.ErrUnexpectedEOF
+			return
+		}
+		if err := frame(b, 0, []byte("HTTP response")); err != nil {
+			done <- err
+			return
+		}
+		done <- frame(b, 1, nil)
+	}()
+	if n, err := c.Write(payload); err != nil || n != len(payload) {
+		t.Fatal(n, err)
+	}
+	response, err := io.ReadAll(c)
+	if err != nil || string(response) != "HTTP response" {
+		t.Fatal(string(response), err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestExitAdmissionAndFailover(t *testing.T) {
 	e := newEgressSelector(&clientManager{})

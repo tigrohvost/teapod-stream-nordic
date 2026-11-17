@@ -292,7 +292,64 @@ func (cm *clientManager) primaryDial(ctx context.Context, address string) (net.C
 		stream.Close()
 		return nil, errors.New("primary exit unavailable")
 	}
-	return stream, nil
+	return &recordConn{Conn: stream}, nil
+}
+
+// The collector exchanges ordered DATA/FIN records, not a raw byte stream.
+// HTTPS probes must use exactly the same framing as ordinary SOCKS traffic.
+type recordConn struct {
+	net.Conn
+	readMu, writeMu sync.Mutex
+	buffered        []byte
+	ended           bool
+}
+
+func (c *recordConn) Read(p []byte) (int, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for len(c.buffered) == 0 {
+		if c.ended {
+			return 0, io.EOF
+		}
+		kind, data, err := readFrame(c.Conn)
+		if err != nil {
+			return 0, err
+		}
+		switch kind {
+		case 0:
+			c.buffered = data
+		case 1:
+			if len(data) != 0 {
+				return 0, errors.New("invalid FIN")
+			}
+			c.ended = true
+		default:
+			return 0, errors.New("invalid stream record")
+		}
+	}
+	n := copy(p, c.buffered)
+	c.buffered = c.buffered[n:]
+	return n, nil
+}
+func (c *recordConn) Write(p []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	written := 0
+	for len(p) > 0 {
+		n := len(p)
+		if n > 32*1024 {
+			n = 32 * 1024
+		}
+		if err := frame(c.Conn, 0, p[:n]); err != nil {
+			return written, err
+		}
+		written += n
+		p = p[n:]
+	}
+	return written, nil
 }
 func fallbackHandshake(ctx context.Context, c Config, command byte, address []byte) (net.Conn, []byte, error) {
 	conn, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", c.FallbackProxy)

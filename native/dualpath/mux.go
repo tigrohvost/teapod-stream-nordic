@@ -107,6 +107,9 @@ func frame(w io.Writer, k byte, b []byte) error {
 	if _, e := w.Write(h); e != nil {
 		return e
 	}
+	if len(b) == 0 {
+		return nil
+	}
 	_, e := w.Write(b)
 	return e
 }
