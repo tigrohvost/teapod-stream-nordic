@@ -7,9 +7,13 @@ import teapodcore.Teapodcore
  * before any network request. Keep this contract covered when updating core.
  */
 internal object CoreConfigValidator {
+    internal fun prepare(config: String): String = DualPathConfig.transform(
+        config, 19090, 19092, "validate", "validation-password-placeholder", 19094
+    )
+
     fun validate(config: String) {
         if (config.length > 8 * 1024 * 1024) throw ConnectionFailure("CONFIG_TOO_LARGE", "Конфигурация слишком большая")
-        val nativeConfig = DualPathConfig.transform(config, 19090, 19092, "validate", "validation-password-placeholder")
+        val nativeConfig = prepare(config)
         val outbounds = org.json.JSONObject(nativeConfig).optJSONArray("outbounds")
         if (outbounds != null) for (i in 0 until outbounds.length()) {
             val tls = outbounds.optJSONObject(i)?.optJSONObject("streamSettings")?.optJSONObject("tlsSettings") ?: continue

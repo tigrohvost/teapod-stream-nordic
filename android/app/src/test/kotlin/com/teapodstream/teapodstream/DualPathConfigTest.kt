@@ -47,6 +47,20 @@ class DualPathConfigTest {
         assertTrue(inbound.getJSONObject("settings").getBoolean("udp"))
         assertFalse(r.has(DualPathConfig.KEY))
     }
+    @Test fun importValidationAcceptsIndependentFallbackWithoutStartingRuntime() {
+        val p=profile()
+        p.getJSONObject(DualPathConfig.KEY).put("expectedIps",org.json.JSONArray("[\"192.0.2.2\"]"))
+            .put("fallback",JSONObject("""{"expectedIps":["192.0.2.3"],"outbound":{"protocol":"vless","settings":{"vnext":[{"address":"192.0.2.3","port":443,"users":[{"id":"test"}]}]},"streamSettings":{"network":"tcp","security":"reality"}}}"""))
+        val checked=JSONObject(CoreConfigValidator.prepare(p.toString()))
+        val inbounds=checked.getJSONArray("inbounds")
+        val ports=(0 until inbounds.length()).map { inbounds.getJSONObject(it).getInt("port") }
+        assertEquals(ports.size,ports.toSet().size)
+        val reserve=(0 until inbounds.length()).map { inbounds.getJSONObject(it) }
+            .single { it.getString("tag")==DualPathConfig.FALLBACK_INBOUND }
+        assertTrue(reserve.getInt("port") in 1..65535)
+        assertEquals("password",reserve.getJSONObject("settings").getString("auth"))
+        assertFalse(checked.has(DualPathConfig.KEY))
+    }
     @Test(expected=IllegalArgumentException::class) fun unknownModeIsRejected() {
         val root=profile();root.getJSONObject(DualPathConfig.KEY).put("mode","direct")
         DualPathConfig.spec(root)
