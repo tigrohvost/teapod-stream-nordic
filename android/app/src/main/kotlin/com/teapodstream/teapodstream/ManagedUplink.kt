@@ -8,18 +8,21 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** A CONNECT listener always dials one configured TLS endpoint, on exactly one network. */
 internal class ManagedUplink(val network: Network?) {
     private val relays = mutableListOf<PrefixTcpProxy>()
 
-    private fun relay(on: Network?, host: String, port: Int, alias: String, user: String, password: String): PrefixTcpProxy {
+    private fun relay(on: Network?, host: String, port: Int, alias: String, user: String, password: String,
+                      connected: AtomicBoolean? = null): PrefixTcpProxy {
         val auth = ConnectAuth(setOf(host, alias),port,user,password)
         return PrefixTcpProxy(host, port, byteArrayOf(), maxClients=32,
             connectUpstream={ socket,target,remotePort ->
                 val net = on ?: throw java.io.IOException("No physical network")
                 net.bindSocket(socket)
                 socket.connect(InetSocketAddress(net.getByName(target),remotePort),5000)
+                connected?.set(true)
             }, connectRequest=auth::accept, clientAllowed={ it.inetAddress.isLoopbackAddress })
     }
 
@@ -36,12 +39,13 @@ internal class ManagedUplink(val network: Network?) {
             .put("settings",JSONObject().put("servers",JSONArray().put(server)))
     }
 
-    private fun pin(on: Network?, outbound: JSONObject, outbounds: JSONArray, user: String, password: String): PrefixTcpProxy {
+    private fun pin(on: Network?, outbound: JSONObject, outbounds: JSONArray, user: String, password: String,
+                    connected: AtomicBoolean? = null): PrefixTcpProxy {
         val upstream=outbound.getJSONObject("settings").getJSONArray("vnext").getJSONObject(0)
         val stream=outbound.getJSONObject("streamSettings")
         val host=upstream.getString("address")
         val tag=outbound.getString("tag")+"-physical"
-        val proxy=relay(on,host,upstream.getInt("port"),host,user,password)
+        val proxy=relay(on,host,upstream.getInt("port"),host,user,password,connected)
         try {
             stream.put("sockopt",JSONObject().put("dialerProxy",tag))
             outbounds.put(httpOutbound(tag,proxy.localPort,user,password))
@@ -57,11 +61,12 @@ internal class ManagedUplink(val network: Network?) {
     fun verifyCandidate(candidate: Network, source: JSONObject, user: String, password: String): Boolean {
         val outbound=JSONObject(source.toString()).put("tag","proxy")
         val outbounds=JSONArray().put(outbound)
-        val proxy=pin(candidate,outbound,outbounds,user,password)
+        val connected=AtomicBoolean(false)
+        val proxy=pin(candidate,outbound,outbounds,user,password,connected)
         return try {
             val config=JSONObject().put("outbounds",outbounds).toString()
             listOf("https://www.google.com/generate_204","https://cp.cloudflare.com/generate_204").any {
-                !Thread.currentThread().isInterrupted && try { Teapodcore.measureOutboundDelay(config,it) >= 0 }
+                !Thread.currentThread().isInterrupted && try { Teapodcore.measureOutboundDelay(config,it) >= 0 && connected.get() }
                 catch (_: Exception) { false }
             }
         } finally { proxy.stop() }

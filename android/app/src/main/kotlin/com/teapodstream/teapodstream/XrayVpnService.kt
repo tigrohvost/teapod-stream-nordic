@@ -1041,7 +1041,13 @@ class XrayVpnService : VpnService() {
         val owner = sessionId
         val cm = getSystemService(ConnectivityManager::class.java)
         val runtime = dualPath
-        val verify: ((Network) -> Boolean)? = if (runtime?.canVerifyCandidate() == true) runtime::verifyCandidate else null
+        val verify: ((Network) -> Boolean)? = if (runtime?.canVerifyCandidate() == true) { candidate ->
+            runtime.verifyCandidate(candidate).also { passed ->
+                if (coordinator.isCurrent(owner)) log(if (passed) "info" else "warning",
+                    if (passed) "Новая сеть прошла проверку через резерв A"
+                    else "Новая сеть пока не прошла проверку через резерв A")
+            }
+        } else null
         lateinit var observer: PhysicalNetworks
         observer = PhysicalNetworks(cm,networkChangeHandler,physical,initialLink,verify) { candidate ->
             if (networkCallback === observer && coordinator.isCurrent(owner) && isRunning.get()) {

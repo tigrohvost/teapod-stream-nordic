@@ -41,7 +41,8 @@ internal class PhysicalNetworks(
         // Used only when starting the VPN or awaiting a physical network, outside callbacks.
         fun snapshot(cm: ConnectivityManager, preferred: Network? = null): Network? {
             val networks = cm.allNetworks.mapNotNull { n -> Uplink.from(cm.getNetworkCapabilities(n))?.let { n to it } }.toMap()
-            return chooseUplink(networks, preferred ?: cm.activeNetwork)
+            if (preferred != null && networks[preferred]?.portal == false) return preferred
+            return chooseUplink(networks, cm.activeNetwork)
         }
 
         private fun signature(properties: LinkProperties?) = properties?.let {
@@ -62,10 +63,27 @@ internal class PhysicalNetworks(
     private var activeLost = false
     private var activeLink = signature(initialLink)
     private var retry: Runnable? = null
+    private var cellularRequest: ConnectivityManager.NetworkCallback? = null
 
     fun start() {
         // Seed the active network before Android sends the initial callback batch.
-        if (active != null) Uplink.from(cm.getNetworkCapabilities(active))?.let { caps[active] = it }
+        val initialCaps = active?.let(cm::getNetworkCapabilities)
+        if (active != null) Uplink.from(initialCaps)?.let { caps[active] = it }
+        // A passive observer does not keep mobile data available when Android makes
+        // Wi-Fi its default. Keep the already active data connection through login and
+        // the managed-exit proof. close() releases the request on handover or stop.
+        if (verify != null && initialCaps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true) {
+            val request = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build()
+            val callback = ConnectivityManager.NetworkCallback()
+            try {
+                cm.requestNetwork(request, callback, handler)
+                cellularRequest = callback
+            } catch (_: RuntimeException) {
+                android.util.Log.w("TeapodVPN", "Android did not grant the mobile network request")
+            }
+        }
         cm.registerNetworkCallback(NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(), this, handler)
     }
@@ -157,6 +175,10 @@ internal class PhysicalNetworks(
         closed = true
         retry?.let { handler.removeCallbacks(it) }
         try { cm.unregisterNetworkCallback(this) } catch (_: IllegalArgumentException) {}
+        cellularRequest?.let {
+            try { cm.unregisterNetworkCallback(it) } catch (_: IllegalArgumentException) {}
+            cellularRequest = null
+        }
         worker.shutdownNow()
     }
 }
