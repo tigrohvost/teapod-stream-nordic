@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 /** Evidence belongs to one process and one VPN configuration; elapsed time includes sleep. */
 internal object DualPathHealth {
-    fun read(raw: String, generation: String, hash: String, boot: String, process: String, nowMs: Long): String {
+    fun read(raw: String, generation: String, hash: String, boot: String, process: String, nowMs: Long, networkEpoch: String = generation): String {
         return try {
             require(raw.length <= 65536)
             val s = JSONObject(raw)
@@ -16,7 +16,7 @@ internal object DualPathHealth {
             require(s.getString("runtime_generation") == generation && s.getString("config_hash") == hash)
             require(s.getString("boot_id") == boot && s.getLong("pid") > 0)
             require(s.getString("process_generation") == process)
-            require(s.getString("network_epoch") == generation && s.getString("session_id").isNotEmpty())
+            require(s.getString("network_epoch") == networkEpoch && s.getString("session_id").isNotEmpty())
             val observed = s.getDouble("observed_boot") * 1000
             val until = s.getDouble("valid_until_boot") * 1000
             require(observed.isFinite() && until.isFinite())

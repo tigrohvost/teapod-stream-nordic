@@ -10,7 +10,7 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
+import android.net.LinkProperties
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -173,9 +173,9 @@ class XrayVpnService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
     private var statsThread: Thread? = null
     private val isRunning = AtomicBoolean(false)
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var networkCallback: PhysicalNetworks? = null
+    @Volatile private var handoverTarget: Network? = null
     @Volatile private var lastUnderlyingNetwork: Network? = null
-    @Volatile private var lastConnectedMs: Long = 0L
     private var prefixProxy: PrefixTcpProxy? = null
     private var dualPath: DualPathRuntime? = null
     @Volatile private var showNotification = true
@@ -439,9 +439,14 @@ class XrayVpnService : VpnService() {
         log("info", "Starting VPN (MTU: $tunMtu)")
 
         try {
+            val cm = getSystemService(ConnectivityManager::class.java)
+            val physical = if (proxyOnly) null else PhysicalNetworks.snapshot(cm, handoverTarget)
+            handoverTarget = null
+            lastUnderlyingNetwork = physical
+            val initialLink = physical?.let { cm.getLinkProperties(it) }
             // Enable prefix proxy only when the ss:// URL contains ?prefix=.
             val transportConfig = if (org.json.JSONObject(xrayConfig).has(DualPathConfig.KEY)) {
-                DualPathRuntime(this, ::log).also { dualPath = it }.start(xrayConfig)
+                DualPathRuntime(this, ::log, if (proxyOnly) null else ManagedUplink(physical)).also { dualPath = it }.start(xrayConfig)
             } else xrayConfig
             val finalConfig = if (ssPrefix != null) {
                 injectPrefixProxy(transportConfig, ssPrefix) ?: throw ConnectionFailure("PREFIX_START_FAILED", "Prefix transport failed")
@@ -479,6 +484,7 @@ class XrayVpnService : VpnService() {
                     .addDnsServer(tunDns)
                     .setBlocking(true)
                     .setMetered(false)
+                    .setUnderlyingNetworks(physical?.let { arrayOf(it) } ?: emptyArray())
 
                 // Without an IPv6 address Android blocks the family for tunneled apps
                 // (no leak): connect() fails instantly and apps fall back to IPv4.
@@ -545,8 +551,8 @@ class XrayVpnService : VpnService() {
 
                 activeMode = if (vpnMode == "allExcept" && excludedPackages.isEmpty()) "all" else vpnMode
                 startStatsMonitoring()
-                registerNetworkCallback()
                 setConnected(socksPort, socksUser, socksPassword)
+                registerNetworkCallback(physical,initialLink)
                 heartbeat.start(isReconnect)
                 log("info", "VPN connected successfully")
             }
@@ -797,7 +803,7 @@ class XrayVpnService : VpnService() {
         heartbeat.stop()
         tunModeActive = false
         lastUnderlyingNetwork = null
-        lastConnectedMs = 0L
+        if (!reconnecting) handoverTarget = null
         pendingNetworkRunnable?.let { networkChangeHandler.removeCallbacks(it) }
         pendingNetworkRunnable = null
 
@@ -1031,153 +1037,41 @@ class XrayVpnService : VpnService() {
         }.also { it.isDaemon = true; it.start() }
     }
 
-    private fun registerNetworkCallback() {
+    private fun registerNetworkCallback(physical: Network?, initialLink: LinkProperties?) {
         val owner = sessionId
-        try {
-            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-            // Pre-seed lastUnderlyingNetwork before registering so the initial onAvailable
-            // callback sees prev == current and does NOT trigger a spurious reconnect.
-            updateUnderlyingNetworks(cm)
-            networkCallback = object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    if (!coordinator.isCurrent(owner)) return
-                    log("info", "Network available: $network")
-                    val prev = lastUnderlyingNetwork
-                    updateUnderlyingNetworks(cm)
-                    val current = lastUnderlyingNetwork
-                    // Trigger if network changed (prev→current) OR if prev was null but we now
-                    // have a network (covers WiFi→LTE when onLost fired before onAvailable).
-                    if (current != null && prev != current) {
-                        scheduleNetworkChanged()
-                    }
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val runtime = dualPath
+        val verify: ((Network) -> Boolean)? = if (runtime?.canVerifyCandidate() == true) runtime::verifyCandidate else null
+        lateinit var observer: PhysicalNetworks
+        observer = PhysicalNetworks(cm,networkChangeHandler,physical,initialLink,verify) { candidate ->
+            if (networkCallback === observer && coordinator.isCurrent(owner) && isRunning.get()) {
+                handoverTarget = candidate
+                if (candidate == null) {
+                    lastUnderlyingNetwork = null
+                    setUnderlyingNetworks(emptyArray())
                 }
-
-                override fun onLost(network: Network) {
-                    if (!coordinator.isCurrent(owner)) return
-                    log("info", "Network lost: $network")
-                    // Force-close all active tun2socks connections immediately on network loss.
-                    // Stale gVisor TCP connections survive across brief network blips and cause
-                    // app-level freezes (Telegram, etc.) because the SOCKS5 heartbeat cannot
-                    // observe per-connection gVisor state. Closing them now forces apps to
-                    // reconnect through a clean path when the network comes back.
-                    // Only for the network the tunnel actually runs over: losing a secondary
-                    // one (mobile data while on Wi-Fi) must not kill healthy connections.
-                    if (tunModeActive && isRunning.get() && network == lastUnderlyingNetwork) {
-                        coordinator.execute { if (coordinator.isCurrent(owner)) Teapodcore.forceTunCloseAllConnections() }
-                    }
-                    // Snapshot BEFORE clearing — needed for smooth-handover case where
-                    // onAvailable(LTE) fires before onLost(WiFi): prev=wifi, after=LTE → trigger.
-                    val prev = lastUnderlyingNetwork
-                    if (lastUnderlyingNetwork == network) {
-                        lastUnderlyingNetwork = null
-                    }
-                    updateUnderlyingNetworks(cm)
-                    if (prev != null && lastUnderlyingNetwork != null && prev != lastUnderlyingNetwork) {
-                        scheduleNetworkChanged()
-                    }
+                log("info", if (candidate == null) "Физическая сеть потеряна"
+                    else "Переход на проверенную физическую сеть")
+                pendingNetworkRunnable?.let { networkChangeHandler.removeCallbacks(it) }
+                val task = Runnable {
+                    if (networkCallback === observer && coordinator.isCurrent(owner) && isRunning.get()) reconnectInternal()
                 }
-
-                override fun onCapabilitiesChanged(
-                    network: Network,
-                    networkCapabilities: NetworkCapabilities
-                ) {
-                    if (!coordinator.isCurrent(owner)) return
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        if (cm.activeNetwork == network) {
-                            updateUnderlyingNetworks(cm)
-                            // Captive portal / temporary internet loss: VALIDATED is removed
-                            // without triggering onLost/onAvailable — detect and reconnect.
-                            val validated = networkCapabilities.hasCapability(
-                                NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                            if (!validated) scheduleNetworkChanged()
-                        }
-                    }
-                }
+                pendingNetworkRunnable = task
+                networkChangeHandler.postDelayed(task, RECONNECT_DEBOUNCE_MS)
             }
-            val request = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
-            cm.registerNetworkCallback(request, networkCallback!!)
-        } catch (e: Exception) {
-            log("warning", "Failed to register network callback: ${e.message}")
+        }
+        networkCallback = observer
+        try { observer.start() } catch (e: Exception) {
+            observer.close()
+            networkCallback = null
+            throw e
         }
     }
 
     private fun findPhysicalNetwork(): Network? {
         val cm = getSystemService(ConnectivityManager::class.java)
-        val activeNetwork = cm.activeNetwork ?: return null
-
-        val caps = cm.getNetworkCapabilities(activeNetwork)
-        if (caps == null || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-            // Active is VPN — find WiFi first (preferred over LTE)
-            val wifiNetwork = try {
-                cm.allNetworks.firstOrNull { n ->
-                    val c = cm.getNetworkCapabilities(n)
-                    c?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
-                    c?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-                }
-            } catch (e: Exception) { null }
-
-            if (wifiNetwork != null) return wifiNetwork
-
-            // No WiFi — try any other internet network
-            return try {
-                cm.allNetworks.firstOrNull { n ->
-                    val c = cm.getNetworkCapabilities(n)
-                    c?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
-                    !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-                }
-            } catch (e: Exception) { null }
-        }
-
-        // Active is not VPN — use it (WiFi or LTE)
-        return activeNetwork
-    }
-
-    private fun updateUnderlyingNetworks(cm: ConnectivityManager) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val activeNetwork = cm.activeNetwork ?: run {
-                setUnderlyingNetworks(null)
-                lastUnderlyingNetwork = null
-                return
-            }
-
-            // Use findPhysicalNetwork to get WiFi/LTE (not VPN)
-            val physicalNetwork = findPhysicalNetwork()
-            if (physicalNetwork == null) {
-                if (lastUnderlyingNetwork != null) {
-                    setUnderlyingNetworks(null)
-                    lastUnderlyingNetwork = null
-                    log("info", "All underlying networks lost")
-                }
-                return
-            }
-
-            if (physicalNetwork == lastUnderlyingNetwork) return
-            lastUnderlyingNetwork = physicalNetwork
-            setUnderlyingNetworks(arrayOf(physicalNetwork))
-            log("info", "Underlying network set to physical: $physicalNetwork")
-        }
-    }
-
-    private fun scheduleNetworkChanged() {
-        // Only reconnect when fully connected — prevents spurious reconnects during the
-        // initial startVpn() phase when onAvailable fires right after registration.
-        if (currentNativeState != "connected") return
-        // On mobile data Android fires onAvailable/onCapabilitiesChanged right after VPN
-        // connects, causing an immediate false reconnect loop. Ignore changes within 5s of
-        // connection — real network switches happen on a longer timescale.
-        val msSinceConnect = System.currentTimeMillis() - lastConnectedMs
-        if (lastConnectedMs > 0 && msSinceConnect < 5_000L) {
-            log("debug", "Network change: ignored (VPN just connected ${msSinceConnect}ms ago)")
-            return
-        }
-        log("info", "Network change: reconnect scheduled in ${RECONNECT_DEBOUNCE_MS}ms")
-        pendingNetworkRunnable?.let { networkChangeHandler.removeCallbacks(it) }
-        val owner = sessionId
-        val r = Runnable { if (coordinator.isCurrent(owner)) reconnectInternal() }
-        pendingNetworkRunnable = r
-        networkChangeHandler.postDelayed(r, RECONNECT_DEBOUNCE_MS)
+        return if (networkCallback != null) lastUnderlyingNetwork
+               else PhysicalNetworks.snapshot(cm,handoverTarget)
     }
 
     private fun reconnectInternal() {
@@ -1239,15 +1133,9 @@ class XrayVpnService : VpnService() {
     }
 
     private fun unregisterNetworkCallback() {
-        try {
-            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-            networkCallback?.let {
-                cm.unregisterNetworkCallback(it)
-                networkCallback = null
-            }
-        } catch (e: Exception) {
-            // Ignore
-        }
+        val previous = networkCallback
+        networkCallback = null
+        previous?.close()
     }
 
     private fun pendingFlags() =
@@ -1400,7 +1288,6 @@ class XrayVpnService : VpnService() {
         reconnectAttempts.set(0)
         val now = System.currentTimeMillis()
         connectedAtMs = now
-        lastConnectedMs = now
         _socksCredentials.set(SocksCredentials(socksPort, socksUser, socksPassword))
         applyNotificationState("connected")
         VpnEventStreamHandler.sendConnectedEvent(socksPort, socksUser, socksPassword)

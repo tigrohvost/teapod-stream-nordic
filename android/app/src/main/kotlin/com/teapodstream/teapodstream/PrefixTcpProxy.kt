@@ -10,7 +10,7 @@ import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-/** Bounded, loopback-only transport; only the core's own UID may use it. */
+/** Bounded loopback transport, admitted by UID or a per-session CONNECT credential. */
 class PrefixTcpProxy(
     private val targetHost: String,
     private val targetPort: Int,
@@ -19,6 +19,10 @@ class PrefixTcpProxy(
     // browser plus messengers easily hold more than a few dozen at once.
     private val maxClients: Int = 256,
     private val firstBlockTimeoutMs: Int = 5000,
+    private val connectUpstream: (Socket, String, Int) -> Unit = { socket, host, port ->
+        socket.connect(InetSocketAddress(host, port), 5000)
+    },
+    private val connectRequest: ((Socket) -> Boolean)? = null,
     private val clientAllowed: (Socket) -> Boolean,
 ) {
     private val listener = ServerSocket(0, 64, InetAddress.getByName("127.0.0.1"))
@@ -54,13 +58,19 @@ class PrefixTcpProxy(
         try {
             if (!running) return
             client.soTimeout = firstBlockTimeoutMs
-            val first = ByteArray(65536)
-            val count = client.getInputStream().read(first)
-            if (count <= 0 || !running) return
+            if (connectRequest != null) {
+                if (!connectRequest.invoke(client) || !running) return
+                connectUpstream(upstream,targetHost,targetPort)
+                client.getOutputStream().write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+            } else {
+                val first = ByteArray(65536)
+                val count = client.getInputStream().read(first)
+                if (count <= 0 || !running) return
+                connectUpstream(upstream, targetHost, targetPort)
+                upstream.getOutputStream().write(prefix + first.copyOf(count))
+                upstream.getOutputStream().flush()
+            }
             client.soTimeout = 0
-            upstream.connect(InetSocketAddress(targetHost, targetPort), 5000)
-            upstream.getOutputStream().write(prefix + first.copyOf(count))
-            upstream.getOutputStream().flush()
             val uploaded = java.util.concurrent.CountDownLatch(1)
             workers.execute {
                 try { client.getInputStream().copyTo(upstream.getOutputStream()) }

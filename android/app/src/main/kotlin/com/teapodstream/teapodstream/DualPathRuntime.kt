@@ -1,6 +1,8 @@
 package com.teapodstream.teapodstream
 
 import android.content.Context
+import android.net.Network
+import java.io.IOException
 import android.os.SystemClock
 import android.provider.Settings
 import java.security.MessageDigest
@@ -14,9 +16,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Child transports live in the VPN app UID, which the service excludes from TUN. */
-internal class DualPathRuntime(private val context: Context, private val log: (String, String) -> Unit) {
+internal class DualPathRuntime(private val context: Context, private val log: (String, String) -> Unit,
+    private val uplink: ManagedUplink? = null) {
     private val stopped = AtomicBoolean(false)
-    private data class Child(val builder: ProcessBuilder, var process: Process,
+    private data class Child(val builder: ProcessBuilder, var process: Process?,
         val native: Boolean, val retry: DualPathRetry = DualPathRetry(),
         var processGeneration: String,
         var startedAt: Long = SystemClock.elapsedRealtime())
@@ -27,6 +30,12 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
     private var monitor: Thread? = null
     private var readyDescription = ""
     private val generation = secret()
+    private val networkEpoch = uplink?.let { "${it.network?.networkHandle ?: 0}-$generation" } ?: generation
+    private val uplinkUser = secret()
+    private val uplinkPassword = secret()
+    private var fallbackOutbound: JSONObject? = null
+    fun canVerifyCandidate() = fallbackOutbound != null && uplink != null
+    fun verifyCandidate(network: Network): Boolean = fallbackOutbound?.let { uplink?.verifyCandidate(network,it,uplinkUser,uplinkPassword) } == true
     private var configHash = ""
     private val boot = "android-" + Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1)
     private var unknownSince = 0L
@@ -74,7 +83,7 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
         val s = DualPathConfig.spec(JSONObject(config)) ?: return config
         val naiveBinary = File(context.applicationInfo.nativeLibraryDir, "libteapod_naive.so")
         val dualBinary = File(context.applicationInfo.nativeLibraryDir, "libteapod_dualpath.so")
-        if (!naiveBinary.canExecute() || !dualBinary.canExecute()) {
+        if (!dualBinary.canExecute()) {
             throw ConnectionFailure("DUALPATH_UNAVAILABLE", "Двухсерверный режим недоступен в этой сборке")
         }
         directory.mkdirs()
@@ -86,7 +95,9 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
         val fallbackPort = if (s.has("fallback")) uniquePort() else 0
         val ca = write("ca.pem", s.getString("ca"))
         val n = s.getJSONObject("naive")
-        val proxy = URI("https", n.getString("username") + ":" + n.getString("password"), n.getString("serverName"), n.getInt("port"), null, null, null).toASCIIString()
+        val direct = URI("https", n.getString("username") + ":" + n.getString("password"), n.getString("serverName"), n.getInt("port"), null, null, null).toASCIIString()
+        val localProxy = uplink?.naiveProxy(n.getString("address"), n.getInt("port"), n.getString("serverName"), uplinkUser, uplinkPassword)
+        val proxy = if (localProxy != null) "$localProxy,$direct" else direct
         val naiveConfig = write("naive.json", JSONObject()
             .put("listen", "socks://$user:$password@127.0.0.1:$naivePort")
             .put("proxy", proxy)
@@ -103,7 +114,7 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
             .put("server_a", target.getString("serverName")).put("server_b", target.getString("serverName"))
             .put("ca", ca.absolutePath).put("token", s.getString("token"))
             .put("mode", s.optString("mode", "adaptive"))
-            .put("runtime_generation", generation).put("network_epoch", generation).put("boot_id", boot)
+            .put("runtime_generation", generation).put("network_epoch", networkEpoch).put("boot_id", boot)
             .put("status", File(directory, "status.json").absolutePath)
         if (fallbackPort != 0) nativeConfig.put("fallback_proxy", "127.0.0.1:$fallbackPort")
             .put("primary_ips",s.getJSONArray("expectedIps"))
@@ -121,9 +132,9 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
                     synchronized(processLock) {
                         if (stopped.get()) return@Thread
                         val native = children.firstOrNull { it.native }
-                        val state = if (native != null && native.process.isAlive) {
+                        val state = if (native != null && native.process?.isAlive == true) {
                             try { DualPathHealth.read(File(directory, "status.json").readText(),
-                                generation, configHash, boot, native.processGeneration, SystemClock.elapsedRealtime()) }
+                                generation, configHash, boot, native.processGeneration, SystemClock.elapsedRealtime(), networkEpoch) }
                             catch (_: Exception) { "unknown" }
                         } else "unknown"
                         if (state == "unknown") {
@@ -131,7 +142,7 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
                         } else unknownSince = 0L
                         if (state == "ready") {
                             if (healthySince == 0L) healthySince = now
-                            if (now - healthySince >= 60_000) children.forEach { it.retry.stable() }
+                            if (now - healthySince >= 60_000) children.filter { it.process?.isAlive == true && now - it.startedAt >= 60_000 }.forEach { it.retry.stable() }
                         } else healthySince = 0L
                         val description = when (state) {
                             "ready" -> "Два сервера: оба транспорта доступны"
@@ -146,21 +157,19 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
                             log(if (state in listOf("ready","degraded","fallback")) "info" else "warning", description)
                         }
                         for (child in children) {
+                            val process = child.process
                             val stalled = child.native && unknownSince > 0 && now - unknownSince > 20_000 && now - child.startedAt > 30_000
-                            if ((!child.process.isAlive || stalled) && child.retry.allowed(now)) {
-                                val exitCode = if (!child.process.isAlive) child.process.exitValue() else null
-                                if (child.process.isAlive) {
-                                    child.process.destroy()
-                                    if (!child.process.waitFor(1, TimeUnit.SECONDS)) child.process.destroyForcibly()
-                                    if (!child.process.waitFor(2, TimeUnit.SECONDS)) continue
+                            if ((process?.isAlive != true || stalled) && child.retry.allowed(now)) {
+                                val exitCode = if (process != null && !process.isAlive) process.exitValue() else null
+                                if (process?.isAlive == true) {
+                                    process.destroy()
+                                    if (!process.waitFor(1, TimeUnit.SECONDS)) process.destroyForcibly()
+                                    if (!process.waitFor(2, TimeUnit.SECONDS)) continue
                                 }
                                 child.retry.failed(now, SecureRandom().nextInt(1001).toLong())
                                 try {
                                     if (child.native) { invalidateStatus(); unknownSince = 0L }
-                                    child.processGeneration = secret()
-                                    child.builder.environment()["TEAPOD_PROCESS_GENERATION"] = child.processGeneration
-                                    child.process = child.builder.start(); child.startedAt = now
-                                    drainOutput(child.process, if (child.native) "dualpath" else "naive")
+                                    startChild(child)
                                     log("warning", "Двухсерверный режим: компонент восстановлен, попытка ${child.retry.attempts}, причина ${exitCode ?: "нет прогресса"}")
                                 } catch (_: Exception) {
                                     log("error", "Не удалось запустить компонент; повтор отложен")
@@ -171,7 +180,24 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
                 }
             }, "dualpath-monitor").also { it.isDaemon = true; it.start() }
             log("info", "Двухсерверный режим: Naive + XHTTP, ${s.optString("mode", "adaptive")}")
-            return DualPathConfig.transform(config, socksPort, outerPort, user, password, fallbackPort)
+            val transformed = JSONObject(DualPathConfig.transform(config, socksPort, outerPort, user, password, fallbackPort))
+            if (uplink != null) {
+                val outbounds = transformed.getJSONArray("outbounds")
+                for (i in 0 until outbounds.length()) {
+                    val outbound = outbounds.getJSONObject(i)
+                    when (outbound.optString("tag")) {
+                        DualPathConfig.OUTER -> uplink.pinOutbound(outbound,outbounds,uplinkUser,uplinkPassword)
+                        DualPathConfig.FALLBACK -> {
+                            val transport = outbound.getJSONObject("streamSettings").optString("network","tcp")
+                            if (transport in listOf("tcp","raw","xhttp","splithttp","ws","grpc","httpupgrade","http")) {
+                                fallbackOutbound = JSONObject(outbound.toString())
+                                uplink.pinOutbound(outbound,outbounds,uplinkUser,uplinkPassword)
+                            }
+                        }
+                    }
+                }
+            }
+            return transformed.toString()
         } catch (e: Exception) { stop(); throw e }
     }
 
@@ -179,11 +205,26 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
         val builder = ProcessBuilder(listOf(binary.absolutePath) + args).directory(directory)
             .redirectErrorStream(true)
         builder.environment().putAll(env)
-        val processGeneration = secret()
-        builder.environment()["TEAPOD_PROCESS_GENERATION"] = processGeneration
-        val process = builder.start(); children.add(Child(builder, process, binary.name.contains("dualpath"), processGeneration = processGeneration))
-        drainOutput(process, if (binary.name.contains("dualpath")) "dualpath" else "naive")
-        if (process.waitFor(150, TimeUnit.MILLISECONDS)) throw ConnectionFailure("DUALPATH_START_FAILED", "Не удалось запустить двухсерверный режим")
+        val child = Child(builder, null, binary.name.contains("dualpath"), processGeneration = secret())
+        children.add(child)
+        val started = launchTransport(child.native) {
+            val process = startChild(child)
+            if (process.waitFor(150, TimeUnit.MILLISECONDS)) throw IOException("Child exited during startup")
+        }
+        if (!started) {
+            child.retry.failed(SystemClock.elapsedRealtime(), SecureRandom().nextInt(1001).toLong())
+            log("warning","Naive недоступен при запуске. Используется вход B, повтор запланирован")
+        }
+    }
+
+    private fun startChild(child: Child): Process {
+        child.processGeneration = secret()
+        child.builder.environment()["TEAPOD_PROCESS_GENERATION"] = child.processGeneration
+        val process = child.builder.start()
+        child.process = process
+        child.startedAt = SystemClock.elapsedRealtime()
+        drainOutput(process, if (child.native) "dualpath" else "naive")
+        return process
     }
 
     fun stop() {
@@ -191,12 +232,21 @@ internal class DualPathRuntime(private val context: Context, private val log: (S
         monitor?.interrupt()
         synchronized(processLock) {
             for (child in children.reversed()) {
-                val process = child.process
+                val process = child.process ?: continue
                 process.destroy(); if (!process.waitFor(1, TimeUnit.SECONDS)) process.destroyForcibly()
                 process.waitFor(2, TimeUnit.SECONDS)
             }
             children.clear()
         }
+        uplink?.close()
         directory.listFiles()?.forEach { it.delete() }
+    }
+}
+
+/** Only the transport that owns the local SOCKS selector is mandatory at startup. */
+internal fun launchTransport(required: Boolean, start: () -> Unit): Boolean {
+    return try { start(); true } catch (e: IOException) {
+        if (required) throw ConnectionFailure("DUALPATH_START_FAILED","Не удалось запустить двухсерверный режим")
+        false
     }
 }
