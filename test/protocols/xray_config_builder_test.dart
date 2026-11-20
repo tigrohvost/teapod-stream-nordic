@@ -338,6 +338,37 @@ void main() {
       expect(rules.indexOf(adRule), lessThan(rules.indexWhere((r) => (r as Map).containsKey('balancerTag'))));
     });
 
+    test('uses a free blackhole tag for ad blocking and balancer fallback', () {
+      const tag = XrayConfigBuilder.blackholeTag;
+      const serverRule = {'type': 'field', 'network': 'tcp', 'outboundTag': tag};
+      final raw = rawManaged();
+      (raw['outbounds'] as List).addAll(<Map<String, Object>>[
+        {'tag': tag, 'protocol': 'freedom'},
+        {'tag': '$tag-2', 'protocol': 'freedom'},
+      ]);
+      final routing = raw['routing'] as Map;
+      (routing['balancers'] as List).first['selector'] = ['unavailable'];
+      (routing['rules'] as List).add(serverRule);
+
+      final cfg = merge(
+        raw,
+        _defaultOptions(routing: const RoutingSettings(adBlockEnabled: true)),
+      );
+      final outbounds = (cfg['outbounds'] as List).cast<Map>();
+      final protocols = {for (final o in outbounds) o['tag']: o['protocol']};
+      expect(protocols[tag], 'freedom');
+      expect(protocols['$tag-2'], 'freedom');
+      expect(protocols['$tag-3'], 'blackhole');
+      final mergedRouting = cfg['routing'] as Map;
+      expect((mergedRouting['balancers'] as List).first['fallbackTag'], '$tag-3');
+      final rules = (mergedRouting['rules'] as List).cast<Map>();
+      expect(rules, contains(equals(serverRule)));
+      final adRule = rules.firstWhere(
+        (r) => (r['domain'] as List?)?.contains('geosite:category-ads-all') ?? false,
+      );
+      expect(adRule['outboundTag'], '$tag-3');
+    });
+
     test('no adblock rule when disabled', () {
       final cfg = merge(rawManaged());
       final rules = (cfg['routing'] as Map)['rules'] as List;

@@ -599,11 +599,10 @@ class XrayConfigBuilder {
       // block belongs to the server), so block ad domains via a routing rule to
       // the injected blackhole. Requires sniffing (routeOnly) for domain matching.
       if (options.routing.adBlockEnabled) {
-        _ensureBlackholeOutbound(cfg);
         appRules.add({
           'type': 'field',
           'domain': [XrayDefaults.adBlockGeosite],
-          'outboundTag': blackholeTag,
+          'outboundTag': _ensureBlackholeOutbound(cfg),
         });
       }
 
@@ -679,8 +678,7 @@ class XrayConfigBuilder {
       if (proxy != null) {
         b['fallbackTag'] = proxy;
       } else {
-        _ensureBlackholeOutbound(cfg);
-        b['fallbackTag'] = blackholeTag;
+        b['fallbackTag'] = _ensureBlackholeOutbound(cfg);
       }
     }
   }
@@ -702,14 +700,26 @@ class XrayConfigBuilder {
     return null;
   }
 
-  static void _ensureBlackholeOutbound(Map<String, dynamic> cfg) {
-    final outbounds = cfg['outbounds'] as List<dynamic>? ?? (cfg['outbounds'] = <dynamic>[]);
-    final exists = outbounds
-        .whereType<Map<String, dynamic>>()
-        .any((o) => o['tag'] == blackholeTag);
-    if (!exists) {
-      outbounds.add({'tag': blackholeTag, 'protocol': 'blackhole', 'settings': {}});
+  /// Reuse a matching blackhole or allocate a tag that preserves server rules.
+  static String _ensureBlackholeOutbound(Map<String, dynamic> cfg) {
+    final outbounds =
+        cfg['outbounds'] as List<dynamic>? ?? (cfg['outbounds'] = <dynamic>[]);
+    final protocolsByTag = {
+      for (final outbound in outbounds.whereType<Map<String, dynamic>>())
+        if (outbound['tag'] case final String tag) tag: outbound['protocol'],
+    };
+    var tag = blackholeTag;
+    for (
+      var suffix = 2;
+      protocolsByTag.containsKey(tag) && protocolsByTag[tag] != 'blackhole';
+      suffix++
+    ) {
+      tag = '$blackholeTag-$suffix';
     }
+    if (!protocolsByTag.containsKey(tag)) {
+      outbounds.add({'tag': tag, 'protocol': 'blackhole', 'settings': {}});
+    }
+    return tag;
   }
 
   /// Managed configs often ship aggressive observatory settings (e.g. probeInterval
