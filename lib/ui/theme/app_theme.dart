@@ -36,15 +36,23 @@ class AppTheme {
 
   // ── Theme builder ─────────────────────────────────────────────
 
-  static ThemeData build(Brightness brightness, Color accent) {
+  static ThemeData build(
+    Brightness brightness,
+    Color accent, {
+    AppPalette palette = AppPalette.nord,
+  }) {
     final isDark = brightness == Brightness.dark;
-    final tokens = isDark
-        ? TeapodTokens.dark(accent)
-        : TeapodTokens.light(accent);
-    final accentForeground =
-        ThemeData.estimateBrightnessForColor(tokens.accent) == Brightness.light
-        ? AppColors.bgDark
+    final tokens = switch ((palette, brightness)) {
+      (AppPalette.pink, _) => TeapodTokens.pink(brightness),
+      (AppPalette.nord, Brightness.dark) => TeapodTokens.dark(accent),
+      (AppPalette.nord, Brightness.light) => TeapodTokens.light(accent),
+    };
+    final darkForeground = isDark ? tokens.bg : tokens.text;
+    Color foregroundFor(Color color) =>
+        ThemeData.estimateBrightnessForColor(color) == Brightness.light
+        ? darkForeground
         : Colors.white;
+    final accentForeground = foregroundFor(tokens.accent);
 
     return ThemeData(
       useMaterial3: true,
@@ -59,7 +67,7 @@ class AppTheme {
         onSurface: tokens.text,
         onPrimary: accentForeground,
         onSecondary: accentForeground,
-        onError: Colors.white,
+        onError: foregroundFor(tokens.danger),
       ),
       extensions: [tokens],
       fontFamily: GoogleFonts.interTight().fontFamily,
@@ -164,7 +172,7 @@ class AppTheme {
         iconColor: tokens.textDim,
       ),
       popupMenuTheme: PopupMenuThemeData(
-        color: isDark ? AppColors.surfaceElevated : AppColors.bgElevLight,
+        color: isDark ? tokens.bgSunken : tokens.bgElev,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(4),
           side: BorderSide(color: tokens.line),

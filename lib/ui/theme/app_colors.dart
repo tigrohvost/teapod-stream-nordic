@@ -1,5 +1,14 @@
 import 'package:flutter/material.dart';
 
+enum AppPalette {
+  nord('assets/brave_opossum.png'),
+  pink('assets/rose_unicorn.png');
+
+  const AppPalette(this.mascotAsset);
+
+  final String mascotAsset;
+}
+
 class AppColors {
   // ── Nord reference palette ────────────────────────────────────
   static const nord0 = Color(0xFF2E3440);
@@ -103,6 +112,7 @@ class AppColors {
 
 @immutable
 class TeapodTokens extends ThemeExtension<TeapodTokens> {
+  final AppPalette palette;
   final Color bg;
   final Color bgElev;
   final Color bgSunken;
@@ -114,9 +124,11 @@ class TeapodTokens extends ThemeExtension<TeapodTokens> {
   final Color accent;
   final Color accentSoft;
   final Color accentFade;
+  final Color warning;
   final Color danger;
 
   const TeapodTokens({
+    this.palette = AppPalette.nord,
     required this.bg,
     required this.bgElev,
     required this.bgSunken,
@@ -128,6 +140,7 @@ class TeapodTokens extends ThemeExtension<TeapodTokens> {
     required this.accent,
     required this.accentSoft,
     required this.accentFade,
+    this.warning = AppColors.accentGold,
     required this.danger,
   });
 
@@ -166,6 +179,46 @@ class TeapodTokens extends ThemeExtension<TeapodTokens> {
     );
   }
 
+  factory TeapodTokens.pink(Brightness brightness) {
+    if (brightness == Brightness.dark) {
+      const accent = Color(0xFFF4A8C7);
+      return TeapodTokens(
+        palette: AppPalette.pink,
+        bg: const Color(0xFF261922),
+        bgElev: const Color(0xFF34232F),
+        bgSunken: const Color(0xFF402A3A),
+        line: const Color(0xFF65435A),
+        lineSoft: const Color(0xFF523448),
+        text: const Color(0xFFFFF0F6),
+        textDim: const Color(0xFFF0CEDF),
+        textMuted: const Color(0xFFC6A0B7),
+        accent: accent,
+        accentSoft: accent.withAlpha(0x22),
+        accentFade: accent.withAlpha(0x0F),
+        warning: const Color(0xFFF2C984),
+        danger: const Color(0xFFFF9BA4),
+      );
+    }
+
+    const accent = Color(0xFFA22560);
+    return TeapodTokens(
+      palette: AppPalette.pink,
+      bg: const Color(0xFFFFF5F8),
+      bgElev: const Color(0xFFFCE9F1),
+      bgSunken: const Color(0xFFF5D9E7),
+      line: const Color(0xFFD9ADC2),
+      lineSoft: const Color(0xFFEDD0DF),
+      text: const Color(0xFF422335),
+      textDim: const Color(0xFF663B51),
+      textMuted: const Color(0xFF81536A),
+      accent: accent,
+      accentSoft: accent.withAlpha(0x28),
+      accentFade: accent.withAlpha(0x14),
+      warning: const Color(0xFF78491A),
+      danger: const Color(0xFFA22845),
+    );
+  }
+
   /// Forces accent into a readable range for light backgrounds.
   /// Preserves hue; targets lightness ~0.40–0.48 (softer darkening).
   static Color _darkenAccentForLight(Color c) {
@@ -192,6 +245,7 @@ class TeapodTokens extends ThemeExtension<TeapodTokens> {
 
   @override
   TeapodTokens copyWith({
+    AppPalette? palette,
     Color? bg,
     Color? bgElev,
     Color? bgSunken,
@@ -203,8 +257,10 @@ class TeapodTokens extends ThemeExtension<TeapodTokens> {
     Color? accent,
     Color? accentSoft,
     Color? accentFade,
+    Color? warning,
     Color? danger,
   }) => TeapodTokens(
+    palette: palette ?? this.palette,
     bg: bg ?? this.bg,
     bgElev: bgElev ?? this.bgElev,
     bgSunken: bgSunken ?? this.bgSunken,
@@ -216,6 +272,7 @@ class TeapodTokens extends ThemeExtension<TeapodTokens> {
     accent: accent ?? this.accent,
     accentSoft: accentSoft ?? this.accentSoft,
     accentFade: accentFade ?? this.accentFade,
+    warning: warning ?? this.warning,
     danger: danger ?? this.danger,
   );
 
@@ -223,6 +280,7 @@ class TeapodTokens extends ThemeExtension<TeapodTokens> {
   TeapodTokens lerp(TeapodTokens? other, double t) {
     if (other == null) return this;
     return TeapodTokens(
+      palette: t < 0.5 ? palette : other.palette,
       bg: Color.lerp(bg, other.bg, t)!,
       bgElev: Color.lerp(bgElev, other.bgElev, t)!,
       bgSunken: Color.lerp(bgSunken, other.bgSunken, t)!,
@@ -234,6 +292,7 @@ class TeapodTokens extends ThemeExtension<TeapodTokens> {
       accent: Color.lerp(accent, other.accent, t)!,
       accentSoft: Color.lerp(accentSoft, other.accentSoft, t)!,
       accentFade: Color.lerp(accentFade, other.accentFade, t)!,
+      warning: Color.lerp(warning, other.warning, t)!,
       danger: Color.lerp(danger, other.danger, t)!,
     );
   }

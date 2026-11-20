@@ -3,6 +3,40 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../ui/theme/app_colors.dart';
 
+class AppPaletteNotifier extends AsyncNotifier<AppPalette> {
+  static const _key = 'theme_palette';
+  bool _saving = false;
+
+  @override
+  Future<AppPalette> build() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.get(_key) == AppPalette.pink.name
+        ? AppPalette.pink
+        : AppPalette.nord;
+  }
+
+  Future<bool> set(AppPalette palette) async {
+    if (_saving || state.isLoading || state.value == palette) return true;
+
+    _saving = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = await prefs.setString(_key, palette.name);
+      if (saved && ref.mounted) state = AsyncData(palette);
+      return saved;
+    } on Exception {
+      return false;
+    } finally {
+      _saving = false;
+    }
+  }
+}
+
+final appPaletteProvider =
+    AsyncNotifierProvider<AppPaletteNotifier, AppPalette>(
+      AppPaletteNotifier.new,
+    );
+
 // ── Theme mode ────────────────────────────────────────────────────
 
 class ThemeModeNotifier extends Notifier<ThemeMode> {
@@ -35,8 +69,9 @@ class ThemeModeNotifier extends Notifier<ThemeMode> {
   }
 }
 
-final themeModeProvider =
-    NotifierProvider<ThemeModeNotifier, ThemeMode>(ThemeModeNotifier.new);
+final themeModeProvider = NotifierProvider<ThemeModeNotifier, ThemeMode>(
+  ThemeModeNotifier.new,
+);
 
 // ── Accent color ──────────────────────────────────────────────────
 
@@ -62,5 +97,6 @@ class AccentNotifier extends Notifier<Color> {
   }
 }
 
-final accentProvider =
-    NotifierProvider<AccentNotifier, Color>(AccentNotifier.new);
+final accentProvider = NotifierProvider<AccentNotifier, Color>(
+  AccentNotifier.new,
+);

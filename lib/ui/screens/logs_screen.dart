@@ -26,8 +26,6 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
   // empty = all
   final Set<LogLevel> _filters = {};
 
-  static const Color _warn = AppColors.accentGold;
-
   @override
   void initState() {
     super.initState();
@@ -83,7 +81,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
 
   Color _lvlColor(LogLevel lvl, TeapodTokens t) => switch (lvl) {
     LogLevel.error => t.danger,
-    LogLevel.warning => _warn,
+    LogLevel.warning => t.warning,
     LogLevel.info => t.accent,
     LogLevel.debug => t.textMuted,
   };
@@ -236,7 +234,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                       label: 'WRN',
                       count: wrnCount,
                       active: _filters.contains(LogLevel.warning),
-                      color: _warn,
+                      color: t.warning,
                       last: false,
                       onTap: () => setState(
                         () => _filters.contains(LogLevel.warning)

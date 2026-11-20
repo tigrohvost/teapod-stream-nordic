@@ -52,6 +52,7 @@ class _QrScanScreenState extends State<QrScanScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context).extension<TeapodTokens>()!;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Сканировать QR'),
@@ -61,9 +62,9 @@ class _QrScanScreenState extends State<QrScanScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.camera_alt, size: 48, color: AppColors.textDisabled),
+                  Icon(Icons.camera_alt, size: 48, color: t.textMuted),
                   const SizedBox(height: 16),
-                  Text(_error!, style: const TextStyle(color: AppColors.logError)),
+                  Text(_error!, style: TextStyle(color: t.danger)),
                   const SizedBox(height: 8),
                   ElevatedButton(
                     onPressed: () {
@@ -95,12 +96,12 @@ class _QrScanScreenState extends State<QrScanScreen> {
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                           decoration: BoxDecoration(
-                            color: AppColors.bg.withValues(alpha: 0.8),
+                            color: t.bg.withValues(alpha: 0.9),
                             borderRadius: BorderRadius.circular(20),
                           ),
-                          child: const Text(
+                          child: Text(
                             'Наведите камеру на QR-код',
-                            style: TextStyle(color: AppColors.textPrimary),
+                            style: TextStyle(color: t.text),
                           ),
                         ),
                       ),

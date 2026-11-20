@@ -46,15 +46,16 @@ class _TeapodMaterialApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
-    final accent    = ref.watch(accentProvider);
+    final accent = ref.watch(accentProvider);
+    final palette = ref.watch(appPaletteProvider).value ?? AppPalette.nord;
     final fontScale = ref.watch(settingsProvider).maybeWhen(
       data: (s) => s.fontScale == FontScale.large ? 1.2 : 1.0,
       orElse: () => 1.0,
     );
     return MaterialApp(
       title: 'TeapodStream',
-      theme:     AppTheme.build(Brightness.light, accent),
-      darkTheme:  AppTheme.build(Brightness.dark, accent),
+      theme: AppTheme.build(Brightness.light, accent, palette: palette),
+      darkTheme: AppTheme.build(Brightness.dark, accent, palette: palette),
       themeMode: themeMode,
       builder: (ctx, child) => MediaQuery(
         data: MediaQuery.of(ctx).copyWith(

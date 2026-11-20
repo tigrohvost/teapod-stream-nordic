@@ -451,13 +451,7 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
             }),
             _SheetTile(t: t, label: 'Копировать URL', onTap: () async {
               Navigator.pop(ctx);
-              if (config.rawUri != null) {
-                await Clipboard.setData(ClipboardData(text: config.rawUri!));
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('URL скопирован'), duration: Duration(seconds: 1)));
-                }
-              }
+              await _copyConfigUrl(context, config);
             }),
             _SheetTile(t: t, label: 'Поделиться', onTap: () async {
               Navigator.pop(ctx);
@@ -473,6 +467,32 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _copyConfigUrl(BuildContext context, VpnConfig config) async {
+    final originalUri = config.rawUri;
+    final hasOriginalUri = originalUri != null && originalUri.trim().isNotEmpty;
+    final link = hasOriginalUri
+        ? originalUri
+        : ConnectionsBundle(
+            exportedAt: DateTime.now(),
+            configs: [
+              VpnConfig.fromJson({...config.toJson(), 'subscriptionId': null}),
+            ],
+          ).toDeeplink();
+    var message = hasOriginalUri
+        ? 'URL скопирован'
+        : 'Ссылка Teapod скопирована';
+    try {
+      await Clipboard.setData(ClipboardData(text: link));
+    } on PlatformException {
+      message = 'Не удалось скопировать ссылку';
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+      );
+    }
   }
 
   Future<void> _renameConfig(BuildContext context, WidgetRef ref, VpnConfig config) async {
@@ -567,7 +587,9 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(ctx).colorScheme.error,
+            ),
             child: const Text('Удалить'),
           ),
         ],
@@ -716,7 +738,9 @@ class _ConfigsScreenState extends ConsumerState<ConfigsScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(ctx).colorScheme.error,
+            ),
             child: const Text('Удалить'),
           ),
         ],

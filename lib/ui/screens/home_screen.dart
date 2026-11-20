@@ -330,7 +330,6 @@ class _PowerCore extends StatefulWidget {
 
 class _PowerCoreState extends State<_PowerCore>
     with SingleTickerProviderStateMixin {
-  static const _opossumAsset = 'assets/brave_opossum.png';
   late final AnimationController _spin;
 
   @override
@@ -459,7 +458,11 @@ class _PowerCoreState extends State<_PowerCore>
                                 : Colors.white.withAlpha(0x12),
                             BlendMode.plus,
                           ),
-                          child: Image.asset(_opossumAsset, fit: BoxFit.cover),
+                          child: Image.asset(
+                            t.palette.mascotAsset,
+                            fit: BoxFit.cover,
+                            excludeFromSemantics: true,
+                          ),
                         ),
                       ),
                       AnimatedContainer(
@@ -743,6 +746,7 @@ class _ManagedWarning extends StatelessWidget {
     final detail = isOnlySelected
         ? 'режим «Только» по доменам и DNS-настройки не применяются · роутинг управляется сервером'
         : 'DNS-настройки не применяются · роутинг управляется сервером';
+    final warning = t.palette == AppPalette.nord ? AppColors.accentOrange : t.warning;
 
     return Container(
       width: double.infinity,
@@ -756,7 +760,7 @@ class _ManagedWarning extends StatelessWidget {
           children: [
             TextSpan(
               text: '[managed] ',
-              style: AppTheme.mono(size: 10, color: AppColors.accentOrange, letterSpacing: 0.5),
+              style: AppTheme.mono(size: 10, color: warning, letterSpacing: 0.5),
             ),
             TextSpan(text: detail),
           ],

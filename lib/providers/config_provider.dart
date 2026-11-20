@@ -411,6 +411,7 @@ class ConfigNotifier extends AsyncNotifier<ConfigState> {
         obfsPassword: c.obfsPassword,
         xhttpMode: c.xhttpMode,
         xhttpExtra: c.xhttpExtra,
+        rawXrayConfig: c.rawXrayConfig,
       );
     }).toList();
 

@@ -145,19 +145,17 @@ class _SetHeroPanel extends StatelessWidget {
     required this.profileReadonly,
   });
 
-  static const Color _gold = AppColors.accentGold;
-
   @override
   Widget build(BuildContext context) {
-    final wordColor = locked ? _gold : t.text;
-    final lockColor = locked ? _gold : t.textDim;
-    final borderColor = locked ? _gold : t.line;
+    final wordColor = locked ? t.warning : t.text;
+    final lockColor = locked ? t.warning : t.textDim;
+    final borderColor = locked ? t.warning : t.line;
 
     return Container(
       decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
       child: Stack(
         children: [
-          SetCornerTicks(t: t, color: locked ? _gold : t.textMuted),
+          SetCornerTicks(t: t, color: locked ? t.warning : t.textMuted),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
             child: Row(
@@ -196,9 +194,9 @@ class _SetHeroPanel extends StatelessWidget {
                     children: [
                       if (locked) ...[
                         Positioned(top: -1, left: -1,
-                            child: _LockCorner(color: _gold, isTop: true)),
+                            child: _LockCorner(color: t.warning, isTop: true)),
                         Positioned(bottom: -1, right: -1,
-                            child: _LockCorner(color: _gold, isTop: false)),
+                            child: _LockCorner(color: t.warning, isTop: false)),
                       ],
                       Center(
                         child: Padding(
@@ -636,108 +634,126 @@ class _AppearanceRows extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final palette = ref.watch(appPaletteProvider).value ?? AppPalette.nord;
     final themeMode = ref.watch(themeModeProvider);
     final accent    = ref.watch(accentProvider);
     final settings  = ref.watch(settingsProvider).maybeWhen(data: (d) => d, orElse: () => null);
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Theme
-        Container(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
-          child: Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 12,
-            runSpacing: 10,
-            children: [
-              Text('Тема', style: AppTheme.sans(size: 14, color: t.text)),
-              SetSegSquare(
-                t: t,
-                value: themeMode == ThemeMode.dark ? 'dark'
-                    : themeMode == ThemeMode.light ? 'light' : 'system',
-                opts: const [('dark', 'ТЁМНАЯ'), ('light', 'СВЕТЛАЯ'), ('system', 'СИСТЕМА')],
-                locked: false,
-                onChanged: (v) {
-                  final m = v == 'dark' ? ThemeMode.dark
-                      : v == 'light' ? ThemeMode.light : ThemeMode.system;
-                  ref.read(themeModeProvider.notifier).set(m);
-                },
-              ),
-            ],
+        _row(
+          'Цветовая тема',
+          SetSegSquare(
+            t: t,
+            value: palette.name,
+            opts: const [('nord', 'Nord'), ('pink', 'Розовая')],
+            onChanged: (value) async {
+              final saved = await ref
+                  .read(appPaletteProvider.notifier)
+                  .set(AppPalette.values.byName(value));
+              if (!saved && context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Не удалось сохранить тему')),
+                );
+              }
+            },
           ),
         ),
-        // Font scale
-        Container(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.lineSoft))),
-          child: Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 12,
-            runSpacing: 10,
-            children: [
-              Text('Размер шрифта', style: AppTheme.sans(size: 14, color: t.text)),
-              if (settings != null)
-                SetSegSquare(
+        _row(
+          'Режим',
+          SetSegSquare(
+            t: t,
+            value: themeMode.name,
+            opts: const [
+              ('dark', 'ТЁМНАЯ'),
+              ('light', 'СВЕТЛАЯ'),
+              ('system', 'СИСТЕМА'),
+            ],
+            onChanged: (value) => ref
+                .read(themeModeProvider.notifier)
+                .set(ThemeMode.values.byName(value)),
+          ),
+        ),
+        _row(
+          'Размер шрифта',
+          settings == null
+              ? null
+              : SetSegSquare(
                   t: t,
-                  value: settings.fontScale == FontScale.large ? 'large' : 'normal',
+                  value: settings.fontScale.name,
                   opts: const [('normal', 'ОБЫЧНЫЙ'), ('large', 'КРУПНЫЙ')],
-                  locked: false,
-                  onChanged: (v) {
-                    final scale = v == 'large' ? FontScale.large : FontScale.normal;
-                    ref.read(settingsProvider.notifier).save(settings.copyWith(fontScale: scale));
-                  },
+                  onChanged: (value) => ref.read(settingsProvider.notifier).save(
+                    settings.copyWith(fontScale: FontScale.values.byName(value)),
+                  ),
                 ),
-            ],
-          ),
         ),
-        // Accent
-        Container(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: t.line))),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('АКЦЕНТНЫЙ ЦВЕТ',
-                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1)),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: AppColors.accentPresets.map((c) {
-                  final selected = accent.toARGB32() == c.toARGB32();
-                  return GestureDetector(
-                    onTap: () => ref.read(accentProvider.notifier).set(c),
-                    child: Container(
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: c,
-                        border: Border.all(
-                          color: selected ? t.text : Colors.transparent,
-                          width: 1.5,
+        if (palette == AppPalette.nord)
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: t.line)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'АКЦЕНТНЫЙ ЦВЕТ',
+                  style: AppTheme.mono(size: 10, color: t.textMuted, letterSpacing: 1),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: AppColors.accentPresets.map((c) {
+                    final selected = accent.toARGB32() == c.toARGB32();
+                    return GestureDetector(
+                      onTap: () => ref.read(accentProvider.notifier).set(c),
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: c,
+                          border: Border.all(
+                            color: selected ? t.text : Colors.transparent,
+                            width: 1.5,
+                          ),
                         ),
+                        child: selected
+                            ? Center(child: Container(width: 10, height: 10, color: t.bg))
+                            : null,
                       ),
-                      child: selected
-                          ? Center(child: Container(width: 10, height: 10, color: t.bg))
-                          : null,
-                    ),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '#${accent.toARGB32().toRadixString(16).padLeft(8, '0').substring(2).toUpperCase()}',
-                style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 1),
-              ),
-            ],
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '#${accent.toARGB32().toRadixString(16).padLeft(8, '0').substring(2).toUpperCase()}',
+                  style: AppTheme.mono(size: 11, color: t.textDim, letterSpacing: 1),
+                ),
+              ],
+            ),
           ),
-        ),
       ],
     );
   }
+
+  Widget _row(String label, Widget? control) => Container(
+    padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+    decoration: BoxDecoration(
+      border: Border(bottom: BorderSide(color: t.lineSoft)),
+    ),
+    child: Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 12,
+      runSpacing: 10,
+      children: [
+        Text(label, style: AppTheme.sans(size: 14, color: t.text)),
+        ?control,
+      ],
+    ),
+  );
 }
 
 // ── Update tile ───────────────────────────────────────────────────
