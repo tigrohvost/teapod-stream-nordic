@@ -48,6 +48,7 @@ def validate_runtime_assets(apk, abi):
             "assets/flutter_assets/assets/binaries/geoip.dat",
             "assets/flutter_assets/assets/binaries/geosite.dat",
             "assets/flutter_assets/assets/brave_opossum.png",
+            "assets/flutter_assets/assets/rose_unicorn.png",
         }
         for family in ("InterTight", "JetBrainsMono"):
             for weight in ("Regular", "Medium", "SemiBold", "Bold"):

@@ -33,7 +33,7 @@ class ReleaseValidationTest(unittest.TestCase):
                     for lib in ('libapp', 'libflutter', 'libgojni')}
         contents.update({f'assets/flutter_assets/assets/{name}': b'asset'
                          for name in ('binaries/geoip.dat', 'binaries/geosite.dat',
-                                      'brave_opossum.png')})
+                                      'brave_opossum.png', 'rose_unicorn.png')})
         contents.update({f'assets/flutter_assets/assets/fonts/{family}-{weight}.ttf': b'font'
                          for family in ('InterTight', 'JetBrainsMono')
                          for weight in ('Regular', 'Medium', 'SemiBold', 'Bold')})
